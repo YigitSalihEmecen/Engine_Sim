@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engine Simulator</title>
+<style>
+  :root{
+    --bg:#08090a; --panel:#0e0f11; --panel2:#121316; --line:#1c1e22; --line2:#26292e;
+    --fg:#e8e9ec; --dim:#7c8189; --dim2:#4e535b;
+    --acc:#ff5f1f; --acc2:#f0b429; --cool:#4a90d9; --ok:#38b26a;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--fg);}
+  body{
+    font:13px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased; padding:0 0 60px;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px;}
+
+  /* ---- header ---- */
+  header{
+    border-bottom:1px solid var(--line); margin-bottom:26px;
+    padding:22px 0 16px; display:flex; align-items:baseline; gap:16px; flex-wrap:wrap;
+  }
+  h1{font-size:15px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;margin:0;}
+  header .sub{color:var(--dim2);font-size:11px;font-family:var(--mono);letter-spacing:.04em;}
+  header .spacer{flex:1;}
+  #status{color:var(--acc2);font-size:11px;font-family:var(--mono);}
+  #driveBtn{
+    margin-left:16px;text-decoration:none;color:var(--acc);border:1px solid var(--acc);
+    padding:6px 14px;border-radius:2px;font:11px var(--mono);letter-spacing:.14em;
+    text-transform:uppercase;transition:.15s;
+  }
+  #driveBtn:hover{background:var(--acc);color:#120802;box-shadow:0 0 18px rgba(255,95,31,.35);}
+
+  /* ---- structure ---- */
+  .grid{display:grid;grid-template-columns:300px 1fr;gap:28px;align-items:start;}
+  @media(max-width:900px){.grid{grid-template-columns:1fr;}}
+
+  section{margin-bottom:26px;}
+  .hd{
+    font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim2);
+    padding-bottom:7px;margin-bottom:14px;border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:baseline;
+  }
+  .hd em{font-style:normal;color:var(--dim2);font-family:var(--mono);letter-spacing:.04em;
+         text-transform:none;font-size:10px;}
+
+  /* ---- readouts ---- */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
+         border:1px solid var(--line);}
+  .stat{background:var(--panel);padding:11px 12px;}
+  .stat .k{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim2);}
+  .stat .v{font-family:var(--mono);font-size:19px;font-weight:500;letter-spacing:-.02em;
+           margin-top:3px;font-variant-numeric:tabular-nums;}
+  .stat .v u{text-decoration:none;font-size:10px;color:var(--dim2);margin-left:2px;}
+
+  /* ---- controls ---- */
+  .row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+  .row .lbl{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+            width:74px;flex:none;}
+  .row .num{font-family:var(--mono);font-size:10px;color:var(--dim2);width:34px;
+            text-align:right;font-variant-numeric:tabular-nums;flex:none;}
+
+  select,button{
+    background:var(--panel2);color:var(--fg);border:1px solid var(--line2);
+    border-radius:2px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer;
+    transition:border-color .12s,background .12s;
+  }
+  select{flex:1;}
+  button:hover,select:hover{border-color:#3a3f47;}
+  button.on{background:var(--acc);border-color:var(--acc);color:#120802;font-weight:600;}
+  button.go{background:transparent;border-color:var(--ok);color:var(--ok);font-weight:600;}
+  button.stop{background:transparent;border-color:var(--acc);color:var(--acc);font-weight:600;}
+  .btns{display:flex;gap:6px;}
+  .btns button{flex:1;}
+
+  input[type=range]{
+    -webkit-appearance:none;appearance:none;background:transparent;flex:1;height:18px;margin:0;
+  }
+  input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--line2);}
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:11px;height:11px;margin-top:-4.5px;border-radius:1px;
+    background:var(--fg);border:none;cursor:pointer;
+  }
+  input[type=range]::-moz-range-track{height:2px;background:var(--line2);}
+  input[type=range]::-moz-range-thumb{width:11px;height:11px;border-radius:1px;
+    background:var(--fg);border:none;cursor:pointer;}
+  input[type=range].acc::-webkit-slider-thumb{background:var(--acc);}
+  input[type=range].acc::-moz-range-thumb{background:var(--acc);}
+
+  /* ---- meters ---- */
+  .meter{height:3px;background:var(--panel2);flex:1;overflow:hidden;}
+  .meter i{display:block;height:100%;width:0;background:var(--acc);}
+  .meter.b i{background:var(--cool);}
+  .meter.y i{background:var(--acc2);}
+
+  /* ---- phase strip ---- */
+  .phase{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line);
+         border:1px solid var(--line);margin-top:14px;}
+  .phase span{background:var(--panel);text-align:center;font-size:8.5px;padding:5px 0;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--dim2);font-family:var(--mono);}
+  .phase span.on{background:var(--acc);color:#120802;font-weight:700;}
+
+  canvas{display:block;}
+  #tach{width:280px;height:280px;margin:0 auto;}
+  #orders{width:100%;height:120px;}
+
+  /* ---- EQ ---- */
+  .eq{display:flex;gap:2px;align-items:flex-end;justify-content:space-between;
+      background:var(--panel);border:1px solid var(--line);padding:14px 12px 10px;}
+  .eqb{display:flex;flex-direction:column;align-items:center;gap:7px;flex:1;}
+  .eqb input[type=range]{
+    writing-mode:vertical-rl; direction:rtl;
+    -webkit-appearance:slider-vertical; appearance:slider-vertical;
+    width:18px;height:104px;flex:none;
+  }
+  .eqb .f{font-family:var(--mono);font-size:9px;color:var(--dim2);letter-spacing:.02em;}
+  .eqb .n{font-family:var(--mono);font-size:9px;color:var(--dim);
+          font-variant-numeric:tabular-nums;}
+  .eqb .t{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim2);}
+
+  .fxgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 22px;margin-top:16px;}
+  @media(max-width:620px){.fxgrid{grid-template-columns:1fr;}}
+
+  .note{color:var(--dim2);font-size:11px;line-height:1.7;margin-top:10px;}
+  kbd{font-family:var(--mono);font-size:10px;background:var(--panel2);
+      border:1px solid var(--line2);border-radius:2px;padding:1px 5px;color:var(--dim);}
+  footer{border-top:1px solid var(--line);margin-top:30px;padding-top:14px;
+         color:var(--dim2);font-size:11px;line-height:2;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Engine Simulator</h1>
+  <span class="sub">procedural · web audio · no samples</span>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <a id="driveBtn" href="./drive.html">Night Drive &rarr;</a>
+</header>
+
+<div class="grid">
+  <!-- ============ left ============ -->
+  <div>
+    <section>
+      <canvas id="tach" width="560" height="560"></canvas>
+      <div class="phase" id="phase"></div>
+    </section>
+
+    <section>
+      <div class="hd">Drive <em id="gearboxType"></em></div>
+      <div class="row"><span class="lbl">Throttle</span><div class="meter"><i id="mThr"></i></div></div>
+      <div class="row"><span class="lbl">Brake</span><div class="meter b"><i id="mBrk"></i></div></div>
+      <div class="row" id="boostRow"><span class="lbl">Boost</span><div class="meter y"><i id="mBst"></i></div></div>
+      <div class="btns" style="margin-top:12px">
+        <button id="power" class="go">Start</button>
+        <button id="auto" class="on">Auto</button>
+        <button id="dn">&darr;</button>
+        <button id="up">&uarr;</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="hd">Machine</div>
+      <div class="row"><span class="lbl">Engine</span><select id="engine"></select></div>
+      <div class="row"><span class="lbl">Chassis</span><select id="vehicle"></select></div>
+      <div class="row"><span class="lbl">Position</span>
+        <div class="btns" style="flex:1"><button id="pExt" class="on">Exterior</button><button id="pInt">Cabin</button></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============ right ============ -->
+  <div>
+    <section>
+      <div class="stats">
+        <div class="stat"><div class="k">Engine</div><div class="v" id="rpm">0</div></div>
+        <div class="stat"><div class="k">Road</div><div class="v" id="kmh">0<u>km/h</u></div></div>
+        <div class="stat"><div class="k">Gear</div><div class="v" id="gear">1</div></div>
+        <div class="stat"><div class="k">Slip</div><div class="v" id="slip">0<u>rpm</u></div></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="hd">Engine orders <em id="ordMeta"></em></div>
+      <canvas id="orders" width="1360" height="240"></canvas>
+      <div class="note">Orange bars are half-orders. They exist only when a bank's cylinders fire
+        at uneven intervals — that is the burble. Compare cross-plane and flat-plane V8.</div>
+    </section>
+
+    <section>
+      <div class="hd">Equaliser <em>dB</em></div>
+      <div class="eq" id="eq"></div>
+      <div class="fxgrid">
+        <div>
+          <div class="row" style="margin-top:14px"><span class="lbl">Reverb</span>
+            <input id="rvMix" class="acc" type="range" min="0" max="1" step="0.01" value="0.14"><span class="num" id="rvMixN"></span></div>
+          <div class="row"><span class="lbl">Size</span>
+            <input id="rvSize" type="range" min="0.05" max="1" step="0.01" value="0.32"><span class="num" id="rvSizeN"></span></div>
+          <div class="row"><span class="lbl">Damping</span>
+            <input id="rvDamp" type="range" min="800" max="14000" step="100" value="4200"><span class="num" id="rvDampN"></span></div>
+        </div>
+        <div>
+          <div class="row" style="margin-top:14px"><span class="lbl">Width</span>
+            <input id="width" class="acc" type="range" min="0" max="1" step="0.01" value="0.35"><span class="num" id="widthN"></span></div>
+          <div class="row"><span class="lbl">Pop depth</span>
+            <input id="popD" type="range" min="0" max="2" step="0.01" value="0.85"><span class="num" id="popDN"></span></div>
+          <div class="row"><span class="lbl">Master</span>
+            <input id="vol" type="range" min="0" max="1" step="0.01" value="0.7"><span class="num" id="volN"></span></div>
+        </div>
+      </div>
+      <div class="btns" style="margin-top:14px;max-width:200px">
+        <button id="eqFlat">Flat</button><button id="fxOff">FX off</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="hd">Tone</div>
+      <div class="fxgrid" style="margin-top:0">
+        <div>
+          <div class="row"><span class="lbl">Rumble</span>
+            <input id="rum" type="range" min="0" max="2" step="0.02" value="1"><span class="num" id="rumN"></span></div>
+        </div>
+        <div>
+          <div class="row"><span class="lbl">Brightness</span>
+            <input id="bri" type="range" min="0" max="2" step="0.02" value="1"><span class="num" id="briN"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="hd">Ambience <em>environment bed</em></div>
+      <div class="fxgrid" style="margin-top:0">
+        <div>
+          <div class="row"><span class="lbl">Rain</span>
+            <input id="amRain" class="acc" type="range" min="0" max="1" step="0.01" value="0"><span class="num" id="amRainN"></span></div>
+          <div class="row"><span class="lbl">Wind</span>
+            <input id="amWind" type="range" min="0" max="1" step="0.01" value="0.25"><span class="num" id="amWindN"></span></div>
+        </div>
+        <div>
+          <div class="row"><span class="lbl">Tyres</span>
+            <input id="amRoad" type="range" min="0" max="1" step="0.01" value="0.5"><span class="num" id="amRoadN"></span></div>
+          <div class="row"><span class="lbl">Level</span>
+            <input id="amLvl" type="range" min="0" max="1.5" step="0.01" value="0.85"><span class="num" id="amLvlN"></span></div>
+        </div>
+      </div>
+      <div class="note">Wind and tyre roar follow road speed; thunder only fires when it is
+        actually raining hard.</div>
+    </section>
+
+    <section>
+      <div class="hd">Voice mix</div>
+      <div class="fxgrid" style="margin-top:0" id="mix"></div>
+    </section>
+  </div>
+</div>
+
+<footer>
+  <kbd>W</kbd> throttle · <kbd>S</kbd> brake · <kbd>E</kbd> upshift · <kbd>Q</kbd> downshift ·
+  <kbd>A</kbd> auto · <kbd>C</kbd> cabin · <kbd>Space</kbd> run<br>
+  Lift off above ~3000 rpm after a hard run for exhaust bangs. Turbos: I3, Flat-4, I5, I6.
+</footer>
+</div>
+
+<script type="module">
+import { EngineSim, ENGINE_PROFILES, VEHICLE_PRESETS } from './src/engine-sim.js';
+import { orderSpectrum } from './src/pulse.js';
+import { bankAngles } from './src/profiles.js';
+import { EQ } from './src/fx.js';
+import { Ambience } from './src/ambience.js';
+
+const $ = id => document.getElementById(id);
+const sim = new EngineSim(null, { engine:'v8cross', vehicle:'sports', volume:0.7 });
+window.sim = sim;
+const amb = new Ambience(sim.ctx, { rain:0, wind:0.25, road:0.5, level:0.85 });
+amb.output.connect(sim.ctx.destination);
+window.amb = amb;
+
+/* ---------------- machine selectors ---------------- */
+for (const [id,p] of Object.entries(ENGINE_PROFILES)) $('engine').add(new Option(p.label,id,false,id==='v8cross'));
+for (const [id,v] of Object.entries(VEHICLE_PRESETS)) $('vehicle').add(new Option(v.label,id,false,id==='sports'));
+$('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); syncMachine(); };
+$('vehicle').onchange = e => { sim.setVehicle(e.target.value); syncMachine(); };
+function syncMachine(){
+  $('boostRow').style.display = ENGINE_PROFILES[sim.engineId].turbo ? '' : 'none';
+  $('gearboxType').textContent = sim.getState().gearbox + ' · ' + sim.getState().gearCount + '-speed';
+}
+
+/* ---------------- equaliser ---------------- */
+const eqEl = $('eq');
+EQ.BANDS.forEach((b,i)=>{
+  const d = document.createElement('div');
+  d.className = 'eqb';
+  d.innerHTML = `<span class="n">0</span>
+    <input type="range" min="-18" max="18" step="0.5" value="0">
+    <span class="f">${b.f>=1000?(b.f/1000)+'k':b.f}</span><span class="t">${b.label}</span>`;
+  const [inp,num] = [d.querySelector('input'), d.querySelector('.n')];
+  inp.oninput = () => { sim.setEQBand(i, +inp.value); num.textContent = (+inp.value).toFixed(1).replace(/\.0$/,''); };
+  eqEl.appendChild(d);
+});
+$('eqFlat').onclick = () => {
+  sim.resetEQ();
+  eqEl.querySelectorAll('input').forEach(i=>i.value=0);
+  eqEl.querySelectorAll('.n').forEach(n=>n.textContent='0');
+};
+$('fxOff').onclick = () => {
+  sim.setReverb({mix:0}); sim.setWidth(0);
+  $('rvMix').value = 0; $('width').value = 0; sync();
+};
+
+/* ---------------- fx + tone ---------------- */
+const bind = (id, fn, fmt, opts={}) => {
+  const el = $(id), out = $(id+'N');
+  const show = () => { if (out) out.textContent = fmt(+el.value); };
+  if (opts.debounce){
+    // Reverb size has to rebuild an impulse response — up to 2.2 s of stereo
+    // noise. Doing that on every oninput while dragging would hitch the audio
+    // thread, so the readout tracks live and the rebuild waits for a pause.
+    let t=0;
+    el.oninput = () => { show(); clearTimeout(t); t=setTimeout(()=>fn(+el.value), opts.debounce); };
+  } else {
+    el.oninput = () => { fn(+el.value); show(); };
+  }
+  fn(+el.value); show();
+};
+bind('rvMix',  v => sim.setReverb({mix:v}),     v => Math.round(v*100));
+bind('rvSize', v => sim.setReverb({size:v}),    v => (0.15+2.05*v).toFixed(1)+'s', {debounce:140});
+bind('rvDamp', v => sim.setReverb({damping:v}), v => (v/1000).toFixed(1)+'k');
+bind('width',  v => sim.setWidth(v),            v => Math.round(v*100));
+bind('popD',   v => sim.setPopDepth(v),         v => Math.round(v*100));
+bind('vol',    v => sim.setVolume(v),           v => Math.round(v*100));
+bind('rum',    v => sim.setTone({rumble:v}),    v => Math.round(v*100));
+bind('bri',    v => sim.setTone({brightness:v}),v => Math.round(v*100));
+bind('amRain', v => amb.setRain(v),             v => Math.round(v*100));
+bind('amWind', v => amb.setWind(v),             v => Math.round(v*100));
+bind('amRoad', v => amb.setRoad(v),             v => Math.round(v*100));
+bind('amLvl',  v => amb.setLevel(v),            v => Math.round(v*100));
+function sync(){ ['rvMix','width'].forEach(id=>$(id).dispatchEvent(new Event('input'))); }
+
+/* ---------------- voice mix ---------------- */
+const MIX = { exhaust:'Exhaust', intake:'Intake', mechanical:'Mechanical',
+              transmission:'Gearbox', turbo:'Turbo', transients:'Pops', sub:'Sub' };
+const mixEl = $('mix');
+let col0, col1;
+Object.entries(MIX).forEach(([k,label],i)=>{
+  if (i===0){ col0=document.createElement('div'); col1=document.createElement('div');
+              mixEl.append(col0,col1); }
+  const row = document.createElement('div');
+  row.className='row';
+  row.innerHTML = `<span class="lbl">${label}</span>
+    <input type="range" min="0" max="1.6" step="0.01" value="${sim.mix[k]}"><span class="num"></span>`;
+  const [inp,num]=[row.querySelector('input'),row.querySelector('.num')];
+  num.textContent = Math.round(sim.mix[k]*100);
+  inp.oninput = () => { sim.setMix({[k]:+inp.value}); num.textContent=Math.round(inp.value*100); };
+  (i % 2 ? col1 : col0).appendChild(row);
+});
+
+/* ---------------- transport ---------------- */
+const keys = new Set();
+const HANDLED=['w','a','s','d','q','e','c',' ','arrowup','arrowdown','arrowleft','arrowright'];
+addEventListener('keydown',ev=>{
+  const k=ev.key.toLowerCase();
+  if(HANDLED.includes(k)) ev.preventDefault();
+  if(ev.repeat||/^(input|select)$/i.test(ev.target.tagName)) return;
+  keys.add(k);
+  if(k==='e'||k==='arrowright') sim.shiftUp();
+  if(k==='q'||k==='arrowleft')  sim.shiftDown();
+  if(k==='a') toggleAuto();
+  if(k==='c') setPos(sim.getState().perspective==='exterior'?'interior':'exterior');
+  if(k===' ') togglePower();
+});
+addEventListener('keyup',ev=>keys.delete(ev.key.toLowerCase()));
+addEventListener('blur',()=>keys.clear());
+
+function togglePower(){
+  const b=$('power');
+  if(sim.running){ sim.stop(); amb.stop(sim.ctx.currentTime); b.textContent='Start'; b.className='go'; }
+  else { sim.start().then(()=>amb.start(sim.ctx.currentTime)); b.textContent='Stop'; b.className='stop'; }
+  $('status').textContent='';
+}
+function toggleAuto(){
+  const on=!sim.getState().auto; sim.setAutoShift(on);
+  $('auto').classList.toggle('on',on); $('auto').textContent = on?'Auto':'Manual';
+}
+function setPos(m){
+  sim.setPerspective(m);
+  $('pExt').classList.toggle('on',m==='exterior');
+  $('pInt').classList.toggle('on',m==='interior');
+}
+$('power').onclick=togglePower; $('auto').onclick=toggleAuto;
+$('up').onclick=()=>sim.shiftUp(); $('dn').onclick=()=>sim.shiftDown();
+$('pExt').onclick=()=>setPos('exterior'); $('pInt').onclick=()=>setPos('interior');
+$('status').textContent='press start — audio needs a click';
+syncMachine();
+
+/* ---------------- loop ---------------- */
+const PH=['cut','open','sync','engage','lash','shuffle'];
+$('phase').innerHTML=PH.map(p=>`<span data-p="${p}">${p}</span>`).join('');
+const phEls=[...$('phase').children];
+let last=performance.now();
+function frame(now){
+  const dt=(now-last)/1000; last=now;
+  sim.setThrottle(keys.has('w')||keys.has('arrowup')?1:0);
+  sim.setBrake(keys.has('s')||keys.has('arrowdown')?1:0);
+  sim.update(dt);
+  const s=sim.getState();
+  amb.update({ now: sim.ctx.currentTime, speed: s.speed });
+  $('rpm').textContent=Math.round(s.rpm);
+  $('kmh').innerHTML=Math.round(s.speedKmh)+'<u>km/h</u>';
+  $('gear').textContent=s.shiftPhase?'—':(s.gear===0?'N':s.gear);
+  $('slip').innerHTML=Math.round(Math.abs(s.clutchSlip||0))+'<u>rpm</u>';
+  $('mThr').style.width=(s.throttle*100)+'%';
+  $('mBrk').style.width=(s.brake*100)+'%';
+  $('mBst').style.width=((s.boost||0)*100)+'%';
+  for(const e of phEls) e.classList.toggle('on', e.dataset.p===s.shiftPhase);
+  drawTach(s);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ---------------- tachometer ---------------- */
+const tc=$('tach').getContext('2d');
+const DPR=Math.min(devicePixelRatio||1,2);
+$('tach').width=280*DPR; $('tach').height=280*DPR; tc.scale(DPR,DPR);
+function drawTach(s){
+  const cx=140,cy=140,r=112,A0=Math.PI*0.78,A1=Math.PI*2.22;
+  const max=s.redline+700, ang=v=>A0+(A1-A0)*Math.min(1,Math.max(0,v/max));
+  tc.clearRect(0,0,280,280);
+
+  tc.lineWidth=1; tc.strokeStyle='#1c1e22';
+  tc.beginPath(); tc.arc(cx,cy,r,A0,A1); tc.stroke();
+
+  // fine graduations
+  for(let k=0;k<=max;k+=250){
+    const a=ang(k),c=Math.cos(a),sn=Math.sin(a);
+    const major=k%1000===0, red=k>=s.redline;
+    tc.strokeStyle = red ? (major?'#ff5f1f':'#5a2a15') : (major?'#4e535b':'#26292e');
+    tc.lineWidth = major?1.4:1;
+    const L = major?11:5;
+    tc.beginPath(); tc.moveTo(cx+c*r,cy+sn*r); tc.lineTo(cx+c*(r-L),cy+sn*(r-L)); tc.stroke();
+    if(major){
+      tc.fillStyle = red?'#ff8a5c':'#4e535b';
+      tc.font='500 9px ui-monospace,Menlo,monospace';
+      tc.textAlign='center'; tc.textBaseline='middle';
+      tc.fillText(k/1000, cx+c*(r-24), cy+sn*(r-24));
+    }
+  }
+  // sweep
+  tc.strokeStyle = s.limiter ? '#ff3b30' : '#ff5f1f';
+  tc.lineWidth=2.5; tc.lineCap='butt';
+  tc.beginPath(); tc.arc(cx,cy,r-19,A0,ang(s.rpm)); tc.stroke();
+
+  // centre block
+  tc.fillStyle='#e8e9ec'; tc.textAlign='center';
+  tc.font='500 42px ui-monospace,Menlo,monospace';
+  tc.fillText(s.shiftPhase?'—':(s.gear===0?'N':s.gear), cx, cy+8);
+  tc.fillStyle='#4e535b'; tc.font='500 9px ui-sans-serif,system-ui,sans-serif';
+  tc.textBaseline='middle';
+  tc.fillText('GEAR', cx, cy+30);
+  tc.fillStyle='#7c8189'; tc.font='500 13px ui-monospace,Menlo,monospace';
+  tc.fillText(Math.round(s.rpm)+' rpm', cx, cy-32);
+}
+
+/* ---------------- order spectrum ---------------- */
+const oc=$('orders').getContext('2d');
+$('orders').width=680*DPR; $('orders').height=120*DPR; oc.scale(DPR,DPR);
+function drawOrders(){
+  const p=ENGINE_PROFILES[sim.engineId];
+  const spec=orderSpectrum(p,bankAngles(p,0),0.6,14);
+  const W=680,H=120,pad=4,base=H-18;
+  oc.clearRect(0,0,W,H);
+  const max=Math.max(...spec.map(s=>s.mag))||1;
+  const bw=(W-pad*2)/spec.length;
+  oc.strokeStyle='#1c1e22'; oc.lineWidth=1;
+  oc.beginPath(); oc.moveTo(pad,base+.5); oc.lineTo(W-pad,base+.5); oc.stroke();
+  spec.forEach((s,i)=>{
+    const half=Math.abs(s.order%1)>0.01;
+    const h=(s.mag/max)*(base-8);
+    oc.fillStyle = half ? '#ff5f1f' : '#3f4652';
+    oc.fillRect(pad+i*bw, base-h, Math.max(1.5,bw-2), h);
+    if(s.order%2===0){
+      oc.fillStyle='#4e535b'; oc.font='500 9px ui-monospace,Menlo,monospace';
+      oc.textAlign='center'; oc.fillText(s.order, pad+i*bw+bw/2, H-5);
+    }
+  });
+  const half=spec.filter(s=>Math.abs(s.order%1)>0.01).reduce((a,s)=>a+s.mag*s.mag,0);
+  const tot=spec.reduce((a,s)=>a+s.mag*s.mag,0);
+  $('ordMeta').textContent =
+    `bank 1 fires ${bankAngles(p,0).map(a=>a.toFixed(0)+'°').join(' / ')} · half-order ${(100*half/tot).toFixed(0)}%`;
+}
+drawOrders();
+</script>
+</body>
+</html>

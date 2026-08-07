@@ -1,0 +1,53 @@
+<!DOCTYPE html><html><body><canvas id="gl" width="640" height="360"></canvas><pre id="r">running</pre>
+<script type="module">
+const out=[];
+try{
+const { Renderer, Chassis } = await import('./src/gl/renderer.js');
+const { m4 } = await import('./src/gl/gfx.js');
+const W = await import('./src/gl/world.js');
+const R = new Renderer(document.getElementById('gl'));
+R.resize(640,360,1);
+out.push('hdr='+R.hdr+' W='+R.W+' H='+R.H);
+
+R.addMesh('road', W.buildRoadTile(120), 9);
+R.addMesh('ground', W.buildGround(1000), 1);
+R.addMesh('car', W.buildCar(), 40);
+R.addMesh('lamp', W.buildLamp(), 44);
+out.push('road tris='+(R.meshes.road.count/3)+' car tris='+(R.meshes.car.count/3));
+
+const mk=(pos,rotY,scale,tint)=>{const m=new Float32Array(16);m4.compose(m,pos,rotY,0,0,scale||[1,1,1]);return {m,tint:tint||[1,1,1,0]};};
+R.setInstances('road',[mk([0,0,-120]),mk([0,0,0]),mk([0,0,120]),mk([0,0,240])]);
+R.setInstances('ground',[mk([0,0,0])]);
+R.setInstances('car',[mk([3.5,0,40]),mk([-3.5,0,70],Math.PI)]);
+R.setInstances('lamp',[mk([10.6,0,30],0,[1,1,1],[1,1,1,2.4]),mk([-10.6,0,60],Math.PI,[1,1,1],[1,1,1,2.4])]);
+out.push('instances road='+R.meshes.road.instances+' ground='+R.meshes.ground.instances+' car='+R.meshes.car.instances+' lamp='+R.meshes.lamp.instances);
+
+const headPos=new Float32Array([-0.76,0.7,2.1, 0.76,0.7,2.1]);
+const headDir=new Float32Array([0,-0.12,1, 0,-0.12,1]);
+const env={time:1,wet:0,fogColor:[0.02,0.026,0.045],fogDensity:0.0032,
+  headPos,headDir,headColor:[7.4,7,6.1],headInner:Math.cos(0.2),headOuter:Math.cos(0.54),headRange:95,
+  numLights:0,lightPos:new Float32Array(96),lightColor:new Float32Array(96),lightRange:new Float32Array(32),
+  shaftDensity:0.05,bloomThreshold:1,bloom:0.85,exposure:1.1,speedNorm:0.3,shake:0};
+R.render({pos:[0,1.16,0],target:[0,0.6,30],up:[0,1,0],fov:60*Math.PI/180,near:0.12,far:1400},env,[
+  {name:'ground',roughness:0.95},{name:'road',roughness:0.62,roadMask:1},
+  {name:'lamp',roughness:0.55,metallic:0.35},{name:'car',roughness:0.24,metallic:0.62}]);
+
+const gl=R.gl;
+const px=new Uint8Array(640*360*4);
+gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+gl.readPixels(0,0,640,360,gl.RGBA,gl.UNSIGNED_BYTE,px);
+let sum=0,mx=0,nonblack=0;
+for(let i=0;i<px.length;i+=4){const l=px[i]+px[i+1]+px[i+2]; sum+=l; if(l>mx)mx=l; if(l>8)nonblack++;}
+out.push('FINAL mean='+(sum/(640*360)/3).toFixed(2)+' max='+(mx/3).toFixed(0)+' nonblackPct='+(100*nonblack/(640*360)).toFixed(1));
+
+// also sample the HDR scene target directly, before post
+gl.bindFramebuffer(gl.FRAMEBUFFER,R.scene.fbo);
+const px2=new Float32Array(640*360*4);
+try{ gl.readPixels(0,0,640,360,gl.RGBA,gl.FLOAT,px2);
+  let s2=0,m2=0; for(let i=0;i<px2.length;i+=4){const l=px2[i]+px2[i+1]+px2[i+2]; s2+=l; if(l>m2)m2=l;}
+  out.push('HDR scene mean='+(s2/(640*360)/3).toFixed(4)+' max='+(m2/3).toFixed(3));
+}catch(e){ out.push('HDR readback n/a: '+e.message); }
+out.push('glError='+gl.getError());
+}catch(e){ out.push('EXCEPTION: '+(e.stack||e)); }
+document.getElementById('r').textContent=out.join('\n');
+</script></body></html>
