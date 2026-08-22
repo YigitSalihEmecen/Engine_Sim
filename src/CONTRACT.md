@@ -14,6 +14,8 @@ Pure Web Audio API + ES6 modules. **No external libraries. No samples.** Target
 | `layers.js` | agent B | mechanical, transmission, turbo, noise beds, transients |
 | `physics.js` | agent C | drivetrain, driveline compliance, clutch |
 | `shift.js` | agent C | gear-shift state machine |
+| `character.js` | agent A | exhaust flow noise, sub layer, imperfection modulator |
+| `fx.js` | orchestrator | EQ, reverb, stereo widener, three-band compressor |
 | `engine-sim.js` | orchestrator | public API, wires everything together |
 
 Only edit the file you own. If you need a change in someone else's file, say so
@@ -43,6 +45,12 @@ Rules:
 - Guard every value: `AudioParam` writes must be finite, and
   `exponentialRampToValueAtTime` targets must be strictly > 0.
 - Clamp all frequencies to `[10, 20000]`.
+- **`Q` is in DECIBELS for `lowpass` and `highpass`** and linear for every other
+  biquad type. Butterworth is `Q = -3.01`, not `0.7071`.
+- Nothing may put sustained narrowband energy in **2-6 kHz**. That is where the
+  ear peaks and where every harshness complaint has come from. Check with
+  `node test/spectrum.mjs`; `run.mjs` fails the build above 4 % of radiated
+  power in that band.
 
 ## The params object
 

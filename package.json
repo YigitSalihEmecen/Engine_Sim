@@ -1,0 +1,34 @@
+{
+  "name": "engine-sim",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Procedural engine sound synthesis from firing geometry. Web Audio only — no samples, no dependencies.",
+  "type": "module",
+  "main": "src/engine-sim.js",
+  "exports": {
+    ".": "./src/engine-sim.js",
+    "./profiles": "./src/profiles.js"
+  },
+  "files": [
+    "src",
+    "index.html"
+  ],
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "test": "node test/run.mjs && node test/drive.mjs",
+    "test:audio": "node test/run.mjs",
+    "test:drive": "node test/drive.mjs",
+    "spectrum": "node test/spectrum.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "web-audio",
+    "engine-sound",
+    "procedural-audio",
+    "synthesis",
+    "vehicle-physics"
+  ],
+  "license": "MIT"
+}

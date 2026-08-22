@@ -760,7 +760,8 @@ export class TransmissionLayer {
 // ===========================================================================
 
 /**
- * Turbocharger: spool whine, blow-off valve, wastegate flutter / surge.
+ * Turbocharger: spool whine, blow-off valve, and compressor surge — the
+ * "stu-stu-stu" flutter.
  *
  * The whole character of a turbo is that it does NOT follow the engine. The
  * shaft is a flywheel driven by exhaust enthalpy and braked by compressor work
@@ -768,33 +769,88 @@ export class TransmissionLayer {
  * here as a first-order lag on a normalised shaft speed with asymmetric time
  * constants, both derived from `profile.turbo.inertia`:
  *
- *     dx/dt = (drive − x)/τ,   τ = inertia · 1.1 spooling up
- *                              τ = inertia · 4.0 coasting down
+ *     dx/dt = (drive − x)/τ,   τ = inertia · 1.1  spooling up
+ *                              τ = inertia · 1.9  coasting on a trailing throttle
+ *                              τ = inertia · 0.75 coasting under fuel cut
  *
- * With inertia 0.34 (small i3 turbo) that is 0.37 s up — 90% boost about 0.9 s
- * after the throttle, and several seconds to fall away — which is what a small
- * turbo actually does. With inertia 0.52 (big i6 turbo) it is 0.57 s / 2.1 s.
- * The drive term is exhaust mass flow × energy per unit mass ≈ load × rpm.
+ * The three-way τ matters more than it looks: it is what makes each gear change
+ * have its own whistle swoop instead of one flat tone across the whole gearbox.
  *
  * Boost follows from Euler's turbomachinery relation: the pressure rise across
  * a compressor goes with the square of the tip speed, so boost ∝ x². The shaft
  * also never truly stops while the engine runs — it windmills — hence the floor.
  *
- * Whine pitch tracks the shaft, not the engine. `turbo.whineOrder` is expressed
- * as an engine order, so the reference is "the whine of a fully spooled turbo
- * at redline" = (redline/120)·whineOrder — 3.4–4.2 kHz across these profiles,
- * the right place for a turbo whistle. Everything below that is x·reference,
- * which means the pitch lags exactly the way the boost does.
+ * ---------------------------------------------------------------------------
+ * WHINE — why this is a wavetable and not a stack of sines
  *
- * On `p.evBov` the valve dumps compressor plenum pressure to atmosphere: boost
- * collapses in a few tens of ms while the shaft keeps spinning (so the whine
- * survives the whoosh, which is what a real one sounds like). The burst falls
- * in pitch as the plenum empties.
+ * The previous version summed three sine oscillators at f, 2f and 3f. Three
+ * sines at exact integer ratios with fixed relative levels is, to the ear, one
+ * tone with a fixed timbre — "a single uniform soundwave" — and at 3.4-4.2 kHz
+ * a near-pure tone sits exactly where human hearing is most sensitive, which is
+ * the other half of the harshness problem.
  *
- * Without a BOV — or with a slow one — the closing throttle instead forces the
- * compressor into surge and the flow reverses periodically: wastegate flutter.
- * The repetition rate is the Helmholtz frequency of the compressor-to-throttle
- * volume, 12–28 Hz, which is why it chatters rather than whistles.
+ * Instead there is ONE oscillator carrying a band-limited PeriodicWave built
+ * from a blade-tone series. Three things follow:
+ *   - the browser band-limits per playback frequency, so the tone never aliases
+ *     across the enormous pitch sweep a spooling turbo covers;
+ *   - the harmonic tilt is set once, physically (radiated blade tones fall off
+ *     with harmonic index), instead of three hand-set gains;
+ *   - one oscillator replaces three, and the phase relationship between the
+ *     harmonics is fixed rather than drifting.
+ *
+ * On top of that the tone is shaped by a resonant formant bandpass that tracks
+ * the blade frequency. A real compressor housing is a cavity; the whistle you
+ * hear is the blade tone THROUGH that cavity, which is why it has a vowel to
+ * it rather than being a bare tone.
+ *
+ * Two modulations stop it reading as a test tone:
+ *   - shaft-rate AM. Flow into the wheel is never uniform (the volute, the bend
+ *     upstream of it), so every blade sees a different load once per SHAFT
+ *     revolution. That puts sidebands either side of the blade tone at BPF/11 —
+ *     tens of Hz, the range that reads as texture rather than a second pitch.
+ *   - bearing wander. A turbo runs on floating journal bearings and the rotor
+ *     is never perfectly centred, so the tone is never perfectly steady. Two
+ *     mutually irrational LFOs on detune, deepest off-boost where the shaft is
+ *     least loaded.
+ *
+ * ---------------------------------------------------------------------------
+ * SURGE — the "stu-stu-stu"
+ *
+ * Close the throttle while the compressor is still pumping and the air has
+ * nowhere to go. The compressor cannot sustain pressure at near-zero flow, so
+ * it stalls, the flow briefly REVERSES through the wheel, pressure drops, flow
+ * re-establishes, and the whole thing repeats. That is compressor surge, and
+ * the repetition rate is the Helmholtz frequency of the compressor-to-throttle
+ * volume — 8-30 Hz, which is why it chatters rather than whistles.
+ *
+ * The old implementation modulated a wide noise band with a SINE. A sine gives
+ * smooth tremolo — "shoo-shoo-shoo". Real surge is a relaxation oscillation:
+ * the stall is abrupt and the recovery is a decay, so each cycle is a sharp
+ * burst with a tail, not a swell. Getting that shape right is the entire
+ * difference between "shu-shu-shu" and "stu-stu-stu".
+ *
+ * So the envelope is a sawtooth through a WaveShaper carrying an attack/decay
+ * pulse curve — a per-cycle burst with a 6 % rise and an exponential tail — and
+ * it drives two noise bands:
+ *   - a body band (Q 3.5, 700-1900 Hz) — the "tu", the pitched chuff of gas
+ *     reversing through the wheel;
+ *   - an edge band (Q 2.2, 2.2-3.4 kHz) at much lower level and gated harder —
+ *     the "st", the broadband click of the stall itself.
+ *
+ * Surge is armed by ANY throttle closure while there is pressure to reverse,
+ * which explicitly includes the ignition cut of a gear change. That is why a
+ * boosted car flutters on every upshift, and it is the single most recognisable
+ * thing a turbocharged engine does.
+ *
+ * `_surge` is a decaying state rather than a boolean window, so the burst train
+ * fades the way the plenum actually empties instead of stopping dead.
+ *
+ * A blow-off valve is the opposite: it vents the plenum deliberately, so there
+ * is less left to surge. That trade is NOT a mode switch — it falls out of one
+ * number, `turbo.bov`, the valve's capacity. A big atmospheric valve empties
+ * the plenum and you get the "chiu" and nothing else; a small or recirculating
+ * valve leaves pressure standing and the compressor stalls anyway. Cars that do
+ * both, a soft chiu with a chatter behind it, are the ones in between.
  */
 export class TurboLayer {
   /** True if this profile has a turbo at all. */
@@ -804,17 +860,18 @@ export class TurboLayer {
    * @param {object} [opts]
    *   level        overall trim, default 1
    *   maxTurboRpm  for display only, default 150000 (typical small-frame turbo)
-   *   flutter      'auto' (default) | true | false — surge when lifting without
-   *                a BOV event within `flutterWindow` seconds
-   *   flutterWindow default 0.25 s
+   *   flutter      true (default) | false — set false to silence surge entirely.
+   *                How much a given profile flutters is `turbo.bov`; this is an
+   *                override for callers who want none of it at all.
+   *   surgeLevel   trim on the flutter, default 1. TASTE-ADJUSTABLE.
    */
   constructor(ctx, profile, opts) {
     this.ctx = ctx;
     const o = opts || {};
     this.level = fin(o.level, 1);
     this.maxTurboRpm = fin(o.maxTurboRpm, 150000);
-    this.flutterMode = (o.flutter === true || o.flutter === false) ? o.flutter : 'auto';
-    this.flutterWindow = fin(o.flutterWindow, 0.25);
+    this.flutterMode = o.flutter === false ? false : true;
+    this.surgeLevel = clamp(fin(o.surgeLevel, 1), 0, 3);
 
     // Physical state, exported for the orchestrator's boost gauge.
     this.spool = 0;          // 0..1 normalised shaft speed
@@ -822,9 +879,10 @@ export class TurboLayer {
     this.boostBar = 0;       // bar
     this.turboRpm = 0;
     this._vent = 0;          // 0..1 plenum-dumped fraction, decays back
+    this._surge = 0;         // 0..1 how hard the compressor is stalling
     this._lastBov = -1e9;
-    this._lastLift = -1e9;
     this._prevThrottle = 0;
+    this._prevShifting = false;
     this._rnd = seeded(0x51ed270b);
 
     this._srcs = [];
@@ -844,29 +902,54 @@ export class TurboLayer {
     const white = noiseSource(ctx, 'white', 1.07);
     this._srcs.push(white);
 
-    // --- spool whine --------------------------------------------------------
-    this.whineOsc1 = ctx.createOscillator();
-    this.whineOsc1.type = 'sine';
-    this.whineOsc1.frequency.value = 2000;
-    this.whineOsc2 = ctx.createOscillator();
-    this.whineOsc2.type = 'sine';
-    this.whineOsc2.frequency.value = 4000;
-    this._srcs.push(this.whineOsc1, this.whineOsc2);
+    // --- blade tone ---------------------------------------------------------
+    this.whineOsc = ctx.createOscillator();
+    this.whineOsc.setPeriodicWave(bladeWave(ctx));
+    this.whineOsc.frequency.value = 1200;
+    this._srcs.push(this.whineOsc);
 
-    this.whineH2 = keep(ctx.createGain());
-    this.whineH2.gain.value = 0.3;
+    // Compressor-housing formant. Tracks the blade tone rather than sitting at
+    // a fixed frequency: the cavity is small enough that its own resonance is
+    // above the band we care about, so what shapes the tone audibly is the
+    // near-field radiation pattern, which does move with the source.
+    this.whineBP = keep(ctx.createBiquadFilter());
+    this.whineBP.type = 'bandpass';
+    this.whineBP.frequency.value = 1500;
+    this.whineBP.Q.value = 1.5;
+
     this.whineGain = keep(ctx.createGain());
     this.whineGain.gain.value = 0;
 
-    this.whineOsc1.connect(this.whineGain);
-    this.whineOsc2.connect(this.whineH2);
-    this.whineH2.connect(this.whineGain);
+    this.whineOsc.connect(this.whineBP);
+    this.whineBP.connect(this.whineGain);
     this.whineGain.connect(this.out);
+
+    // Bearing wander: two mutually irrational rates so the pattern never
+    // repeats audibly. Depth is written per frame.
+    this.wander1 = ctx.createOscillator();
+    this.wander1.type = 'sine';
+    this.wander1.frequency.value = 0.31;
+    this.wander2 = ctx.createOscillator();
+    this.wander2.type = 'sine';
+    this.wander2.frequency.value = 2.17;
+    this._srcs.push(this.wander1, this.wander2);
+    this.wanderDepth1 = keep(amDrive(ctx, this.wander1, 0, this.whineOsc.detune));
+    this.wanderDepth2 = keep(amDrive(ctx, this.wander2, 0, this.whineOsc.detune));
+
+    // Shaft-rate sidebands.
+    this.shaftOsc = ctx.createOscillator();
+    this.shaftOsc.type = 'sine';
+    this.shaftOsc.frequency.value = 180;
+    this._srcs.push(this.shaftOsc);
+    this.shaftDepth = keep(ctx.createGain());
+    this.shaftDepth.gain.value = 0;
+    this.shaftOsc.connect(this.shaftDepth);
+    this.shaftDepth.connect(this.whineGain.gain);
 
     // Compressor flow hiss: broadband, centred just above the blade tone.
     this.hissBP = keep(ctx.createBiquadFilter());
     this.hissBP.type = 'bandpass';
-    this.hissBP.frequency.value = 3000;
+    this.hissBP.frequency.value = 2000;
     this.hissBP.Q.value = 1.6;
     this.hissGain = keep(ctx.createGain());
     this.hissGain.gain.value = 0;
@@ -888,33 +971,6 @@ export class TurboLayer {
     white.connect(this.bovBP);
     this.bovBP.connect(this.bovGain);
     this.bovGain.connect(this.out);
-
-    // --- blade-rate sidebands ----------------------------------------------
-    // A compressor's blade-passing tone is not a clean sine. Flow into the
-    // wheel is never uniform (the volute, the bend upstream of it), so every
-    // blade sees a slightly different load once per SHAFT revolution. That
-    // amplitude-modulates the blade tone at the shaft rate and puts sidebands
-    // either side of it — the texture that makes a turbo sound like a spinning
-    // machine rather than a test-tone oscillator.
-    this.shaftOsc = ctx.createOscillator();
-    this.shaftOsc.type = 'sine';
-    this.shaftOsc.frequency.value = 180;
-    this._srcs.push(this.shaftOsc);
-    this.shaftDepth = keep(ctx.createGain());
-    this.shaftDepth.gain.value = 0;
-    this.shaftOsc.connect(this.shaftDepth);
-    this.shaftDepth.connect(this.whineGain.gain);
-
-    // Third blade harmonic: real spectra show several, and the odd ones give
-    // the tone its edge.
-    this.whineOsc3 = ctx.createOscillator();
-    this.whineOsc3.type = 'sine';
-    this.whineOsc3.frequency.value = 6000;
-    this._srcs.push(this.whineOsc3);
-    this.whineH3 = keep(ctx.createGain());
-    this.whineH3.gain.value = 0.12;
-    this.whineOsc3.connect(this.whineH3);
-    this.whineH3.connect(this.whineGain);
 
     // --- wastegate chatter --------------------------------------------------
     // Once boost reaches the wastegate spring pressure the valve hunts, opening
@@ -939,24 +995,57 @@ export class TurboLayer {
     this.wgLevel.connect(this.out);
     keep(amDrive(ctx, this.wgOsc, 0.85, this.wgAM.gain));
 
-    // --- wastegate flutter / surge -----------------------------------------
-    this.flutBP = keep(ctx.createBiquadFilter());
-    this.flutBP.type = 'bandpass';
-    this.flutBP.frequency.value = 1100;
-    this.flutBP.Q.value = 1.4;
-    this.flutAM = keep(ctx.createGain());
-    this.flutAM.gain.value = 0.35;
+    // --- compressor surge: the "stu-stu-stu" --------------------------------
+    // One sawtooth through a pulse curve gives the burst train; both bands
+    // share it so the "st" and the "tu" of each cycle land together.
     this.surgeOsc = ctx.createOscillator();
-    this.surgeOsc.type = 'sine';
-    this.surgeOsc.frequency.value = 18;
+    this.surgeOsc.type = 'sawtooth';
+    this.surgeOsc.frequency.value = 16;
     this._srcs.push(this.surgeOsc);
-    keep(amDrive(ctx, this.surgeOsc, 0.65, this.flutAM.gain));
-    this.flutGain = keep(ctx.createGain());
-    this.flutGain.gain.value = 0;
-    white.connect(this.flutBP);
-    this.flutBP.connect(this.flutAM);
-    this.flutAM.connect(this.flutGain);
-    this.flutGain.connect(this.out);
+
+    this.surgeShaper = keep(ctx.createWaveShaper());
+    this.surgeShaper.curve = surgePulseCurve(1024);
+    // The curve turns a band-limited ramp into a burst; 2x is enough to keep
+    // the corner clean without paying for 4x on a 16 Hz signal.
+    this.surgeShaper.oversample = '2x';
+    this.surgeOsc.connect(this.surgeShaper);
+
+    // Body band — the "tu".
+    this.surgeBody = keep(ctx.createBiquadFilter());
+    this.surgeBody.type = 'bandpass';
+    this.surgeBody.frequency.value = 1200;
+    this.surgeBody.Q.value = 3.5;
+    this.surgeBodyAM = keep(ctx.createGain());
+    this.surgeBodyAM.gain.value = 0;
+    this.surgeBodyLvl = keep(ctx.createGain());
+    this.surgeBodyLvl.gain.value = 0;
+    white.connect(this.surgeBody);
+    this.surgeBody.connect(this.surgeBodyAM);
+    this.surgeBodyAM.connect(this.surgeBodyLvl);
+    this.surgeBodyLvl.connect(this.out);
+    this.surgeBodyDepth = keep(ctx.createGain());
+    this.surgeBodyDepth.gain.value = 1;
+    this.surgeShaper.connect(this.surgeBodyDepth);
+    this.surgeBodyDepth.connect(this.surgeBodyAM.gain);
+
+    // Edge band — the "st". Deliberately quiet: this is the band that would
+    // make the flutter harsh if it were level-matched to the body.
+    this.surgeEdge = keep(ctx.createBiquadFilter());
+    this.surgeEdge.type = 'bandpass';
+    this.surgeEdge.frequency.value = 2600;
+    this.surgeEdge.Q.value = 2.2;
+    this.surgeEdgeAM = keep(ctx.createGain());
+    this.surgeEdgeAM.gain.value = 0;
+    this.surgeEdgeLvl = keep(ctx.createGain());
+    this.surgeEdgeLvl.gain.value = 0;
+    white.connect(this.surgeEdge);
+    this.surgeEdge.connect(this.surgeEdgeAM);
+    this.surgeEdgeAM.connect(this.surgeEdgeLvl);
+    this.surgeEdgeLvl.connect(this.out);
+    this.surgeEdgeDepth = keep(ctx.createGain());
+    this.surgeEdgeDepth.gain.value = 1;
+    this.surgeShaper.connect(this.surgeEdgeDepth);
+    this.surgeEdgeDepth.connect(this.surgeEdgeAM.gain);
 
     this._graphBuilt = true;
     this.enabled = true;
@@ -967,7 +1056,10 @@ export class TurboLayer {
 
   /** Boost and shaft state for the orchestrator's gauge. */
   get state() {
-    return { spool: this.spool, boost: this.boost, boostBar: this.boostBar, turboRpm: this.turboRpm };
+    return {
+      spool: this.spool, boost: this.boost,
+      boostBar: this.boostBar, turboRpm: this.turboRpm, surge: this._surge,
+    };
   }
 
   setProfile(profile) {
@@ -981,10 +1073,18 @@ export class TurboLayer {
     this.inertia = clamp(fin(t && t.inertia, 0.4), 0.05, 3);
     this.maxBoost = clamp(fin(t && t.maxBoost, 1), 0, 5);
     this.bovLevel = clamp(fin(t && t.bov, 0.5), 0, 2);
+    this.surgeTrim = clamp(fin(t && t.surge, 1), 0, 3);
     const redline = fin(profile && profile.redlineRpm, 7000);
     const order = fin(t && t.whineOrder, 70);
     // Whine of a fully spooled turbo at redline, Hz.
-    this.whineRef = clamp((redline / 120) * order, 200, 12000);
+    //
+    // The ceiling used to be 12 kHz, which let profiles put a near-pure tone at
+    // 4.2 kHz — the single most piercing thing this synth could produce, and
+    // right where the ear peaks. It is now capped at 3 kHz for the FUNDAMENTAL;
+    // the wavetable's harmonics carry the brightness above that, rolled off, so
+    // the whistle still reads as high without a bare tone sitting in the
+    // sensitive band.
+    this.whineRef = clamp((redline / 120) * order, 200, 3000);
   }
 
   update(p) {
@@ -994,18 +1094,13 @@ export class TurboLayer {
     const load = clamp(fin(p.load, 0), 0, 1);
     const throttle = clamp(fin(p.throttle, 0), 0, 1);
     const rpmNorm = clamp(fin(p.rpmNorm, 0), 0, 1);
+    const shifting = !!p.shifting;
 
     // --- shaft dynamics -----------------------------------------------------
     // Exhaust enthalpy flow ≈ mass flow (rpm) × energy per unit mass (load).
     // Exhaust mass flow is close to linear in rpm, and at low rpm there really
-    // is almost nothing driving the turbine. Weighting rpm harder (0.10/0.90
-    // rather than 0.25/0.75) widens the shaft-speed sweep across a gear pull,
-    // which is what the whistle rides on.
+    // is almost nothing driving the turbine.
     const drive = clamp(load * (0.10 + 0.90 * rpmNorm), 0, 1);
-    // Coast-down at 4.0x inertia meant the shaft barely moved during a 95 ms
-    // shift, so the whistle sat flat across gear changes. 1.9x still lags the
-    // engine by a wide margin (that lag IS the turbo) but lets the pitch sag
-    // and swell audibly through a shift.
     // With the fuel cut there is no exhaust enthalpy at all, so the turbine
     // coasts on bearing drag and slows markedly faster than it does on a
     // trailing throttle. That difference is what gives each upshift its own
@@ -1041,24 +1136,26 @@ export class TurboLayer {
     // pull becomes ~1.8x, around ten semitones, so each gear gets an audible
     // rising swoop that the shift then cuts. Character, not physics.
     const whineHz = Math.max(120, this.whineRef * Math.pow(Math.max(0.05, this.spool), 1.55));
-    setF(this.whineOsc1.frequency, whineHz, now, TC, 1000);
-    setF(this.whineOsc2.frequency, whineHz * 2, now, TC, 2000);
-    setF(this.hissBP.frequency, whineHz * 1.35, now, TC, 2000);
+    setF(this.whineOsc.frequency, whineHz, now, TC, 1000);
+    // The formant sits a little above the blade tone so the 2nd harmonic is
+    // what the cavity emphasises — that is the "eeee" in a turbo whistle.
+    setF(this.whineBP.frequency, whineHz * 1.6, now, TC, 1600);
 
-    // Aeroacoustic radiation rises very steeply with tip speed; x^2.5 is a
-    // tamed version of the U^5-ish law so the whine is audible off-boost too.
     // Radiation rises steeply with tip speed. Exponent 2.0 rather than 2.5 so
     // the whistle stays present across the range instead of only at full boost.
     const aero = Math.pow(this.spool, 2.0);
     const flow = clamp(Math.max(load, throttle * 0.7), 0, 1);
-    // Weighted toward tip speed, NOT throttle. Previously (0.35 + 0.65*flow)
-    // meant closing the throttle for a shift collapsed the whistle to a third
-    // of its level, so it disappeared exactly when it should be sagging and
-    // swelling. The turbine is still spinning; it is still whistling.
-    const whineLvl = 0.44 * aero * (0.62 + 0.38 * flow);
+    // Weighted toward tip speed, NOT throttle: closing the throttle for a shift
+    // must not collapse the whistle. The turbine is still spinning; it is still
+    // whistling. What changes is that it is no longer being driven, so it sags.
+    const whineLvl = 0.40 * aero * (0.62 + 0.38 * flow);
     setT(this.whineGain.gain, whineLvl, now, TC);
-    setF(this.whineOsc3.frequency, whineHz * 3, now, TC, 6000);
-    setT(this.whineH3.gain, 0.14 * (0.4 + 0.6 * this.spool), now, TC);
+
+    // Bearing wander, in cents. Deepest off-boost where the rotor is least
+    // loaded and the oil film is thickest; a fully spooled turbo runs true.
+    const wander = 26 * (1 - 0.75 * this.spool);
+    setT(this.wanderDepth1.gain, wander, now, 0.08);
+    setT(this.wanderDepth2.gain, wander * 0.4, now, 0.08);
 
     // Shaft-rate sidebands. A turbo wheel has roughly a dozen blades, so the
     // shaft turns at about BPF/11 — tens of Hz, well below the tone, which is
@@ -1075,29 +1172,88 @@ export class TurboLayer {
     setF(this.wgOsc.frequency, 26 + 30 * nearCeiling + 8 * Math.sin(now * 3.1), now, 0.05, 34);
     setF(this.wgBP.frequency, 1200 + 1100 * this.spool, now, TC, 1500);
     setT(this.wgLevel.gain, 0.34 * chatter, now, TC);
-    setT(this.hissGain.gain, 0.24 * aero * (0.45 + 0.55 * flow), now, TC);
+    setT(this.hissGain.gain, 0.22 * aero * (0.45 + 0.55 * flow), now, TC);
 
     // --- blow-off valve -----------------------------------------------------
     const bov = clamp(fin(p.evBov, 0), 0, 1);
     if (bov > 0) this._fireBov(now, bov);
 
-    // --- wastegate flutter / compressor surge -------------------------------
-    const lifted = throttle < 0.08 && this._prevThrottle >= 0.25;
-    if (lifted) this._lastLift = now;
-    let flutter = 0;
-    const wantFlutter = this.flutterMode === true
-      || (this.flutterMode === 'auto' && (now - this._lastBov) > this.flutterWindow);
-    if (wantFlutter && throttle < 0.1 && this.boost > 0.3 && (now - this._lastLift) < 0.9) {
-      // Amplitude grows with the pressure trying to reverse through the wheel.
-      flutter = clamp((this.boost - 0.3) / 0.5, 0, 1) * 0.16;
-      // Surge (Helmholtz) frequency of the compressor-to-throttle volume rises
-      // slightly with pressure: ~12 Hz just above threshold to ~28 Hz at max.
-      setF(this.surgeOsc.frequency, 12 + 16 * this.boost, now, 0.05, 18);
-      setF(this.flutBP.frequency, 900 + 700 * this.boost, now, 0.05, 1100);
-    }
-    setT(this.flutGain.gain, flutter, now, 0.04);
+    // --- compressor surge ---------------------------------------------------
+    this._stepSurge(now, dt, throttle, rpmNorm, shifting, p);
 
     this._prevThrottle = throttle;
+    this._prevShifting = shifting;
+  }
+
+  /**
+   * Arm, sustain and decay the surge state, then write the burst train.
+   *
+   * Surge needs two things at once: pressure in the plenum, and nowhere for it
+   * to go. Both a driver lift and a gear-change ignition cut close the throttle
+   * against a still-spinning compressor, so both arm it — which is why a
+   * boosted car flutters on upshifts as well as on lift-off.
+   */
+  _stepSurge(now, dt, throttle, rpmNorm, shifting, p) {
+    // The plenum drains as the surge cycles vent it, so the stall weakens even
+    // if the throttle stays shut. ~0.55 s to fall to a third.
+    this._surge *= Math.exp(-dt / 0.42);
+    if (this._surge < 1e-3) this._surge = 0;
+
+    const closed = throttle < 0.10;
+    const justClosed = closed && this._prevThrottle >= 0.25;
+    const shiftCut = shifting && !this._prevShifting;
+    const allow = this.flutterMode === false ? 0 : 1;
+
+    // Pressure available to reverse through the wheel. Below ~0.12 there is not
+    // enough to stall the compressor and nothing happens at all — which is
+    // correct: an off-boost lift is silent.
+    //
+    // Note this reads `this.boost` BEFORE the valve has vented on the trigger
+    // frame, which is right: what stalls the compressor is the pressure that
+    // was standing in the plenum at the instant the throttle shut.
+    const head = clamp((this.boost - 0.12) / 0.45, 0, 1);
+
+    // What the valve relieves cannot reverse through the wheel. This is the
+    // one place the valve's capacity decides the sound, and it has to be
+    // applied to the ARMING rather than to the decaying state: the plenum is
+    // vented on the same frame the throttle shuts, so subtracting it afterwards
+    // just gets overwritten by the next arm.
+    const relief = clamp(1 - 0.85 * this.bovLevel, 0, 1);
+    const stall = head * relief * allow;
+
+    if (stall > 0 && (justClosed || shiftCut)) {
+      // A snap-shut from full boost stalls harder than an easing-off.
+      this._surge = Math.max(this._surge, stall);
+    }
+    // While the throttle stays shut and boost is still up, surge sustains
+    // rather than decaying away — a long lift keeps chattering.
+    if (closed && stall > 0.10) {
+      this._surge = Math.max(this._surge, stall * 0.55);
+    }
+    if (!closed && !shifting) this._surge *= 0.25;   // reopening kills it at once
+
+    const s = clamp(this._surge, 0, 1);
+
+    // Helmholtz rate of the compressor-to-throttle volume. Higher pressure and
+    // higher mass flow both stiffen the system, so the chatter speeds up: about
+    // 9 Hz just above the stall threshold to 30 Hz coming off full boost at
+    // high rpm. This spread is most of why the flutter sounds different in 2nd
+    // and in 5th.
+    const rate = 9 + 15 * s + 6 * rpmNorm;
+    setF(this.surgeOsc.frequency, rate, now, 0.03, 16);
+
+    // Each reversal drags gas back across the wheel; the harder the stall, the
+    // higher the jet velocity and the brighter the chuff.
+    setF(this.surgeBody.frequency, 700 + 1200 * s, now, 0.04, 1200);
+    setF(this.surgeEdge.frequency, 2200 + 1200 * s, now, 0.04, 2600);
+
+    const amp = this.surgeLevel * this.surgeTrim;
+    // The bandpasses cost most of the noise that goes through them, so these
+    // levels are well above what they look like relative to the whine.
+    setT(this.surgeBodyLvl.gain, 0.62 * amp * s, now, 0.03);
+    // The edge band is gated on s^2 so a gentle stall is all body and only a
+    // hard one gets the click. Level-matched by ear-safety, not by energy.
+    setT(this.surgeEdgeLvl.gain, 0.20 * amp * s * s, now, 0.03);
   }
 
   /**
@@ -1138,7 +1294,15 @@ export class TurboLayer {
     // The valve dumps the plenum but not the shaft: boost collapses, whine does
     // not. A little shaft speed is lost because the compressor briefly free-
     // wheels into an empty duct.
-    this._vent = 1;
+    //
+    // How MUCH it dumps is the valve's capacity, and that one number decides
+    // which sound a car makes. A big atmospheric valve empties the plenum, so
+    // there is nothing left to reverse through the wheel and you get the "chiu"
+    // and nothing else. A small or recirculating valve leaves pressure
+    // standing, the compressor stalls anyway, and you get the flutter. Cars
+    // that do both — a soft chiu with a chatter behind it — are the ones in
+    // between, and that falls out of this rather than needing a mode switch.
+    this._vent = clamp(this.bovLevel, 0.15, 1);
     this.spool *= 0.97;
     this._lastBov = fin(now, 0);
   }
@@ -1153,6 +1317,61 @@ export class TurboLayer {
     this._srcs.length = 0;
     this.enabled = false;
   }
+}
+
+/**
+ * Blade-tone wavetable, built once per AudioContext.
+ *
+ * A compressor wheel radiates at the blade-passing frequency and its harmonics.
+ * Measured compressor spectra show the fundamental dominant with the harmonics
+ * falling roughly 1/k^1.4, and the ODD ones a little stronger — the wheel is
+ * not symmetric front-to-back, so it radiates like a half-open source. That
+ * tilt is what gives a turbo its edge without needing a bright filter.
+ *
+ * Cached per context: the wave is identical for every profile (only the
+ * playback frequency differs) and PeriodicWave objects are immutable.
+ */
+const BLADE_CACHE = new WeakMap();
+
+function bladeWave(ctx) {
+  const hit = BLADE_CACHE.get(ctx);
+  if (hit) return hit;
+  const N = 10;
+  const real = new Float32Array(N + 1);
+  const imag = new Float32Array(N + 1);
+  for (let k = 1; k <= N; k++) {
+    const odd = (k % 2) ? 1.25 : 0.8;
+    imag[k] = (1 / Math.pow(k, 1.4)) * odd;
+  }
+  const w = ctx.createPeriodicWave(real, imag, { disableNormalization: false });
+  BLADE_CACHE.set(ctx, w);
+  return w;
+}
+
+/**
+ * Surge envelope: one burst per cycle of the driving sawtooth.
+ *
+ * A WaveShaper is a memoryless map, and a sawtooth sweeps its input across the
+ * whole curve exactly once per cycle. So a curve that rises fast and then
+ * decays IS an attack/decay envelope generator, at zero per-event cost and with
+ * a rate set by one oscillator frequency.
+ *
+ * 6 % rise, exponential tail. The sharp leading edge is the "st" and the tail
+ * is the "tu"; a symmetric or sinusoidal shape here gives tremolo instead, and
+ * that was the old "shoo-shoo-shoo" problem.
+ *
+ * Output is 0..1, never negative — this drives a gain, and a negative envelope
+ * would invert the noise band mid-burst.
+ */
+function surgePulseCurve(n = 1024) {
+  const c = new Float32Array(n);
+  const RISE = 0.06;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);                 // maps input -1..+1 onto 0..1
+    const a = t < RISE ? t / RISE : 1;
+    c[i] = a * Math.exp(-5.5 * Math.max(0, t - RISE));
+  }
+  return c;
 }
 
 // ===========================================================================
@@ -1171,20 +1390,45 @@ export class TurboLayer {
  *  dec    decay to −80 dB, s
  *  lvl    nominal level
  */
+/**
+ * `bus` decides where a voice is heard from, and it is not a mix choice — it is
+ * a statement about where the sound is physically made.
+ *
+ *   combustion — fuel lighting off INSIDE the exhaust. It leaves through the
+ *                tailpipe, so it must carry the same pipe resonance, the same
+ *                reflections and the same muffler colour as the engine note.
+ *                Routed into the exhaust waveguides.
+ *   mechanical — metal hitting metal in the driveline or the gearbox. This
+ *                radiates from the casing directly into the air and never goes
+ *                near the exhaust at all.
+ *
+ * Everything used to share one output which was then partly sent to the pipe.
+ * That sent gear-lash clunks down the exhaust (they do not go there) while
+ * leaving pops with a large dry component (they do not arrive dry), which is
+ * most of why the pops sat outside the engine rather than in it.
+ */
 const TRANSIENT_PRESETS = Object.freeze({
   // Unburnt charge lighting off in the exhaust: a gas explosion in a pipe, so
   // low and broad, with the pipe's own ring on top.
-  bang:    Object.freeze({ fA: 118,  qA: 1.7, fB: 780,  qB: 2.2, mixB: 0.6,  atk: 0.0050, dec: 0.190, lvl: 1.0 }),
-  // The little ones that follow it. Brighter, shorter, quieter.
-  crackle: Object.freeze({ fA: 850,  qA: 3.6, fB: 1900, qB: 4.2, mixB: 0.65, atk: 0.0030, dec: 0.055, lvl: 0.5 }),
+  //
+  // fB was 780 Hz. Once MODE_SURVIVAL dropped the exhaust's own centroid to
+  // ~199 Hz (ledger #31) that upper band stood well clear of everything else in
+  // the mix, and a report that does not share a register with the engine reads
+  // as a separate object next to the car rather than as the car.
+  bang:    Object.freeze({ bus: 'combustion', fA: 105,  qA: 1.6, fB: 520,  qB: 2.0, mixB: 0.50, atk: 0.0050, dec: 0.190, lvl: 1.0 }),
+  // The little ones that follow it. Brighter, shorter, quieter — but 850/1900
+  // put the whole crackle above the engine and half of it inside the 2-6 kHz
+  // band the ear is most sensitive to. Down an octave, it reads as the same
+  // gas in the same pipe.
+  crackle: Object.freeze({ bus: 'combustion', fA: 430,  qA: 3.0, fB: 1150, qB: 3.6, mixB: 0.45, atk: 0.0030, dec: 0.055, lvl: 0.5 }),
   // Backlash take-up: two hardened steel faces colliding. NOT a pop — no low
   // end to speak of, very fast, high Q, inharmonic pair (2.7×) so it reads as
   // metal rather than as a pitched note.
-  clunk:   Object.freeze({ fA: 1150, qA: 22,  fB: 3100, qB: 16,  mixB: 0.75, atk: 0.0008, dec: 0.055, lvl: 0.9 }),
+  clunk:   Object.freeze({ bus: 'mechanical', fA: 1150, qA: 22,  fB: 3100, qB: 16,  mixB: 0.75, atk: 0.0008, dec: 0.055, lvl: 0.9 }),
   // Clutch bite: a big soft mass being grabbed. Low, dull, comparatively long.
-  thump:   Object.freeze({ fA: 95,   qA: 2.2, fB: 320,  qB: 3.0, mixB: 0.35, atk: 0.0040, dec: 0.130, lvl: 0.8 }),
+  thump:   Object.freeze({ bus: 'mechanical', fA: 95,   qA: 2.2, fB: 320,  qB: 3.0, mixB: 0.35, atk: 0.0040, dec: 0.130, lvl: 0.8 }),
   // Selector fork / synchro detent: tiny, bright, almost no decay.
-  click:   Object.freeze({ fA: 3200, qA: 8.0, fB: 6400, qB: 10,  mixB: 0.6,  atk: 0.0006, dec: 0.016, lvl: 0.35 }),
+  click:   Object.freeze({ bus: 'mechanical', fA: 3200, qA: 8.0, fB: 6400, qB: 10,  mixB: 0.6,  atk: 0.0006, dec: 0.016, lvl: 0.35 }),
 });
 
 /**
@@ -1247,7 +1491,12 @@ export class TransientBank {
     this._nodes = [];
     const keep = (n) => { this._nodes.push(n); return n; };
 
+    // Two outputs, because a pop and a clunk are made in different places.
+    // `out` is the direct/mechanical path; `combOut` carries the combustion
+    // voices, which the orchestrator feeds into the exhaust waveguides so they
+    // come out of the tailpipe with the pipe's colour on them.
     this.out = keep(ctx.createGain());
+    this.combOut = keep(ctx.createGain());
     /**
      * Makeup for bandpass insertion loss.
      *
@@ -1262,9 +1511,18 @@ export class TransientBank {
      */
     this.makeup = clamp(fin(o.makeup, 9), 1, 40);
     this.out.gain.value = this.level * this.makeup;
+    this.combOut.gain.value = this.level * this.makeup;
 
-    const count = clamp(Math.round(fin(o.voices, 16)), 1, 40);
+    // The pool is PARTITIONED by bus rather than routed per event. A voice is
+    // wired to exactly one output for its whole life, so routing costs no nodes
+    // and no per-event parameter writes — and a combustion burst can never
+    // starve the clunk that has to land in the middle of it.
+    const count = clamp(Math.round(fin(o.voices, 16)), 2, 40);
+    const nComb = Math.max(1, Math.round(count * 0.62));
     this.voices = new Array(count);
+    this.pools = { combustion: [], mechanical: [] };
+    this._cursor = { combustion: 0, mechanical: 0 };
+
     for (let i = 0; i < count; i++) {
       const src = noiseSource(ctx, 'white', (i * 0.137) % 1.9);
       this._srcs.push(src);
@@ -1278,19 +1536,25 @@ export class TransientBank {
       const gain = keep(ctx.createGain());
       gain.gain.value = 0;
 
+      const bus = i < nComb ? 'combustion' : 'mechanical';
       src.connect(bpA); src.connect(bpB);
       bpA.connect(gain);
       bpB.connect(mixB); mixB.connect(gain);
-      gain.connect(this.out);
+      gain.connect(bus === 'combustion' ? this.combOut : this.out);
 
-      this.voices[i] = { bpA, bpB, mixB, gain, busyUntil: -1 };
+      const v = { bpA, bpB, mixB, gain, busyUntil: -1, bus };
+      this.voices[i] = v;
+      this.pools[bus].push(v);
     }
 
     this.setProfile(profile);
   }
 
   get input() { return null; }
+  /** Mechanical transients — clunks, thumps, clicks. Heard directly. */
   get output() { return this.out; }
+  /** Combustion transients — pops and bangs. Feed this INTO the exhaust. */
+  get combustionOutput() { return this.combOut; }
 
   setProfile(profile) {
     this.profile = profile;
@@ -1327,23 +1591,27 @@ export class TransientBank {
     const dec = clamp(pre.dec * clamp(fin(decScale, 1), 0.2, 6), 0.004, 1.5);
     const end = t + pre.atk + dec + 0.002;
 
-    // Pick a free voice, else steal the one that finishes soonest.
-    const n = this.voices.length;
+    // Pick a free voice from THIS preset's bus, else steal the one in that bus
+    // that finishes soonest. Never cross buses: a stolen voice is wired to a
+    // different output, so it would come out of the wrong place.
+    const bus = pre.bus === 'combustion' ? 'combustion' : 'mechanical';
+    const pool = this.pools[bus];
+    const n = pool.length;
     let idx = -1;
     for (let k = 0; k < n; k++) {
-      const i = (this._next + k) % n;
-      if (this.voices[i].busyUntil <= t) { idx = i; break; }
+      const i = (this._cursor[bus] + k) % n;
+      if (pool[i].busyUntil <= t) { idx = i; break; }
     }
     if (idx < 0) {
       let best = 0;
       for (let i = 1; i < n; i++) {
-        if (this.voices[i].busyUntil < this.voices[best].busyUntil) best = i;
+        if (pool[i].busyUntil < pool[best].busyUntil) best = i;
       }
       idx = best;
       this.stolen++;
     }
-    this._next = (idx + 1) % n;
-    const v = this.voices[idx];
+    this._cursor[bus] = (idx + 1) % n;
+    const v = pool[idx];
 
     v.bpA.frequency.cancelScheduledValues(t);
     v.bpA.frequency.setValueAtTime(hzOf(pre.fA * fs, 1000), t);

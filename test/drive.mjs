@@ -123,6 +123,50 @@ ok(!accepted || peak > dBefore + 150, 'downshift blips the throttle to rev-match
    `${dBefore.toFixed(0)} → peak ${peak.toFixed(0)} → ${sim.getState().rpm.toFixed(0)}`);
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+console.log('\n\x1b[1mstanding start — the engine must never sit on one pitch\x1b[0m');
+{
+  const { Drivetrain } = await import('../src/physics.js');
+  const { ENGINE_PROFILES, VEHICLE_PRESETS } = await import('../src/profiles.js');
+
+  // A clutch-slip launch legitimately holds the revs while road speed catches
+  // up. What it must NOT do is hold them at one number long enough to read as
+  // the engine being stuck — which is exactly what a fixed hold target did:
+  // launchFlareRpm was forced to 850, putting a V8's WOT hold at 1585 rpm for
+  // ~0.4 s. It sounded like a bog, not a launch.
+  const launch = (engineId, vehId) => {
+    const d = new Drivetrain(ENGINE_PROFILES[engineId], VEHICLE_PRESETS[vehId], {});
+    const tr = [];
+    let t = 0;
+    for (let i = 0; i < 60 * 3; i++) {
+      d.setThrottle(1);
+      t += DT;
+      const p = d.step(DT, t);
+      tr.push({ rpm: p.rpm, gear: p.gear });
+    }
+    const g1 = tr.filter(x => x.gear === 1);
+    // Longest run in 1st where rpm moves slower than 250 rpm/s.
+    let worst = 0, cur = 0, at = 0;
+    for (let i = 6; i < g1.length; i++) {
+      const slope = Math.abs(g1[i].rpm - g1[i - 6].rpm) / (6 * DT);
+      if (slope < 250) { cur++; if (cur > worst) { worst = cur; at = g1[i].rpm; } }
+      else cur = 0;
+    }
+    const hold = Math.min(...g1.slice(9).map(x => x.rpm));
+    return { flat: worst / 60, at, hold };
+  };
+
+  for (const v of ['hatch', 'sports', 'supercar', 'muscle']) {
+    const r = launch('v8cross', v);
+    ok(r.flat < 0.15, `${v}: no flat spot in 1st at full throttle`,
+       `longest ${r.flat.toFixed(2)} s at ${Math.round(r.at)} rpm`);
+    // A full-throttle launch holds well above idle. 1585 rpm was the bug.
+    ok(r.hold > 1900, `${v}: launch holds at launch revs, not a bog`,
+       `min ${Math.round(r.hold)} rpm`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 console.log('\n\x1b[1mall engines × all vehicles, assembled\x1b[0m');
 const { ENGINE_PROFILES, VEHICLE_PRESETS } = await import('../src/profiles.js');
 let combos = 0;

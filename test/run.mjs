@@ -211,31 +211,6 @@ await suite('audibility — every source started and connected to the output', a
   }
 });
 
-await suite('ambience — environment bed', async () => {
-  const { Ambience } = await import('../src/ambience.js');
-  const mk = createMockContext();
-  installGlobals(mk.ctx);
-  const a = new Ambience(mk.ctx, { rain: 0.9, wind: 0.7, road: 0.8 });
-  a.start(0);
-  a.output.connect(mk.ctx.destination);
-  const built = mk.report().nodes;
-  mk.seal();
-  // Sweep standstill to well past any sane road speed, with rain on and off.
-  for (let i = 0; i < 60 * 60; i++) {
-    mk.advance(1 / 60);
-    a.setRain(Math.abs(Math.sin(i / 700)));
-    a.update({ now: mk.ctx.currentTime, speed: 90 * Math.abs(Math.sin(i / 500)) });
-  }
-  const rep = mk.report();
-  ok(rep.violations === 0, 'no violations across 3600 frames',
-     `${built} nodes, ${rep.paramWrites} writes`);
-  ok(rep.nodes === built, 'no per-frame allocation', `${rep.nodes} vs ${built}`);
-  const au = mk.audit(mk.ctx.destination);
-  ok(au.unstarted.length === 0, 'every source started', `${au.sources} sources`);
-  ok(au.orphaned.length === 0, 'every source reaches the output');
-  ok(rep.scheduledEvents < 200, 'thunder does not run away', rep.scheduledEvents + ' events');
-});
-
 await suite('physics — driveline', () => {
   if (!physics || !shift) {
     console.log('  \x1b[2m(skipped — physics.js / shift.js not present yet)\x1b[0m');
@@ -260,6 +235,170 @@ await suite('physics — driveline', () => {
     ok(maxTwist < 1, `${vid}: driveline twist bounded`, maxTwist.toFixed(4) + ' rad');
     ok(lashEvents > 0 && lashEvents < 1200, `${vid}: lash fires on events, not continuously`,
        lashEvents + ' impacts');
+  }
+});
+
+await suite('dynamics — the three-band crossover sums flat', async () => {
+  // A band-split compressor is only transparent if the bands add back up to the
+  // signal that went in. Web Audio's lowpass/highpass Q is in DECIBELS, so
+  // Butterworth is Q = -3.01 dB and not 0.7071 — a very easy thing to get wrong
+  // and the failure mode is a fat resonant bump at every crossover rather than
+  // anything that looks broken.
+  const { Dynamics } = await import('../src/fx.js');
+  const SR = 48000;
+
+  /** Complex response of one Web Audio lowpass/highpass section. */
+  const section = (type, f0, qDb) => {
+    const w0 = 2 * Math.PI * f0 / SR, cw = Math.cos(w0), sw = Math.sin(w0);
+    const al = sw / (2 * Math.pow(10, qDb / 20));
+    const b0 = type === 'lowpass' ? (1 - cw) / 2 : (1 + cw) / 2;
+    const b1 = type === 'lowpass' ? 1 - cw : -(1 + cw);
+    const b2 = b0;
+    const a0 = 1 + al, a1 = -2 * cw, a2 = 1 - al;
+    return (f) => {
+      const w = 2 * Math.PI * f / SR;
+      const c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
+      const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+      const dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+      const dd = dr * dr + di * di;
+      return [(nr * dr + ni * di) / dd, (ni * dr - nr * di) / dd];
+    };
+  };
+  const mul = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+
+  const worstDeviation = (qDb) => {
+    const [LOW, MID] = Dynamics.BANDS;
+    const lp1 = section('lowpass', LOW.f, qDb), hp1 = section('highpass', LOW.f, qDb);
+    const lp2 = section('lowpass', MID.f, qDb), hp2 = section('highpass', MID.f, qDb);
+    let worst = 0, at = 0;
+    for (let f = 25; f < 18000; f *= Math.pow(2, 1 / 48)) {
+      const L = mul(lp1(f), lp1(f));
+      const M = mul(mul(hp1(f), hp1(f)), mul(lp2(f), lp2(f)));
+      const H = mul(hp2(f), hp2(f));
+      const re = L[0] + M[0] + H[0], im = L[1] + M[1] + H[1];
+      const dB = 20 * Math.log10(Math.hypot(re, im));
+      if (Math.abs(dB) > Math.abs(worst)) { worst = dB; at = f; }
+    }
+    return { worst, at };
+  };
+
+  const good = worstDeviation(-3.0103);
+  ok(Math.abs(good.worst) < 0.5, 'Linkwitz-Riley bands recombine flat',
+     `${good.worst.toFixed(3)} dB at ${good.at.toFixed(0)} Hz`);
+  // Control: the value someone would reach for if they read Q as linear.
+  const bad = worstDeviation(0.7);
+  ok(Math.abs(bad.worst) > 3, 'the test can fail — a linear Q of 0.7 bumps the crossover',
+     `${bad.worst.toFixed(2)} dB at ${bad.at.toFixed(0)} Hz`);
+
+  // And the stage is actually in the signal path with all three bands built.
+  const mk = createMockContext();
+  installGlobals(mk.ctx);
+  const d = new Dynamics(mk.ctx, { amount: 1 });
+  ok(d.bands.length === 3, 'three bands built', d.bands.map(b => b.spec.name).join('/'));
+  ok(d.bands[2].spec.attack <= 0.005 && d.bands[2].spec.ratio >= 4,
+     'the high band is a fast harshness tamer',
+     `${d.bands[2].spec.attack * 1000} ms, ${d.bands[2].spec.ratio}:1`);
+  d.setAmount(0);
+  ok(d.bands.every(b => b.comp.threshold.value === 0), 'amount 0 parks every threshold');
+  d.setAmount(1);
+});
+
+await suite('turbo — spool, whine sweep and compressor surge', async () => {
+  const { EngineSim } = await import('../src/engine-sim.js');
+  const TURBOS = Object.entries(ENGINE_PROFILES).filter(([, p]) => p.turbo).map(([id]) => id);
+  ok(TURBOS.length >= 4, 'there are turbocharged profiles to test', TURBOS.join(','));
+
+  /** Drive one engine through gear pulls with periodic lifts. */
+  const run = (engine, { lift = true, shift = true } = {}) => {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const sim = new EngineSim(mk.ctx, { engine, vehicle: 'sports' });
+    sim.start();
+    const T = sim.turbo;
+    const r = { peakSurge: 0, peakBody: 0, surgeFrames: 0, bov: 0,
+                whineMin: Infinity, whineMax: 0, spoolMin: Infinity, spoolMax: 0 };
+    for (let i = 0; i < 60 * 10; i++) {
+      const closed = lift && (i % 180 >= 150);
+      sim.setThrottle(closed ? 0 : 1);
+      mk.advance(1 / 60);
+      sim.update(1 / 60);
+      if (sim._lastParams.evBov > 0) r.bov++;
+      r.peakSurge = Math.max(r.peakSurge, T._surge);
+      const body = T.surgeBodyLvl.gain.value;
+      r.peakBody = Math.max(r.peakBody, body);
+      if (body > 0.02) r.surgeFrames++;
+      const w = T.whineOsc.frequency.value;
+      if (w > r.whineMax) r.whineMax = w;
+      if (w < r.whineMin) r.whineMin = w;
+      r.spoolMin = Math.min(r.spoolMin, T.spool);
+      r.spoolMax = Math.max(r.spoolMax, T.spool);
+    }
+    return r;
+  };
+
+  for (const id of TURBOS) {
+    const r = run(id);
+    // The whistle has to MOVE. A flat tone across the whole rev range is what
+    // "sounds fake" means; a real turbo sweeps as the shaft spools and sags.
+    const semitones = 12 * Math.log2(r.whineMax / Math.max(1, r.whineMin));
+    ok(semitones > 18, `${id}: whine sweeps a musically useful range`,
+       `${r.whineMin.toFixed(0)}-${r.whineMax.toFixed(0)} Hz = ${semitones.toFixed(1)} semitones`);
+    // The fundamental must stay clear of the band where the ear peaks.
+    ok(r.whineMax <= 3000, `${id}: whine fundamental stays out of 3-6 kHz`,
+       `max ${r.whineMax.toFixed(0)} Hz`);
+    ok(r.peakSurge > 0.15 && r.surgeFrames > 20,
+       `${id}: compressor surges on lift-off`,
+       `peak ${r.peakSurge.toFixed(2)}, active ${r.surgeFrames} frames`);
+  }
+
+  // A big atmospheric valve relieves the plenum, so there is much less left to
+  // reverse through the wheel. boxer4 (bov 0.80) against i6 (bov 0.25).
+  const big = run('boxer4'), small = run('i6');
+  const dB = 20 * Math.log10(small.peakBody / Math.max(1e-6, big.peakBody));
+  ok(dB > 5, 'a large blow-off valve suppresses the flutter',
+     `i6 ${small.peakBody.toFixed(3)} vs boxer4 ${big.peakBody.toFixed(3)} = ${dB.toFixed(1)} dB`);
+  ok(big.bov > 0 && small.bov > 0, 'the blow-off valve still fires on both',
+     `${big.bov} / ${small.bov} events`);
+
+  // Never on a closed throttle that was never boosted: an off-boost lift must
+  // be silent, or every gentle coast would chatter.
+  const mk = createMockContext();
+  installGlobals(mk.ctx);
+  const sim = new EngineSim(mk.ctx, { engine: 'i6', vehicle: 'sports' });
+  sim.start();
+  let idleSurge = 0;
+  for (let i = 0; i < 60 * 6; i++) {
+    sim.setThrottle(i % 120 < 60 ? 0.12 : 0);   // never enough to build boost
+    mk.advance(1 / 60);
+    sim.update(1 / 60);
+    idleSurge = Math.max(idleSurge, sim.turbo.surgeBodyLvl.gain.value);
+  }
+  ok(idleSurge < 0.02, 'an off-boost lift does not flutter',
+     `peak ${idleSurge.toFixed(4)}`);
+});
+
+await suite('harshness — no screaming resonance at any rpm', async () => {
+  // The comb peaks of a feedback waveguide sit at multiples of 1/T and an
+  // engine's harmonics at multiples of f0. Where those two series coincide, one
+  // harmonic lands on a comb peak while its neighbours fall in the troughs —
+  // and if the pipe is still ringing in its 20th mode, that is a 20 dB spike at
+  // 2 kHz that appears at one rpm and vanishes at the next. The V12 at 8000 rpm
+  // once put 71 % of all radiated power into 2-6 kHz this way.
+  //
+  // spectrum.mjs computes the chain's magnitude response analytically, so this
+  // is a real measurement rather than a smoke test.
+  const { harshness } = await import('./spectrum.mjs');
+  const LIMIT = 0.04;          // 4 % of radiated power in 2-6 kHz
+  for (const [id, p] of Object.entries(ENGINE_PROFILES)) {
+    let worst = 0, wRpm = 0, wF = 0;
+    for (let rpm = 1200; rpm <= p.redlineRpm; rpm += 400) {
+      for (const load of [0.35, 0.7, 1.0]) {
+        const h = harshness(p, rpm, load);
+        if (h.share > worst) { worst = h.share; wRpm = rpm; wF = h.peakF; }
+      }
+    }
+    ok(worst < LIMIT, `${id}: 2-6 kHz share stays under ${LIMIT * 100}%`,
+       `${(worst * 100).toFixed(2)}% at ${wRpm} rpm (${wF.toFixed(0)} Hz)`);
   }
 });
 

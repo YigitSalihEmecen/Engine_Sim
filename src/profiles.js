@@ -17,11 +17,40 @@
  *   exhaust       waveguide geometry, metres. bank = header/downpipe length,
  *                 collector = shared pipe after the banks merge
  *   intake        Helmholtz resonance of the airbox/plenum, Hz
+ *   turbo         null, or { inertia, maxBoost, whineOrder, bov, surge }.
+ *                 `bov` is the blow-off valve's CAPACITY, 0..1, and it is the
+ *                 one number that decides whether a car goes "chiu" or
+ *                 "stu-stu-stu" on a lift: a big atmospheric valve empties the
+ *                 plenum so nothing is left to reverse through the compressor,
+ *                 a small or recirculating one leaves pressure standing and the
+ *                 compressor stalls instead. `surge` is a taste trim on top.
  */
 
 const C = 343;   // speed of sound, m/s (hot exhaust gas is faster; see gasTempFactor)
 
 export const ENGINE_PROFILES = {
+  vtwin: {
+    label: 'V-twin 90\u00b0 1.2',
+    // Two cylinders on a shared crankpin at 90\u00b0. firingAngles() spaces them
+    // evenly at 360\u00b0, and the pin offset pulls the rear one back to 270\u00b0 \u2014 so
+    // the intervals are 270\u00b0 and 450\u00b0. That asymmetry is the whole engine:
+    // with only two cylinders in two separate pipes, the half-orders dominate
+    // instead of merely colouring the note.
+    cylinders: 2, firingOrder: [1, 2], banks: [[1], [2]],
+    pinOffsets: { 2: -90 },
+    idleRpm: 1150, redlineRpm: 9500, peakTorque: 125, peakTorqueRpm: 8000,
+    // A tiny rotating assembly is why a big twin snaps to the limiter.
+    engineInertia: 0.055, gasTempFactor: 1.34,
+    pulse: { attack: 40, decay: 6.5, hardness: 0.72, jitter: 2.0 },
+    // Genuinely unequal pipes: on a V-twin the front and rear cylinders cannot
+    // have the same run to the collector.
+    exhaust: { bank: 0.95, bankB: 1.10, collector: 0.55, reflection: 0.50, damping: 0.34, muffler: [0.16, 0.11, 0.075] },
+    intake: { helmholtz: 165, q: 6.0, level: 0.40 },
+    mechanical: { valvetrain: 0.42, injector: 0.24, chain: 0.20 },
+    turbo: null,
+    voice: 0.92,
+  },
+
   i3: {
     label: 'Inline-3 1.0 turbo',
     cylinders: 3, firingOrder: [1, 2, 3], banks: [[1, 2, 3]],
@@ -31,8 +60,34 @@ export const ENGINE_PROFILES = {
     exhaust: { bank: 1.45, collector: 1.10, reflection: 0.55, damping: 0.42, muffler: [0.32, 0.21, 0.14] },
     intake: { helmholtz: 105, q: 5.5, level: 0.34 },
     mechanical: { valvetrain: 0.30, injector: 0.26, chain: 0.16 },
-    turbo: { inertia: 0.34, maxBoost: 1.2, whineOrder: 78, bov: 0.55 },
+    turbo: { inertia: 0.34, maxBoost: 1.2, whineOrder: 62, bov: 0.30, surge: 1.0 },
     voice: 1.00,
+  },
+
+  rotary2: {
+    label: 'Rotary 1.3 twin-rotor',
+    // A Wankel has no cylinders. Each rotor fires once per eccentric-shaft
+    // revolution, so a two-rotor produces FOUR evenly spaced power pulses per
+    // 720\u00b0 of shaft \u2014 the same firing geometry as an inline-four. `cylinders`
+    // is that pulse count, not a piston count.
+    //
+    // What makes it sound nothing like an I4 is the port. A peripheral exhaust
+    // port opens gradually and stays open for most of the rotor face's travel,
+    // so the pulse has a slow rise and a very long tail and consecutive pulses
+    // OVERLAP. That overlap is the "braap" \u2014 it is why a rotary sounds
+    // continuous where a piston engine sounds like separate events.
+    cylinders: 4, firingOrder: [1, 2, 3, 4], banks: [[1, 2, 3, 4]],
+    idleRpm: 900, redlineRpm: 9000, peakTorque: 220, peakTorqueRpm: 5500,
+    engineInertia: 0.14, gasTempFactor: 1.40,   // famously hot exhaust
+    pulse: { attack: 18, decay: 3.0, hardness: 0.70, jitter: 1.2 },
+    exhaust: { bank: 1.05, collector: 0.80, reflection: 0.52, damping: 0.30, muffler: [0.20, 0.13, 0.09] },
+    intake: { helmholtz: 145, q: 6.6, level: 0.46 },
+    // No valvetrain and no timing chain \u2014 the rotor is port-timed and the
+    // eccentric shaft is gear-driven. Silencing those two layers is a real and
+    // audible difference, not a cosmetic one.
+    mechanical: { valvetrain: 0.04, injector: 0.30, chain: 0.05 },
+    turbo: null,
+    voice: 0.94,
   },
 
   i4: {
@@ -59,7 +114,7 @@ export const ENGINE_PROFILES = {
     exhaust: { bank: 1.62, bankB: 0.98, collector: 1.15, reflection: 0.58, damping: 0.40, muffler: [0.34, 0.22, 0.15] },
     intake: { helmholtz: 100, q: 5.2, level: 0.36 },
     mechanical: { valvetrain: 0.32, injector: 0.22, chain: 0.18 },
-    turbo: { inertia: 0.40, maxBoost: 1.0, whineOrder: 70, bov: 0.62 },
+    turbo: { inertia: 0.40, maxBoost: 1.0, whineOrder: 58, bov: 0.80, surge: 1.0 },
     voice: 1.00,
   },
 
@@ -72,7 +127,7 @@ export const ENGINE_PROFILES = {
     exhaust: { bank: 1.38, collector: 1.08, reflection: 0.56, damping: 0.41, muffler: [0.31, 0.20, 0.13] },
     intake: { helmholtz: 108, q: 5.6, level: 0.34 },
     mechanical: { valvetrain: 0.33, injector: 0.24, chain: 0.16 },
-    turbo: { inertia: 0.46, maxBoost: 1.1, whineOrder: 64, bov: 0.58 },
+    turbo: { inertia: 0.46, maxBoost: 1.1, whineOrder: 54, bov: 0.35, surge: 1.0 },
     voice: 1.00,
   },
 
@@ -85,8 +140,31 @@ export const ENGINE_PROFILES = {
     exhaust: { bank: 1.55, collector: 1.20, reflection: 0.54, damping: 0.38, muffler: [0.33, 0.21, 0.14] },
     intake: { helmholtz: 95, q: 6.4, level: 0.33 },
     mechanical: { valvetrain: 0.30, injector: 0.22, chain: 0.13 },
-    turbo: { inertia: 0.52, maxBoost: 1.0, whineOrder: 58, bov: 0.55 },
+    turbo: { inertia: 0.52, maxBoost: 1.0, whineOrder: 48, bov: 0.25, surge: 1.1 },
     voice: 0.98,
+  },
+
+  i6diesel: {
+    label: 'Inline-6 turbo-diesel 6.7',
+    cylinders: 6, firingOrder: [1, 5, 3, 6, 2, 4], banks: [[1, 2, 3, 4, 5, 6]],
+    idleRpm: 640, redlineRpm: 4600, peakTorque: 950, peakTorqueRpm: 1900,
+    engineInertia: 0.62,          // heavy iron, and it is why it lugs
+    gasTempFactor: 1.16,          // diesel exhaust is much cooler than petrol
+    // Compression ignition is not a flame front travelling across a chamber, it
+    // is the whole charge going off at once. The pressure rise is nearly a
+    // step, which is what "diesel knock" is, so the attack is the sharpest of
+    // any profile here by a wide margin.
+    pulse: { attack: 68, decay: 9.5, hardness: 0.88, jitter: 1.4 },
+    exhaust: { bank: 1.35, collector: 1.65, reflection: 0.52, damping: 0.60, muffler: [0.46, 0.30, 0.20] },
+    // No throttle plate, so there is very little induction noise to hear.
+    intake: { helmholtz: 88, q: 4.6, level: 0.24 },
+    // The clatter IS the engine: heavy valve gear and, above all, common-rail
+    // injectors firing at 2000 bar. That tick is what makes a diesel a diesel.
+    mechanical: { valvetrain: 0.52, injector: 0.62, chain: 0.24 },
+    // A big variable-geometry turbo: very laggy, high boost, and no atmospheric
+    // blow-off valve at all, so what you hear on a lift is the chatter.
+    turbo: { inertia: 0.95, maxBoost: 1.5, whineOrder: 38, bov: 0.15, surge: 0.55 },
+    voice: 1.02,
   },
 
   v6: {
@@ -99,6 +177,27 @@ export const ENGINE_PROFILES = {
     intake: { helmholtz: 102, q: 5.8, level: 0.33 },
     mechanical: { valvetrain: 0.31, injector: 0.23, chain: 0.15 },
     turbo: null,
+    voice: 0.98,
+  },
+
+  v6tt: {
+    label: 'V6 twin-turbo 3.8',
+    cylinders: 6, firingOrder: [1, 4, 2, 5, 3, 6], banks: [[1, 2, 3], [4, 5, 6]],
+    idleRpm: 750, redlineRpm: 7100, peakTorque: 640, peakTorqueRpm: 3600,
+    engineInertia: 0.29,
+    // A turbine sits in the exhaust stream and takes energy out of it, so the
+    // gas leaving the turbo is markedly cooler than a naturally aspirated
+    // engine's \u2014 and the turbine itself is a very effective muffler. Lower
+    // gasTempFactor and much higher damping are why a turbo car sounds deeper
+    // and more muffled than the same engine without one.
+    gasTempFactor: 1.22,
+    pulse: { attack: 29, decay: 5.0, hardness: 0.60, jitter: 1.2 },
+    exhaust: { bank: 0.95, collector: 1.30, reflection: 0.50, damping: 0.52, muffler: [0.34, 0.23, 0.15] },
+    intake: { helmholtz: 112, q: 5.4, level: 0.30 },
+    mechanical: { valvetrain: 0.30, injector: 0.26, chain: 0.14 },
+    // Two small turbos, one per bank: low inertia, so they spool fast and the
+    // whistle tracks the engine closely.
+    turbo: { inertia: 0.30, maxBoost: 1.15, whineOrder: 56, bov: 0.55, surge: 1.0 },
     voice: 0.98,
   },
 
@@ -130,6 +229,24 @@ export const ENGINE_PROFILES = {
     mechanical: { valvetrain: 0.28, injector: 0.20, chain: 0.15 },
     turbo: null,
     voice: 1.06,
+  },
+
+  v8tt: {
+    label: 'V8 twin-turbo 4.0',
+    cylinders: 8, firingOrder: [1, 8, 7, 3, 6, 5, 4, 2],
+    banks: [[1, 2, 3, 4], [5, 6, 7, 8]],
+    // Same cross-plane geometry as v8cross, so it keeps the burble \u2014 but the
+    // turbines damp the pipes hard and cool the gas, so it arrives as a deep
+    // muffled thud rather than a bark. Same firing order, completely different
+    // voice, and none of that is hand-tuned: it falls out of the pipe data.
+    idleRpm: 660, redlineRpm: 6800, peakTorque: 800, peakTorqueRpm: 3000,
+    engineInertia: 0.42, gasTempFactor: 1.21,
+    pulse: { attack: 24, decay: 4.2, hardness: 0.54, jitter: 2.4 },
+    exhaust: { bank: 1.10, collector: 1.55, reflection: 0.58, damping: 0.55, muffler: [0.42, 0.28, 0.18] },
+    intake: { helmholtz: 74, q: 4.8, level: 0.28 },
+    mechanical: { valvetrain: 0.26, injector: 0.22, chain: 0.15 },
+    turbo: { inertia: 0.44, maxBoost: 1.10, whineOrder: 44, bov: 0.45, surge: 1.0 },
+    voice: 1.05,
   },
 
   v8flat: {

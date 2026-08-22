@@ -87,7 +87,15 @@ const LASH_REF_VEL = 15.0;
 // exponent the first contact is the bang and the rest are inaudible taps —
 // which is what a real driveline does.
 const LASH_VEL_EXP = 1.5;
-const LASH_REARM = 0.030;          // s of enforced silence after an impact
+const LASH_REARM = 0.055;          // s of enforced silence after an impact
+// Gear-tooth contact is INELASTIC — restitution is well under 1, so a driveline
+// being hammered back and forth loses energy on every strike and the strikes get
+// progressively weaker. Without this, tapping the throttle produced a full-force
+// clunk on every single reversal: measured at ~25 impacts/second, 79 of them at
+// or near maximum, which reads as a machine-gun of clicks rather than a car.
+// lashHeat accumulates per impact and decays over LASH_COOL seconds.
+const LASH_COOL = 0.55;
+const LASH_FATIGUE = 2.4;
 const LASH_RELEASE = 0.85;         // must fall to 85% of backlash to re-arm
 
 export class Drivetrain {
@@ -119,6 +127,10 @@ export class Drivetrain {
 
     this.subStep = opts.subStep || SUBSTEP;
     this.launchFlareRpm = opts.launchFlareRpm != null ? opts.launchFlareRpm : 2400;
+    // Fraction of input-shaft rpm folded into the launch hold target, so the
+    // hold climbs with road speed rather than sitting on one pitch. See
+    // _launchClutch().
+    this.launchCreep = opts.launchCreep != null ? opts.launchCreep : 0.55;
 
     this.shift = opts.shiftController || new ShiftController({
       type: vehicle.gearbox,
@@ -180,6 +192,7 @@ export class Drivetrain {
     this.thrPeak = 0;       // peak-hold of recent throttle, for snap-shut detection
     this.cutRpmN = 0;       // normalised rpm at the instant fuel was cut
     this.popRefractory = 0; // s of enforced quiet after a pop event
+    this.lashHeat = 0;      // recent impact history; damps repeated strikes
     this.prevLimiter = false;
     this.limiterBark = 0;   // s until another limiter bark is allowed
     this.prevRpm = this.we * RPM_PER_RADS;
@@ -661,8 +674,20 @@ export class Drivetrain {
     const geared = this.gearedRpm(this.gear);
     if (!inGear || this.gear === 0) { this.launchI = 0; this.launchArmed = true; return 0; }
 
-    const targetRpm = clamp(idle * 1.05 + this.throttle * this.launchFlareRpm,
-                            idle, this.engine.redlineRpm * 0.9);
+    // The hold rpm CREEPS UP with road speed instead of being a fixed number.
+    //
+    // A fixed target makes the engine sit on exactly one rpm for the whole
+    // slip phase, and a perfectly flat pitch for half a second reads as the
+    // engine being stuck — which is what it sounded like. A real driver feeds
+    // the clutch progressively, so the revs climb throughout the launch even
+    // though the clutch is still slipping; the engine is never static.
+    //
+    // `launchCreep` is the fraction of gearbox-input rpm added to the hold
+    // target, so the target rises as the car gains speed and the engine is
+    // always climbing toward lockup rather than waiting for it.
+    const targetRpm = clamp(
+      idle * 1.05 + this.throttle * this.launchFlareRpm + this.launchCreep * geared,
+      idle, this.engine.redlineRpm * 0.9);
 
     // Hand over to a locked clutch only once ROAD SPEED has caught up to the rpm
     // the engine is being held at, so slip is already near zero and there is
@@ -733,6 +758,7 @@ export class Drivetrain {
 
   _detectLash(h, b) {
     this.lashTimer += h;
+    this.lashHeat = Math.max(0, this.lashHeat - h / LASH_COOL);
     const side = this.twist > b ? 1 : this.twist < -b ? -1 : 0;
 
     if (side === 0) {
@@ -750,8 +776,12 @@ export class Drivetrain {
     if (vImpact < LASH_MIN_VEL || this.lashTimer < LASH_REARM) return;
     this.lashTimer = 0;
     this.lashContactedSince = true;
-    this.fireEvent('lash',
-      clamp(Math.pow(vImpact / LASH_REF_VEL, LASH_VEL_EXP), 0.001, 1));
+    // Each strike heats the joint; the next one within ~0.5 s lands softer.
+    const fatigue = 1 / (1 + LASH_FATIGUE * this.lashHeat);
+    this.lashHeat = Math.min(3, this.lashHeat + 1);
+    const mag = clamp(Math.pow(vImpact / LASH_REF_VEL, LASH_VEL_EXP) * fatigue, 0.001, 1);
+    if (mag < 0.05) return;          // inaudible tap, not worth a voice
+    this.fireEvent('lash', mag);
   }
 
   /**

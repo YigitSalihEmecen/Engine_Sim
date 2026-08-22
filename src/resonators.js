@@ -243,8 +243,32 @@ export class Waveguide {
     this.frequency = pipeFrequency(this.length, this.gasTemp);
 
     // Loop lowpass cutoff: "how many modes the wall lets survive".
-    // damping 0.26 (thin short race pipe) → ~23 modes; 0.44 (long dull pipe) → ~14.
-    this.lpBase = clamp(this.frequency * (6 / this.damping), 150, 12000);
+    //
+    // MODE_SURVIVAL was 6, which let a pipe ring in its 20th mode and above.
+    // That is not what a real exhaust does, and it caused the worst tonal bug
+    // in the project: the comb peaks of a feedback waveguide sit at multiples
+    // of 1/T, and an engine's harmonics sit at multiples of f0, so whenever an
+    // rpm makes those two series COINCIDE, one harmonic lands exactly on a
+    // high-order comb peak while its neighbours fall in the troughs. Measured
+    // on the V12 at 8000 rpm: the chain's response at 2000 Hz was -5.9 dB while
+    // 1867 Hz and 2133 Hz either side were -23.6 and -26.9 dB. A 21 dB spike,
+    // 20 semitones above the engine note, appearing only at one rpm — the
+    // "screaming resonance". 71 % of all radiated power was landing in 2-6 kHz.
+    //
+    // The fix is physical, not cosmetic. Thermoviscous wall losses in a duct
+    // rise with sqrt(f) and the plane-wave model stops holding at all above the
+    // first cross-mode cutoff, so a real exhaust resolves a handful of modes
+    // and then smears into a smooth rolloff. 2.2 gives 5-8 modes across these
+    // profiles, which is the right order of magnitude.
+    //
+    // Measured over all 11 engines × 9 rpm × 3 loads (test/spectrum.mjs):
+    //   6.0 → worst 71.04 % of power in 2-6 kHz, mean 1.42 %, centroid 278 Hz
+    //   3.0 → worst 35.44 %,                     mean 0.31 %, centroid 213 Hz
+    //   2.2 → worst  1.38 %,                     mean 0.04 %, centroid 199 Hz
+    // i.e. a 17 dB cut in the worst case for 79 Hz of centroid — the engines
+    // stay bright enough to keep their character and stop screaming.
+    const MODE_SURVIVAL = 2.2;
+    this.lpBase = clamp(this.frequency * (MODE_SURVIVAL / this.damping), 150, 12000);
     this.loopQ = 0.5;   // no resonance of its own; pure loss curve
 
     const nyq = 0.49 * this.sampleRate;

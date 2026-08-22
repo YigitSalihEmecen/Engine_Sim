@@ -3,266 +3,510 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Engine Simulator</title>
+<title>ENGINE SIM — procedural powertrain synthesis</title>
 <style>
-  :root{
-    --bg:#08090a; --panel:#0e0f11; --panel2:#121316; --line:#1c1e22; --line2:#26292e;
-    --fg:#e8e9ec; --dim:#7c8189; --dim2:#4e535b;
-    --acc:#ff5f1f; --acc2:#f0b429; --cool:#4a90d9; --ok:#38b26a;
-    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
-  }
-  *{box-sizing:border-box;}
-  html,body{margin:0;background:var(--bg);color:var(--fg);}
-  body{
-    font:13px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    -webkit-font-smoothing:antialiased; padding:0 0 60px;
-  }
-  .wrap{max-width:1180px;margin:0 auto;padding:0 24px;}
+:root{
+  --paper:#f2f2ef;
+  --panel:#fbfbfa;
+  --panel2:#f6f6f3;
+  --ink:#14161a;
+  --ink2:#51565d;
+  --ink3:#8b9097;
+  --ink4:#b3b7bc;
+  --line:#d8d9d4;
+  --line2:#c3c5bf;
+  --hair:rgba(20,22,26,.10);
+  --acc:#e8481f;
+  --acc2:#1663c7;
+  --ok:#2b8a4e;
+  --warn:#c98a00;
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+  --sans:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --t:.14s cubic-bezier(.3,.7,.4,1);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;}
 
-  /* ---- header ---- */
-  header{
-    border-bottom:1px solid var(--line); margin-bottom:26px;
-    padding:22px 0 16px; display:flex; align-items:baseline; gap:16px; flex-wrap:wrap;
-  }
-  h1{font-size:15px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;margin:0;}
-  header .sub{color:var(--dim2);font-size:11px;font-family:var(--mono);letter-spacing:.04em;}
-  header .spacer{flex:1;}
-  #status{color:var(--acc2);font-size:11px;font-family:var(--mono);}
-  #driveBtn{
-    margin-left:16px;text-decoration:none;color:var(--acc);border:1px solid var(--acc);
-    padding:6px 14px;border-radius:2px;font:11px var(--mono);letter-spacing:.14em;
-    text-transform:uppercase;transition:.15s;
-  }
-  #driveBtn:hover{background:var(--acc);color:#120802;box-shadow:0 0 18px rgba(255,95,31,.35);}
+/* boot guard — see the markup near the top of <body> */
+#boot{
+  position:fixed;inset:0;z-index:999;
+  display:flex;align-items:center;justify-content:center;padding:24px;
+  background:var(--paper);
+}
+#boot[hidden]{display:none;}
+.boot-card{
+  max-width:620px;width:100%;
+  background:var(--panel);border:1px solid var(--line2);
+  padding:26px 28px;
+}
+.boot-card h1{
+  margin:0 0 14px;font:600 13px/1.3 var(--mono);
+  letter-spacing:.14em;text-transform:uppercase;color:var(--acc);
+}
+.boot-card p{margin:0 0 14px;font:13px/1.6 var(--sans);color:var(--ink2);}
+.boot-card pre{
+  margin:0 0 14px;padding:14px 16px;overflow-x:auto;
+  background:var(--panel2);border:1px solid var(--line);
+  font:12px/1.7 var(--mono);color:var(--ink);white-space:pre-wrap;
+}
+.boot-note{font-size:12px !important;color:var(--ink3) !important;}
+body{
+  color:var(--ink);min-height:100vh;padding:0 0 70px;
+  font:13px/1.5 var(--sans);
+  -webkit-font-smoothing:antialiased;
+  background-color:var(--paper);
+  /* engineering paper: 8 mm fine grid over an 80 mm major grid */
+  background-image:
+    linear-gradient(var(--hair) 1px,transparent 1px),
+    linear-gradient(90deg,var(--hair) 1px,transparent 1px),
+    linear-gradient(rgba(20,22,26,.045) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(20,22,26,.045) 1px,transparent 1px);
+  background-size:80px 80px,80px 80px,10px 10px,10px 10px;
+  background-position:-1px -1px,-1px -1px,-1px -1px,-1px -1px;
+  background-attachment:fixed;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px;}
 
-  /* ---- structure ---- */
-  .grid{display:grid;grid-template-columns:300px 1fr;gap:28px;align-items:start;}
-  @media(max-width:900px){.grid{grid-template-columns:1fr;}}
+/* ============ type ============ */
+.mono{font-family:var(--mono);}
+.lbl{font:600 9.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
 
-  section{margin-bottom:26px;}
-  .hd{
-    font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim2);
-    padding-bottom:7px;margin-bottom:14px;border-bottom:1px solid var(--line);
-    display:flex;justify-content:space-between;align-items:baseline;
-  }
-  .hd em{font-style:normal;color:var(--dim2);font-family:var(--mono);letter-spacing:.04em;
-         text-transform:none;font-size:10px;}
+/* ============ header ============ */
+header{
+  display:flex;align-items:stretch;gap:0;margin:20px 0 16px;
+  border:1px solid var(--line2);background:var(--panel);position:relative;
+}
+.mark{
+  width:52px;flex:none;border-right:1px solid var(--line2);display:grid;place-items:center;
+  background:var(--ink);position:relative;overflow:hidden;
+}
+.mark svg{width:26px;height:26px;}
+.mark::after{content:"";position:absolute;left:0;right:0;height:1px;background:var(--acc);
+  top:0;animation:scan 3.4s cubic-bezier(.5,0,.5,1) infinite;}
+@keyframes scan{0%{top:0;opacity:0}12%{opacity:1}88%{opacity:1}100%{top:100%;opacity:0}}
 
-  /* ---- readouts ---- */
-  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
-         border:1px solid var(--line);}
-  .stat{background:var(--panel);padding:11px 12px;}
-  .stat .k{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim2);}
-  .stat .v{font-family:var(--mono);font-size:19px;font-weight:500;letter-spacing:-.02em;
-           margin-top:3px;font-variant-numeric:tabular-nums;}
-  .stat .v u{text-decoration:none;font-size:10px;color:var(--dim2);margin-left:2px;}
+.htitle{padding:11px 16px;display:flex;flex-direction:column;justify-content:center;
+  border-right:1px solid var(--line);}
+.htitle h1{margin:0;font:650 14px/1.15 var(--sans);letter-spacing:.02em;}
+.htitle .sub{font:10px/1.4 var(--mono);color:var(--ink3);letter-spacing:.04em;margin-top:2px;}
+.hspec{flex:1;display:flex;align-items:center;gap:0;overflow:hidden;}
+.hspec .cell{padding:0 15px;border-right:1px solid var(--line);align-self:stretch;
+  display:flex;flex-direction:column;justify-content:center;min-width:0;}
+.hspec .cell .v{font:600 12px var(--mono);margin-top:3px;white-space:nowrap;}
+.hact{display:flex;align-items:center;gap:8px;padding:0 12px;}
 
-  /* ---- controls ---- */
-  .row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
-  .row .lbl{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
-            width:74px;flex:none;}
-  .row .num{font-family:var(--mono);font-size:10px;color:var(--dim2);width:34px;
-            text-align:right;font-variant-numeric:tabular-nums;flex:none;}
+/* ============ buttons ============ */
+.btn{
+  font:600 10.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  padding:10px 15px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink2);
+  cursor:pointer;transition:var(--t);position:relative;text-decoration:none;
+  display:inline-flex;align-items:center;gap:7px;
+}
+.btn:hover{border-color:var(--ink3);color:var(--ink);background:#fff;}
+.btn:active{transform:translateY(1px);}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff;}
+.btn.pri:hover{background:#d13d16;border-color:#d13d16;color:#fff;}
+.btn.on{background:var(--ink);border-color:var(--ink);color:#fff;}
+.btn .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85;}
+.btn.pri .dot{animation:pulse 1.5s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
 
-  select,button{
-    background:var(--panel2);color:var(--fg);border:1px solid var(--line2);
-    border-radius:2px;padding:6px 10px;font:inherit;font-size:12px;cursor:pointer;
-    transition:border-color .12s,background .12s;
-  }
-  select{flex:1;}
-  button:hover,select:hover{border-color:#3a3f47;}
-  button.on{background:var(--acc);border-color:var(--acc);color:#120802;font-weight:600;}
-  button.go{background:transparent;border-color:var(--ok);color:var(--ok);font-weight:600;}
-  button.stop{background:transparent;border-color:var(--acc);color:var(--acc);font-weight:600;}
-  .btns{display:flex;gap:6px;}
-  .btns button{flex:1;}
+/* ============ panels ============ */
+.panel{background:var(--panel);border:1px solid var(--line2);position:relative;}
+/* technical-drawing crop marks at the corners */
+.panel::before,.panel::after{content:"";position:absolute;width:7px;height:7px;pointer-events:none;}
+.panel::before{top:-1px;left:-1px;border-top:1px solid var(--ink);border-left:1px solid var(--ink);}
+.panel::after{bottom:-1px;right:-1px;border-bottom:1px solid var(--ink);border-right:1px solid var(--ink);}
+.phead{
+  display:flex;align-items:center;gap:10px;padding:8px 12px;
+  border-bottom:1px solid var(--line);background:var(--panel2);
+}
+.phead .id{font:600 9px var(--mono);letter-spacing:.12em;color:#fff;background:var(--ink);
+  padding:3px 6px;}
+.phead h2{margin:0;font:600 10px var(--mono);letter-spacing:.15em;text-transform:uppercase;
+  color:var(--ink2);}
+.phead .r{margin-left:auto;font:9.5px var(--mono);color:var(--ink4);letter-spacing:.08em;}
+.pbody{padding:16px;}
 
-  input[type=range]{
-    -webkit-appearance:none;appearance:none;background:transparent;flex:1;height:18px;margin:0;
-  }
-  input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--line2);}
-  input[type=range]::-webkit-slider-thumb{
-    -webkit-appearance:none;width:11px;height:11px;margin-top:-4.5px;border-radius:1px;
-    background:var(--fg);border:none;cursor:pointer;
-  }
-  input[type=range]::-moz-range-track{height:2px;background:var(--line2);}
-  input[type=range]::-moz-range-thumb{width:11px;height:11px;border-radius:1px;
-    background:var(--fg);border:none;cursor:pointer;}
-  input[type=range].acc::-webkit-slider-thumb{background:var(--acc);}
-  input[type=range].acc::-moz-range-thumb{background:var(--acc);}
+/* ============ layout ============ */
+.hero{display:grid;grid-template-columns:322px 1fr;gap:14px;margin-bottom:14px;}
+@media(max-width:900px){.hero{grid-template-columns:1fr;}}
 
-  /* ---- meters ---- */
-  .meter{height:3px;background:var(--panel2);flex:1;overflow:hidden;}
-  .meter i{display:block;height:100%;width:0;background:var(--acc);}
-  .meter.b i{background:var(--cool);}
-  .meter.y i{background:var(--acc2);}
+/* ============ instrument ============ */
+canvas#tach{width:288px;height:212px;display:block;margin:0 auto;}
+.phase{display:grid;grid-template-columns:repeat(6,1fr);border-top:1px solid var(--line);}
+.phase span{
+  text-align:center;font:600 8px var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  padding:7px 0;color:var(--ink4);border-right:1px solid var(--line);transition:var(--t);
+  position:relative;
+}
+.phase span:last-child{border-right:0;}
+.phase span.on{background:var(--acc);color:#fff;}
 
-  /* ---- phase strip ---- */
-  .phase{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--line);
-         border:1px solid var(--line);margin-top:14px;}
-  .phase span{background:var(--panel);text-align:center;font-size:8.5px;padding:5px 0;
-    letter-spacing:.1em;text-transform:uppercase;color:var(--dim2);font-family:var(--mono);}
-  .phase span.on{background:var(--acc);color:#120802;font-weight:700;}
+/* ============ readouts ============ */
+.reads{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line);}
+@media(max-width:620px){.reads{grid-template-columns:repeat(2,1fr);}}
+.read{padding:12px 14px;border-right:1px solid var(--line);position:relative;}
+.read:last-child{border-right:0;}
+.read .v{font:600 26px/1 var(--mono);font-variant-numeric:tabular-nums;margin-top:6px;
+  letter-spacing:-.03em;}
+.read .v s{text-decoration:none;font-size:10px;color:var(--ink3);margin-left:3px;font-weight:500;}
+.read.hot .v{color:var(--acc);}
 
-  canvas{display:block;}
-  #tach{width:280px;height:280px;margin:0 auto;}
-  #orders{width:100%;height:120px;}
+/* ============ bars ============ */
+.bars{padding:13px 14px;border-bottom:1px solid var(--line);}
+.bar{display:flex;align-items:center;gap:11px;margin-bottom:9px;}
+.bar:last-child{margin-bottom:0;}
+.bar .lbl{width:52px;flex:none;}
+.bar .tr{
+  flex:1;height:10px;background:
+    repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 10%);
+  border:1px solid var(--line);position:relative;overflow:hidden;
+}
+.bar .tr i{position:absolute;inset:0 auto 0 0;width:0;background:var(--ink);transition:width .06s linear;}
+.bar.a .tr i{background:var(--acc);}
+.bar.b .tr i{background:var(--acc2);}
+.bar.y .tr i{background:var(--warn);}
+.bar .pc{width:30px;text-align:right;font:10px var(--mono);color:var(--ink3);
+  font-variant-numeric:tabular-nums;}
 
-  /* ---- EQ ---- */
-  .eq{display:flex;gap:2px;align-items:flex-end;justify-content:space-between;
-      background:var(--panel);border:1px solid var(--line);padding:14px 12px 10px;}
-  .eqb{display:flex;flex-direction:column;align-items:center;gap:7px;flex:1;}
-  .eqb input[type=range]{
-    writing-mode:vertical-rl; direction:rtl;
-    -webkit-appearance:slider-vertical; appearance:slider-vertical;
-    width:18px;height:104px;flex:none;
-  }
-  .eqb .f{font-family:var(--mono);font-size:9px;color:var(--dim2);letter-spacing:.02em;}
-  .eqb .n{font-family:var(--mono);font-size:9px;color:var(--dim);
-          font-variant-numeric:tabular-nums;}
-  .eqb .t{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim2);}
+/* ============ spec table ============ */
+.spec{display:grid;grid-template-columns:1fr 1fr;}
+.spec .r{display:flex;align-items:baseline;gap:8px;padding:7px 14px;
+  border-bottom:1px solid var(--line);border-right:1px solid var(--line);}
+.spec .r:nth-child(2n){border-right:0;}
+.spec .r .k{font:9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);
+  white-space:nowrap;}
+.spec .r .d{flex:1;border-bottom:1px dotted var(--line2);transform:translateY(-3px);}
+.spec .r .v{font:600 11px var(--mono);white-space:nowrap;}
 
-  .fxgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 22px;margin-top:16px;}
-  @media(max-width:620px){.fxgrid{grid-template-columns:1fr;}}
+/* ============ tabs ============ */
+.tabs{display:flex;border:1px solid var(--line2);border-bottom:0;background:var(--panel2);
+  overflow-x:auto;}
+.tabs button{
+  border:0;border-right:1px solid var(--line);background:transparent;cursor:pointer;
+  padding:11px 20px;font:600 10px var(--mono);letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink3);transition:var(--t);position:relative;white-space:nowrap;
+}
+.tabs button::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
+  background:var(--acc);transform:scaleX(0);transition:transform var(--t);}
+.tabs button:hover{color:var(--ink2);background:#fff;}
+.tabs button.on{color:var(--ink);background:var(--panel);}
+.tabs button.on::after{transform:scaleX(1);}
+.tabs .idx{color:var(--ink4);margin-right:7px;}
+.pane{display:none;}
+.pane.on{display:block;animation:in .2s ease-out;}
+@keyframes in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 
-  .note{color:var(--dim2);font-size:11px;line-height:1.7;margin-top:10px;}
-  kbd{font-family:var(--mono);font-size:10px;background:var(--panel2);
-      border:1px solid var(--line2);border-radius:2px;padding:1px 5px;color:var(--dim);}
-  footer{border-top:1px solid var(--line);margin-top:30px;padding-top:14px;
-         color:var(--dim2);font-size:11px;line-height:2;}
+/* ============ controls ============ */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;}
+@media(max-width:760px){.g2{grid-template-columns:1fr;}}
+.ctl{display:flex;align-items:center;gap:12px;padding:7px 0;border-bottom:1px dotted var(--line);}
+.ctl .lbl{width:82px;flex:none;}
+.ctl .val{width:42px;text-align:right;flex:none;font:600 10.5px var(--mono);color:var(--ink2);
+  font-variant-numeric:tabular-nums;}
+
+select{
+  flex:1;appearance:none;border:1px solid var(--line2);background:#fff;color:var(--ink);
+  padding:8px 30px 8px 10px;font:600 11px var(--mono);letter-spacing:.02em;cursor:pointer;
+  transition:var(--t);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 5L9 0' fill='%2351565d'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center;
+}
+select:hover{border-color:var(--ink3);}
+select:focus{outline:none;border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc);}
+
+input[type=range]{
+  -webkit-appearance:none;appearance:none;flex:1;height:18px;background:transparent;margin:0;
+  cursor:ew-resize;
+}
+input[type=range]::-webkit-slider-runnable-track{
+  height:8px;border:1px solid var(--line2);
+  background:repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 10%);
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:9px;height:16px;margin-top:-5px;background:var(--ink);
+  border:0;cursor:ew-resize;transition:background var(--t);
+}
+input[type=range]:hover::-webkit-slider-thumb{background:var(--acc);}
+input[type=range]::-moz-range-track{height:8px;border:1px solid var(--line2);
+  background:repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 10%);}
+input[type=range]::-moz-range-thumb{width:9px;height:16px;border-radius:0;background:var(--ink);border:0;}
+input[type=range].b::-webkit-slider-thumb{background:var(--acc2);}
+input[type=range].b:hover::-webkit-slider-thumb{background:var(--acc);}
+
+.seg{display:inline-flex;border:1px solid var(--line2);}
+.seg button{border:0;border-right:1px solid var(--line2);background:var(--panel2);
+  padding:8px 14px;font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink3);cursor:pointer;transition:var(--t);}
+.seg button:last-child{border-right:0;}
+.seg button:hover{color:var(--ink);background:#fff;}
+.seg button.on{background:var(--ink);color:#fff;}
+
+/* ============ EQ ============ */
+.eq{display:flex;gap:0;border:1px solid var(--line2);background:
+  repeating-linear-gradient(0deg,var(--line) 0 1px,transparent 1px 20%);}
+.eqb{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 4px 9px;
+  border-right:1px solid var(--line);}
+.eqb:last-child{border-right:0;}
+.eqb input{writing-mode:vertical-rl;direction:rtl;-webkit-appearance:slider-vertical;
+  appearance:slider-vertical;width:20px;height:104px;flex:none;accent-color:var(--acc);cursor:ns-resize;}
+.eqb .n{font:600 10px var(--mono);color:var(--ink);font-variant-numeric:tabular-nums;}
+.eqb .f{font:9.5px var(--mono);color:var(--ink3);}
+.eqb .t{font:600 8px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink4);}
+
+canvas#orders{width:100%;height:132px;display:block;border:1px solid var(--line);}
+
+.note{font:10.5px/1.65 var(--mono);color:var(--ink3);margin-top:12px;padding-left:11px;
+  border-left:2px solid var(--line2);}
+.note b{color:var(--ink2);font-weight:600;}
+
+footer{margin-top:18px;border:1px solid var(--line2);background:var(--panel);
+  padding:11px 14px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;}
+kbd{font:9.5px var(--mono);background:var(--ink);color:#fff;padding:3px 6px;letter-spacing:.06em;}
+footer .f{font:10px var(--mono);color:var(--ink3);letter-spacing:.03em;}
+#status{font:10px var(--mono);color:var(--acc);letter-spacing:.05em;}
 </style>
 </head>
 <body>
+
+<!-- Boot guard.
+     ES modules are fetched with CORS semantics, so opening this file straight
+     off the disk gives it an opaque `file://` origin, every import is blocked,
+     and the page renders as a silent, dead shell that looks exactly like a
+     broken app. That is by far the most likely way for someone to have a bad
+     first minute with this, so it is detected explicitly and named. Kept as a
+     CLASSIC script, not a module: if modules cannot load, a module cannot be
+     the thing that tells you so. -->
+<div id="boot" hidden>
+  <div class="boot-card">
+    <h1>Engine Sim did not start</h1>
+    <p id="bootWhy"></p>
+    <pre id="bootFix"></pre>
+    <p class="boot-note" id="bootNote"></p>
+  </div>
+</div>
+<script>
+(function () {
+  var el = document.getElementById('boot');
+  var why = document.getElementById('bootWhy');
+  var fix = document.getElementById('bootFix');
+  var note = document.getElementById('bootNote');
+  var shown = false;
+
+  function show(reason, command, extra) {
+    if (shown) return;
+    shown = true;
+    why.textContent = reason;
+    fix.textContent = command;
+    note.textContent = extra || '';
+    el.hidden = false;
+  }
+
+  if (location.protocol === 'file:') {
+    show(
+      'This page was opened directly from the disk. It is built from ES modules, '
+      + 'which browsers refuse to load over file:// — so none of the code ran. '
+      + 'It needs to be served over http://.',
+      'cd ' + 'engine_sim\nnpm start\n\n# or, without npm:\nnode tools/serve.mjs\n'
+      + '\n# then open:\nhttp://localhost:8000',
+      'Any static server works. python3 -m http.server 8000 is equivalent.');
+    return;
+  }
+
+  // Anything else that stops the module evaluating — a syntax error, a missing
+  // file, a bad MIME type from a misconfigured server.
+  window.addEventListener('error', function (e) {
+    if (window.__ENGINE_BOOTED) return;
+    show('The app failed to load a module.',
+         String((e && (e.message || e.type)) || 'unknown error'),
+         'Full details are in the browser console.');
+  }, true);
+
+  // Belt and braces: if nothing has reported success in a few seconds,
+  // something went wrong quietly.
+  setTimeout(function () {
+    if (!window.__ENGINE_BOOTED) {
+      show('The app did not finish starting.',
+           'Check the browser console for the first red error.',
+           'If this page is served by something other than tools/serve.mjs, make '
+           + 'sure it sends .js files as text/javascript.');
+    }
+  }, 5000);
+})();
+</script>
+
 <div class="wrap">
 
-<header>
-  <h1>Engine Simulator</h1>
-  <span class="sub">procedural · web audio · no samples</span>
-  <span class="spacer"></span>
-  <span id="status"></span>
-  <a id="driveBtn" href="./drive.html">Night Drive &rarr;</a>
+<header class="panel">
+  <div class="mark">
+    <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.3">
+      <circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3.1"/>
+      <path d="M12 1.6v2.6M12 19.8v2.6M1.6 12h2.6M19.8 12h2.6"/>
+      <path d="M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M19.4 4.6l-1.9 1.9M6.5 17.5l-1.9 1.9"
+            stroke-opacity=".5"/>
+    </svg>
+  </div>
+  <div class="htitle">
+    <h1>ENGINE SIM</h1>
+    <div class="sub">PROCEDURAL POWERTRAIN SYNTHESIS</div>
+  </div>
+  <div class="hspec">
+    <div class="cell"><span class="lbl">Unit</span><span class="v" id="hEngine">—</span></div>
+    <div class="cell"><span class="lbl">Chassis</span><span class="v" id="hChassis">—</span></div>
+    <div class="cell"><span class="lbl">Voices</span><span class="v" id="hVoices">—</span></div>
+  </div>
+  <div class="hact">
+    <span id="status"></span>
+    <button id="power" class="btn pri"><i class="dot"></i>Ignition</button>
+  </div>
 </header>
 
-<div class="grid">
-  <!-- ============ left ============ -->
-  <div>
-    <section>
-      <canvas id="tach" width="560" height="560"></canvas>
-      <div class="phase" id="phase"></div>
-    </section>
-
-    <section>
-      <div class="hd">Drive <em id="gearboxType"></em></div>
-      <div class="row"><span class="lbl">Throttle</span><div class="meter"><i id="mThr"></i></div></div>
-      <div class="row"><span class="lbl">Brake</span><div class="meter b"><i id="mBrk"></i></div></div>
-      <div class="row" id="boostRow"><span class="lbl">Boost</span><div class="meter y"><i id="mBst"></i></div></div>
-      <div class="btns" style="margin-top:12px">
-        <button id="power" class="go">Start</button>
-        <button id="auto" class="on">Auto</button>
-        <button id="dn">&darr;</button>
-        <button id="up">&uarr;</button>
-      </div>
-    </section>
-
-    <section>
-      <div class="hd">Machine</div>
-      <div class="row"><span class="lbl">Engine</span><select id="engine"></select></div>
-      <div class="row"><span class="lbl">Chassis</span><select id="vehicle"></select></div>
-      <div class="row"><span class="lbl">Position</span>
-        <div class="btns" style="flex:1"><button id="pExt" class="on">Exterior</button><button id="pInt">Cabin</button></div>
-      </div>
-    </section>
+<div class="hero">
+  <!-- instrument -->
+  <div class="panel">
+    <div class="phead"><span class="id">01</span><h2>Instrument</h2>
+      <span class="r" id="instrR">—</span></div>
+    <div style="padding:14px 0 10px"><canvas id="tach" width="576" height="420"></canvas></div>
+    <div class="phase" id="phase"></div>
   </div>
 
-  <!-- ============ right ============ -->
-  <div>
-    <section>
-      <div class="stats">
-        <div class="stat"><div class="k">Engine</div><div class="v" id="rpm">0</div></div>
-        <div class="stat"><div class="k">Road</div><div class="v" id="kmh">0<u>km/h</u></div></div>
-        <div class="stat"><div class="k">Gear</div><div class="v" id="gear">1</div></div>
-        <div class="stat"><div class="k">Slip</div><div class="v" id="slip">0<u>rpm</u></div></div>
+  <!-- telemetry -->
+  <div class="panel">
+    <div class="phead"><span class="id">02</span><h2>Telemetry</h2>
+      <span class="r">live · 60 Hz</span></div>
+    <div class="reads">
+      <div class="read"><span class="lbl">Crank</span><div class="v num" id="rpm">0<s>rpm</s></div></div>
+      <div class="read"><span class="lbl">Road</span><div class="v num" id="kmh">0<s>km/h</s></div></div>
+      <div class="read"><span class="lbl">Total ratio</span><div class="v num" id="ratio">—<s>:1</s></div></div>
+      <div class="read" id="slipCell"><span class="lbl">Clutch slip</span><div class="v num" id="slip">0<s>rpm</s></div></div>
+    </div>
+    <div class="bars">
+      <div class="bar a"><span class="lbl">Throttle</span><div class="tr"><i id="mThr"></i></div><span class="pc" id="pThr">0</span></div>
+      <div class="bar b"><span class="lbl">Brake</span><div class="tr"><i id="mBrk"></i></div><span class="pc" id="pBrk">0</span></div>
+      <div class="bar y" id="boostRow"><span class="lbl">Boost</span><div class="tr"><i id="mBst"></i></div><span class="pc" id="pBst">0</span></div>
+    </div>
+    <div class="spec" id="spec"></div>
+    <div style="padding:12px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <div class="seg">
+        <button id="autoBtn" class="on">Auto</button><button id="manBtn">Manual</button>
       </div>
-    </section>
-
-    <section>
-      <div class="hd">Engine orders <em id="ordMeta"></em></div>
-      <canvas id="orders" width="1360" height="240"></canvas>
-      <div class="note">Orange bars are half-orders. They exist only when a bank's cylinders fire
-        at uneven intervals — that is the burble. Compare cross-plane and flat-plane V8.</div>
-    </section>
-
-    <section>
-      <div class="hd">Equaliser <em>dB</em></div>
-      <div class="eq" id="eq"></div>
-      <div class="fxgrid">
-        <div>
-          <div class="row" style="margin-top:14px"><span class="lbl">Reverb</span>
-            <input id="rvMix" class="acc" type="range" min="0" max="1" step="0.01" value="0.14"><span class="num" id="rvMixN"></span></div>
-          <div class="row"><span class="lbl">Size</span>
-            <input id="rvSize" type="range" min="0.05" max="1" step="0.01" value="0.32"><span class="num" id="rvSizeN"></span></div>
-          <div class="row"><span class="lbl">Damping</span>
-            <input id="rvDamp" type="range" min="800" max="14000" step="100" value="4200"><span class="num" id="rvDampN"></span></div>
-        </div>
-        <div>
-          <div class="row" style="margin-top:14px"><span class="lbl">Width</span>
-            <input id="width" class="acc" type="range" min="0" max="1" step="0.01" value="0.35"><span class="num" id="widthN"></span></div>
-          <div class="row"><span class="lbl">Pop depth</span>
-            <input id="popD" type="range" min="0" max="2" step="0.01" value="0.85"><span class="num" id="popDN"></span></div>
-          <div class="row"><span class="lbl">Master</span>
-            <input id="vol" type="range" min="0" max="1" step="0.01" value="0.7"><span class="num" id="volN"></span></div>
-        </div>
+      <button class="btn" id="dn">↓ Down</button>
+      <button class="btn" id="up">↑ Up</button>
+      <div class="seg" style="margin-left:auto">
+        <button id="pExt" class="on">Exterior</button><button id="pInt">Cabin</button>
       </div>
-      <div class="btns" style="margin-top:14px;max-width:200px">
-        <button id="eqFlat">Flat</button><button id="fxOff">FX off</button>
-      </div>
-    </section>
+    </div>
+  </div>
+</div>
 
-    <section>
-      <div class="hd">Tone</div>
-      <div class="fxgrid" style="margin-top:0">
-        <div>
-          <div class="row"><span class="lbl">Rumble</span>
-            <input id="rum" type="range" min="0" max="2" step="0.02" value="1"><span class="num" id="rumN"></span></div>
-        </div>
-        <div>
-          <div class="row"><span class="lbl">Brightness</span>
-            <input id="bri" type="range" min="0" max="2" step="0.02" value="1"><span class="num" id="briN"></span></div>
-        </div>
-      </div>
-    </section>
+<div class="tabs" id="tabs">
+  <button data-p="machine" class="on"><span class="idx">A</span>Machine</button>
+  <button data-p="mix"><span class="idx">B</span>Voice mix</button>
+  <button data-p="tone"><span class="idx">C</span>Tone</button>
+  <button data-p="fx"><span class="idx">D</span>EQ &amp; FX</button>
+</div>
 
-    <section>
-      <div class="hd">Ambience <em>environment bed</em></div>
-      <div class="fxgrid" style="margin-top:0">
+<div class="panel" style="border-top:0">
+  <div class="pbody">
+
+    <div class="pane on" data-p="machine">
+      <div class="g2">
         <div>
-          <div class="row"><span class="lbl">Rain</span>
-            <input id="amRain" class="acc" type="range" min="0" max="1" step="0.01" value="0"><span class="num" id="amRainN"></span></div>
-          <div class="row"><span class="lbl">Wind</span>
-            <input id="amWind" type="range" min="0" max="1" step="0.01" value="0.25"><span class="num" id="amWindN"></span></div>
+          <div class="ctl"><span class="lbl">Engine</span><select id="engine"></select></div>
+          <div class="ctl"><span class="lbl">Chassis</span><select id="vehicle"></select></div>
+          <div class="note">Firing geometry drives everything. A bank that fires at uneven
+            intervals produces <b>half-orders</b> — that is the burble. Compare
+            <b>V8 cross-plane</b> against <b>V8 flat-plane</b>.</div>
         </div>
         <div>
-          <div class="row"><span class="lbl">Tyres</span>
-            <input id="amRoad" type="range" min="0" max="1" step="0.01" value="0.5"><span class="num" id="amRoadN"></span></div>
-          <div class="row"><span class="lbl">Level</span>
-            <input id="amLvl" type="range" min="0" max="1.5" step="0.01" value="0.85"><span class="num" id="amLvlN"></span></div>
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+            <span class="lbl">Order spectrum</span>
+            <span class="r" id="ordMeta" style="font:9.5px var(--mono);color:var(--ink4);
+              letter-spacing:.05em;margin-left:auto"></span>
+          </div>
+          <canvas id="orders" width="1240" height="264"></canvas>
         </div>
       </div>
-      <div class="note">Wind and tyre roar follow road speed; thunder only fires when it is
-        actually raining hard.</div>
-    </section>
+    </div>
 
-    <section>
-      <div class="hd">Voice mix</div>
-      <div class="fxgrid" style="margin-top:0" id="mix"></div>
-    </section>
+    <div class="pane" data-p="mix">
+      <div class="g2" id="mix"></div>
+      <div class="note">Balance between synthesis voices. Transients route mostly through the
+        exhaust waveguides, so <b>Pops</b> and <b>Exhaust</b> interact.</div>
+    </div>
+
+    <div class="pane" data-p="tone">
+      <div class="g2">
+        <div>
+          <div class="ctl"><span class="lbl">Rumble</span>
+            <input id="rum" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="rumN"></span></div>
+          <div class="ctl"><span class="lbl">Brightness</span>
+            <input id="bri" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="briN"></span></div>
+        </div>
+        <div>
+          <div class="ctl"><span class="lbl">Pop depth</span>
+            <input id="popD" type="range" min="0" max="2" step="0.01" value="1.05"><span class="val" id="popDN"></span></div>
+          <div class="ctl"><span class="lbl">Dynamics</span>
+            <input id="dyn" type="range" min="0" max="1" step="0.01" value="1"><span class="val" id="dynN"></span></div>
+          <div class="ctl"><span class="lbl">Master</span>
+            <input id="vol" type="range" min="0" max="1" step="0.01" value="0.7"><span class="val" id="volN"></span></div>
+        </div>
+      </div>
+      <div class="note">Rumble lifts the 145 Hz shelf and the 78 Hz body bump. Pop depth sets how
+        much transient energy is fed back through the exhaust waveguides. Dynamics drives a
+        three-band compressor split at 240 Hz and 2 kHz — the low band glues, the high band
+        holds down anything that would sting.</div>
+      <div class="ctl" style="margin-top:10px"><span class="lbl">Reduction</span>
+        <span class="val" id="dynMeter" style="font:10px var(--mono);color:var(--ink4)"></span></div>
+    </div>
+
+    <div class="pane" data-p="fx">
+      <div class="g2">
+        <div>
+          <div style="display:flex;align-items:baseline;margin-bottom:9px">
+            <span class="lbl">Equaliser</span>
+            <span style="margin-left:auto;font:9.5px var(--mono);color:var(--ink4)">±18 dB</span>
+          </div>
+          <div class="eq" id="eq"></div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn" id="eqFlat">Flat</button>
+            <button class="btn" id="fxOff">Bypass</button>
+          </div>
+        </div>
+        <div>
+          <div class="lbl" style="display:block;margin-bottom:9px">Space</div>
+          <div class="ctl"><span class="lbl">Reverb</span>
+            <input id="rvMix" class="b" type="range" min="0" max="1" step="0.01" value="0.14"><span class="val" id="rvMixN"></span></div>
+          <div class="ctl"><span class="lbl">Size</span>
+            <input id="rvSize" class="b" type="range" min="0.05" max="1" step="0.01" value="0.32"><span class="val" id="rvSizeN"></span></div>
+          <div class="ctl"><span class="lbl">Damping</span>
+            <input id="rvDamp" class="b" type="range" min="800" max="14000" step="100" value="4200"><span class="val" id="rvDampN"></span></div>
+          <div class="ctl"><span class="lbl">Width</span>
+            <input id="width" class="b" type="range" min="0" max="1" step="0.01" value="0.35"><span class="val" id="widthN"></span></div>
+          <div class="note">Width is mono-sum safe — the delayed copies carry opposite polarity and
+            cancel exactly when summed.</div>
+        </div>
+      </div>
+    </div>
+
+
+    </div>
+
   </div>
 </div>
 
 <footer>
-  <kbd>W</kbd> throttle · <kbd>S</kbd> brake · <kbd>E</kbd> upshift · <kbd>Q</kbd> downshift ·
-  <kbd>A</kbd> auto · <kbd>C</kbd> cabin · <kbd>Space</kbd> run<br>
-  Lift off above ~3000 rpm after a hard run for exhaust bangs. Turbos: I3, Flat-4, I5, I6.
+  <span class="f"><kbd>W</kbd> throttle</span>
+  <span class="f"><kbd>S</kbd> brake</span>
+  <span class="f"><kbd>E</kbd> up</span>
+  <span class="f"><kbd>Q</kbd> down</span>
+  <span class="f"><kbd>A</kbd> auto</span>
+  <span class="f"><kbd>C</kbd> cabin</span>
+  <span class="f"><kbd>SPC</kbd> run</span>
+  <span class="f" style="margin-left:auto">Lift above 3000 rpm after a hard run for bangs ·
+    <span id="turboHint"></span></span>
 </footer>
 </div>
 
@@ -271,228 +515,347 @@ import { EngineSim, ENGINE_PROFILES, VEHICLE_PRESETS } from './src/engine-sim.js
 import { orderSpectrum } from './src/pulse.js';
 import { bankAngles } from './src/profiles.js';
 import { EQ } from './src/fx.js';
-import { Ambience } from './src/ambience.js';
 
 const $ = id => document.getElementById(id);
 const sim = new EngineSim(null, { engine:'v8cross', vehicle:'sports', volume:0.7 });
 window.sim = sim;
-const amb = new Ambience(sim.ctx, { rain:0, wind:0.25, road:0.5, level:0.85 });
-amb.output.connect(sim.ctx.destination);
-window.amb = amb;
 
-/* ---------------- machine selectors ---------------- */
+/* tabs */
+$('tabs').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  for (const x of $('tabs').children) x.classList.toggle('on', x === b);
+  for (const p of document.querySelectorAll('.pane')) p.classList.toggle('on', p.dataset.p === b.dataset.p);
+};
+
+/* machine */
 for (const [id,p] of Object.entries(ENGINE_PROFILES)) $('engine').add(new Option(p.label,id,false,id==='v8cross'));
 for (const [id,v] of Object.entries(VEHICLE_PRESETS)) $('vehicle').add(new Option(v.label,id,false,id==='sports'));
-$('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); syncMachine(); };
-$('vehicle').onchange = e => { sim.setVehicle(e.target.value); syncMachine(); };
-function syncMachine(){
-  $('boostRow').style.display = ENGINE_PROFILES[sim.engineId].turbo ? '' : 'none';
-  $('gearboxType').textContent = sim.getState().gearbox + ' · ' + sim.getState().gearCount + '-speed';
+$('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); sync(); };
+$('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); };
+
+function sync(){
+  const p = ENGINE_PROFILES[sim.engineId], st = sim.getState();
+  $('boostRow').style.display = p.turbo ? '' : 'none';
+  $('hEngine').textContent = p.cylinders + ' CYL · ' + (p.turbo ? 'TURBO' : 'NA');
+  $('hChassis').textContent = st.gearbox.toUpperCase() + ' · ' + st.gearCount + 'SP';
+  $('hVoices').textContent = Object.keys(sim.mix).length + ' BUS · ' + p.banks.length + ' BANK';
+  $('instrR').textContent = (p.redlineRpm/1000).toFixed(1) + 'k limit';
+  const row = (k,v) => `<div class="r"><span class="k">${k}</span><span class="d"></span><span class="v">${v}</span></div>`;
+  $('spec').innerHTML =
+    row('Firing order', p.firingOrder.join('-')) +
+    row('Bank layout', p.banks.length===2 ? 'twin, ' + p.banks[0].length + '+' + p.banks[1].length : 'single') +
+    row('Idle / limit', p.idleRpm + ' / ' + p.redlineRpm + ' rpm') +
+    row('Peak torque', p.peakTorque + ' N·m @ ' + p.peakTorqueRpm) +
+    row('Exhaust bank', p.exhaust.bank.toFixed(2) + ' m') +
+    row('Intake helm.', p.intake.helmholtz + ' Hz');
 }
 
-/* ---------------- equaliser ---------------- */
-const eqEl = $('eq');
+/* equaliser */
 EQ.BANDS.forEach((b,i)=>{
   const d = document.createElement('div');
   d.className = 'eqb';
   d.innerHTML = `<span class="n">0</span>
     <input type="range" min="-18" max="18" step="0.5" value="0">
     <span class="f">${b.f>=1000?(b.f/1000)+'k':b.f}</span><span class="t">${b.label}</span>`;
-  const [inp,num] = [d.querySelector('input'), d.querySelector('.n')];
-  inp.oninput = () => { sim.setEQBand(i, +inp.value); num.textContent = (+inp.value).toFixed(1).replace(/\.0$/,''); };
-  eqEl.appendChild(d);
+  const inp = d.querySelector('input'), num = d.querySelector('.n');
+  inp.oninput = () => { sim.setEQBand(i, +inp.value);
+    num.textContent = (+inp.value).toFixed(1).replace(/\.0$/,''); };
+  $('eq').appendChild(d);
 });
 $('eqFlat').onclick = () => {
   sim.resetEQ();
-  eqEl.querySelectorAll('input').forEach(i=>i.value=0);
-  eqEl.querySelectorAll('.n').forEach(n=>n.textContent='0');
+  $('eq').querySelectorAll('input').forEach(i=>i.value=0);
+  $('eq').querySelectorAll('.n').forEach(n=>n.textContent='0');
 };
 $('fxOff').onclick = () => {
-  sim.setReverb({mix:0}); sim.setWidth(0);
-  $('rvMix').value = 0; $('width').value = 0; sync();
+  $('rvMix').value = 0; $('width').value = 0;
+  $('rvMix').dispatchEvent(new Event('input'));
+  $('width').dispatchEvent(new Event('input'));
 };
 
-/* ---------------- fx + tone ---------------- */
-const bind = (id, fn, fmt, opts={}) => {
+/* bindings */
+const bind = (id, fn, fmt = v => Math.round(v*100), opts = {}) => {
   const el = $(id), out = $(id+'N');
   const show = () => { if (out) out.textContent = fmt(+el.value); };
   if (opts.debounce){
-    // Reverb size has to rebuild an impulse response — up to 2.2 s of stereo
-    // noise. Doing that on every oninput while dragging would hitch the audio
-    // thread, so the readout tracks live and the rebuild waits for a pause.
-    let t=0;
-    el.oninput = () => { show(); clearTimeout(t); t=setTimeout(()=>fn(+el.value), opts.debounce); };
-  } else {
-    el.oninput = () => { fn(+el.value); show(); };
-  }
+    let t = 0;
+    el.oninput = () => { show(); clearTimeout(t); t = setTimeout(()=>fn(+el.value), opts.debounce); };
+  } else el.oninput = () => { fn(+el.value); show(); };
   fn(+el.value); show();
 };
-bind('rvMix',  v => sim.setReverb({mix:v}),     v => Math.round(v*100));
-bind('rvSize', v => sim.setReverb({size:v}),    v => (0.15+2.05*v).toFixed(1)+'s', {debounce:140});
+bind('vol',    v => sim.setVolume(v));
+bind('rum',    v => sim.setTone({rumble:v}));
+bind('bri',    v => sim.setTone({brightness:v}));
+bind('popD',   v => sim.setPopDepth(v));
+bind('dyn',    v => sim.setDynamics(v));
+bind('rvMix',  v => sim.setReverb({mix:v}));
+// Reverb size rebuilds an impulse response (~6 ms) — debounce so dragging stays smooth.
+bind('rvSize', v => sim.setReverb({size:v}), v => (0.15+2.05*v).toFixed(1)+'s', {debounce:140});
 bind('rvDamp', v => sim.setReverb({damping:v}), v => (v/1000).toFixed(1)+'k');
-bind('width',  v => sim.setWidth(v),            v => Math.round(v*100));
-bind('popD',   v => sim.setPopDepth(v),         v => Math.round(v*100));
-bind('vol',    v => sim.setVolume(v),           v => Math.round(v*100));
-bind('rum',    v => sim.setTone({rumble:v}),    v => Math.round(v*100));
-bind('bri',    v => sim.setTone({brightness:v}),v => Math.round(v*100));
-bind('amRain', v => amb.setRain(v),             v => Math.round(v*100));
-bind('amWind', v => amb.setWind(v),             v => Math.round(v*100));
-bind('amRoad', v => amb.setRoad(v),             v => Math.round(v*100));
-bind('amLvl',  v => amb.setLevel(v),            v => Math.round(v*100));
-function sync(){ ['rvMix','width'].forEach(id=>$(id).dispatchEvent(new Event('input'))); }
+bind('width',  v => sim.setWidth(v));
 
-/* ---------------- voice mix ---------------- */
+/* voice mix */
 const MIX = { exhaust:'Exhaust', intake:'Intake', mechanical:'Mechanical',
               transmission:'Gearbox', turbo:'Turbo', transients:'Pops', sub:'Sub' };
-const mixEl = $('mix');
-let col0, col1;
+const colA = document.createElement('div'), colB = document.createElement('div');
+$('mix').append(colA, colB);
 Object.entries(MIX).forEach(([k,label],i)=>{
-  if (i===0){ col0=document.createElement('div'); col1=document.createElement('div');
-              mixEl.append(col0,col1); }
   const row = document.createElement('div');
-  row.className='row';
+  row.className = 'ctl';
   row.innerHTML = `<span class="lbl">${label}</span>
-    <input type="range" min="0" max="1.6" step="0.01" value="${sim.mix[k]}"><span class="num"></span>`;
-  const [inp,num]=[row.querySelector('input'),row.querySelector('.num')];
+    <input type="range" min="0" max="1.6" step="0.01" value="${sim.mix[k]}"><span class="val"></span>`;
+  const inp = row.querySelector('input'), num = row.querySelector('.val');
   num.textContent = Math.round(sim.mix[k]*100);
-  inp.oninput = () => { sim.setMix({[k]:+inp.value}); num.textContent=Math.round(inp.value*100); };
-  (i % 2 ? col1 : col0).appendChild(row);
+  inp.oninput = () => { sim.setMix({[k]:+inp.value}); num.textContent = Math.round(inp.value*100); };
+  (i % 2 ? colB : colA).appendChild(row);
 });
 
-/* ---------------- transport ---------------- */
+/* transport */
 const keys = new Set();
-const HANDLED=['w','a','s','d','q','e','c',' ','arrowup','arrowdown','arrowleft','arrowright'];
-addEventListener('keydown',ev=>{
-  const k=ev.key.toLowerCase();
-  if(HANDLED.includes(k)) ev.preventDefault();
-  if(ev.repeat||/^(input|select)$/i.test(ev.target.tagName)) return;
+const HANDLED = ['w','a','s','d','q','e','c',' ','arrowup','arrowdown','arrowleft','arrowright'];
+addEventListener('keydown', ev => {
+  const k = ev.key.toLowerCase();
+  // Guard BEFORE preventDefault, not after: space on a focused button or arrow
+  // keys on a focused slider are that control's input, and swallowing them
+  // makes the panel feel broken.
+  if (ev.repeat || /^(input|select|button)$/i.test(ev.target.tagName)) return;
+  if (HANDLED.includes(k)) ev.preventDefault();
   keys.add(k);
-  if(k==='e'||k==='arrowright') sim.shiftUp();
-  if(k==='q'||k==='arrowleft')  sim.shiftDown();
-  if(k==='a') toggleAuto();
-  if(k==='c') setPos(sim.getState().perspective==='exterior'?'interior':'exterior');
-  if(k===' ') togglePower();
+  if (k==='e'||k==='arrowright') sim.shiftUp();
+  if (k==='q'||k==='arrowleft')  sim.shiftDown();
+  if (k==='a') setAuto(!sim.getState().auto);
+  if (k==='c') setPos(sim.getState().perspective==='exterior'?'interior':'exterior');
+  if (k===' ') togglePower();
 });
-addEventListener('keyup',ev=>keys.delete(ev.key.toLowerCase()));
-addEventListener('blur',()=>keys.clear());
+addEventListener('keyup', ev => keys.delete(ev.key.toLowerCase()));
+addEventListener('blur', () => keys.clear());
 
-function togglePower(){
-  const b=$('power');
-  if(sim.running){ sim.stop(); amb.stop(sim.ctx.currentTime); b.textContent='Start'; b.className='go'; }
-  else { sim.start().then(()=>amb.start(sim.ctx.currentTime)); b.textContent='Stop'; b.className='stop'; }
-  $('status').textContent='';
+/* Ignition.
+   start() is async — it awaits ctx.resume(), which a browser will reject if it
+   does not consider this a user gesture. The old version neither awaited it nor
+   caught it, so a rejection left the button reading "Shutdown" over a sim that
+   was not running, with nothing on screen to say so. */
+let powerBusy = false;
+async function togglePower(){
+  if (powerBusy) return;                 // double-tap of SPACE while resuming
+  const b = $('power');
+  powerBusy = true;
+  try {
+    if (sim.running){
+      sim.stop();
+      b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
+      $('status').textContent = 'STOPPED';
+    } else {
+      b.disabled = true;
+      $('status').textContent = 'STARTING';
+      await sim.start();
+      b.innerHTML = '<i class="dot"></i>Shutdown'; b.classList.remove('pri');
+      $('status').textContent = 'RUNNING';
+    }
+  } catch (err) {
+    // Leave the button showing what is actually true.
+    b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
+    $('status').textContent = 'AUDIO BLOCKED — CLICK IGNITION';
+    console.error('EngineSim.start() failed:', err);
+  } finally {
+    b.disabled = false;
+    powerBusy = false;
+  }
 }
-function toggleAuto(){
-  const on=!sim.getState().auto; sim.setAutoShift(on);
-  $('auto').classList.toggle('on',on); $('auto').textContent = on?'Auto':'Manual';
+function setAuto(on){
+  sim.setAutoShift(on);
+  $('autoBtn').classList.toggle('on', on);
+  $('manBtn').classList.toggle('on', !on);
 }
 function setPos(m){
   sim.setPerspective(m);
-  $('pExt').classList.toggle('on',m==='exterior');
-  $('pInt').classList.toggle('on',m==='interior');
+  $('pExt').classList.toggle('on', m==='exterior');
+  $('pInt').classList.toggle('on', m==='interior');
 }
-$('power').onclick=togglePower; $('auto').onclick=toggleAuto;
-$('up').onclick=()=>sim.shiftUp(); $('dn').onclick=()=>sim.shiftDown();
-$('pExt').onclick=()=>setPos('exterior'); $('pInt').onclick=()=>setPos('interior');
-$('status').textContent='press start — audio needs a click';
-syncMachine();
+$('power').onclick = togglePower;
+$('autoBtn').onclick = () => setAuto(true);
+$('manBtn').onclick  = () => setAuto(false);
+$('up').onclick = () => sim.shiftUp();
+$('dn').onclick = () => sim.shiftDown();
+$('pExt').onclick = () => setPos('exterior');
+$('pInt').onclick = () => setPos('interior');
+$('status').textContent = 'AWAITING GESTURE';
+// Derived, so adding a turbocharged profile never leaves this hint stale.
+$('turboHint').textContent = 'turbo: ' + Object.entries(ENGINE_PROFILES)
+  .filter(([, p]) => p.turbo).map(([id]) => id.toUpperCase()).join(' · ');
+sync();
 
-/* ---------------- loop ---------------- */
-const PH=['cut','open','sync','engage','lash','shuffle'];
-$('phase').innerHTML=PH.map(p=>`<span data-p="${p}">${p}</span>`).join('');
-const phEls=[...$('phase').children];
-let last=performance.now();
+/* loop */
+const PH = ['cut','open','sync','engage','lash','shuffle'];
+$('phase').innerHTML = PH.map(p=>`<span data-p="${p}">${p}</span>`).join('');
+const phEls = [...$('phase').children];
+let last = performance.now();
+let lastMeter = 0;
 function frame(now){
-  const dt=(now-last)/1000; last=now;
+  const dt = (now-last)/1000; last = now;
   sim.setThrottle(keys.has('w')||keys.has('arrowup')?1:0);
   sim.setBrake(keys.has('s')||keys.has('arrowdown')?1:0);
   sim.update(dt);
-  const s=sim.getState();
-  amb.update({ now: sim.ctx.currentTime, speed: s.speed });
-  $('rpm').textContent=Math.round(s.rpm);
-  $('kmh').innerHTML=Math.round(s.speedKmh)+'<u>km/h</u>';
-  $('gear').textContent=s.shiftPhase?'—':(s.gear===0?'N':s.gear);
-  $('slip').innerHTML=Math.round(Math.abs(s.clutchSlip||0))+'<u>rpm</u>';
-  $('mThr').style.width=(s.throttle*100)+'%';
-  $('mBrk').style.width=(s.brake*100)+'%';
-  $('mBst').style.width=((s.boost||0)*100)+'%';
-  for(const e of phEls) e.classList.toggle('on', e.dataset.p===s.shiftPhase);
+  const s = sim.getState();
+
+  $('rpm').innerHTML = Math.round(s.rpm)+'<s>rpm</s>';
+  $('kmh').innerHTML = Math.round(s.speedKmh)+'<s>km/h</s>';
+  // This cell was labelled "Ratio" but displayed the gear NUMBER, which the
+  // instrument already shows. Total ratio (gearbox × final drive) is the thing
+  // the label promises and is genuinely useful: it is what maps road speed to
+  // rpm, so it explains the pitch you are hearing.
+  const ratio = sim._lastParams ? sim._lastParams.gearRatio : 0;
+  $('ratio').innerHTML = ratio > 0 ? ratio.toFixed(2)+'<s>:1</s>' : '—<s>N</s>';
+  const slip = Math.round(Math.abs(s.clutchSlip||0));
+  $('slip').innerHTML = slip+'<s>rpm</s>';
+  $('slipCell').classList.toggle('hot', slip > 50);
+  const set = (bar,pc,v) => { $(bar).style.width=(v*100)+'%'; $(pc).textContent=Math.round(v*100); };
+  set('mThr','pThr', s.throttle); set('mBrk','pBrk', s.brake); set('mBst','pBst', s.boost||0);
+  for (const e of phEls) e.classList.toggle('on', e.dataset.p === s.shiftPhase);
+  // Gain reduction at 60 Hz is a blur and allocates an object per frame for
+  // nothing. 10 Hz is as fast as a meter is readable anyway.
+  if (now - lastMeter > 100) {
+    lastMeter = now;
+    const gr = sim.getReduction();
+    $('dynMeter').textContent =
+      `LOW ${gr.low.toFixed(1)}  MID ${gr.mid.toFixed(1)}  HIGH ${gr.high.toFixed(1)}  dB`;
+  }
   drawTach(s);
-  requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
 
-/* ---------------- tachometer ---------------- */
-const tc=$('tach').getContext('2d');
-const DPR=Math.min(devicePixelRatio||1,2);
-$('tach').width=280*DPR; $('tach').height=280*DPR; tc.scale(DPR,DPR);
+/* One bad frame must not kill the render loop — if it did, the whole console
+   would freeze with no indication of why. Log the first failure and keep
+   going; a repeating error is still visible in the console. */
+let frameErr = false;
+function tick(now){
+  requestAnimationFrame(tick);
+  try { frame(now); }
+  catch (err) {
+    if (!frameErr) { frameErr = true; console.error('frame() threw:', err); }
+  }
+}
+requestAnimationFrame(tick);
+
+/* ---- instrument ----------------------------------------------------------
+   A true semicircle. The first radial attempt crowded its numerals against the
+   sweep band because the two sat only 8 px apart; here the tick ring, the
+   numeral ring and the sweep band are on clearly separated radii. */
+const tc = $('tach').getContext('2d');
+const DPR = Math.min(devicePixelRatio||1, 2);
+$('tach').width = 288*DPR; $('tach').height = 212*DPR; tc.scale(DPR,DPR);
+
+const R_TICK = 130, R_NUM = 104, R_BAND = 78;
 function drawTach(s){
-  const cx=140,cy=140,r=112,A0=Math.PI*0.78,A1=Math.PI*2.22;
-  const max=s.redline+700, ang=v=>A0+(A1-A0)*Math.min(1,Math.max(0,v/max));
-  tc.clearRect(0,0,280,280);
+  const W=288, cx=W/2, cy=178;
+  tc.clearRect(0,0,W,212);
+  const max = s.redline + 500;
+  const A0 = Math.PI, A1 = Math.PI*2;
+  const ang = v => A0 + (A1-A0)*Math.min(1,Math.max(0,v/max));
 
-  tc.lineWidth=1; tc.strokeStyle='#1c1e22';
-  tc.beginPath(); tc.arc(cx,cy,r,A0,A1); tc.stroke();
-
-  // fine graduations
-  for(let k=0;k<=max;k+=250){
-    const a=ang(k),c=Math.cos(a),sn=Math.sin(a);
-    const major=k%1000===0, red=k>=s.redline;
-    tc.strokeStyle = red ? (major?'#ff5f1f':'#5a2a15') : (major?'#4e535b':'#26292e');
-    tc.lineWidth = major?1.4:1;
-    const L = major?11:5;
-    tc.beginPath(); tc.moveTo(cx+c*r,cy+sn*r); tc.lineTo(cx+c*(r-L),cy+sn*(r-L)); tc.stroke();
-    if(major){
-      tc.fillStyle = red?'#ff8a5c':'#4e535b';
-      tc.font='500 9px ui-monospace,Menlo,monospace';
+  // ---- graduations: fine 250, major 1000 ----
+  for (let k=0;k<=max;k+=250){
+    const a=ang(k), c=Math.cos(a), sn=Math.sin(a);
+    const major = k%1000===0, red = k>=s.redline;
+    const inner = major ? R_TICK-14 : R_TICK-7;
+    tc.strokeStyle = red ? (major?'#e8481f':'rgba(232,72,31,.42)')
+                         : (major?'#14161a':'rgba(20,22,26,.26)');
+    tc.lineWidth = major?1.6:1;
+    tc.beginPath();
+    tc.moveTo(cx+c*R_TICK, cy+sn*R_TICK);
+    tc.lineTo(cx+c*inner,  cy+sn*inner);
+    tc.stroke();
+    if (major){
+      tc.fillStyle = red ? '#e8481f' : '#51565d';
+      tc.font='600 10px ui-monospace,Menlo,monospace';
       tc.textAlign='center'; tc.textBaseline='middle';
-      tc.fillText(k/1000, cx+c*(r-24), cy+sn*(r-24));
+      tc.fillText(k/1000, cx+c*R_NUM, cy+sn*R_NUM);
     }
   }
-  // sweep
-  tc.strokeStyle = s.limiter ? '#ff3b30' : '#ff5f1f';
-  tc.lineWidth=2.5; tc.lineCap='butt';
-  tc.beginPath(); tc.arc(cx,cy,r-19,A0,ang(s.rpm)); tc.stroke();
 
-  // centre block
-  tc.fillStyle='#e8e9ec'; tc.textAlign='center';
-  tc.font='500 42px ui-monospace,Menlo,monospace';
-  tc.fillText(s.shiftPhase?'—':(s.gear===0?'N':s.gear), cx, cy+8);
-  tc.fillStyle='#4e535b'; tc.font='500 9px ui-sans-serif,system-ui,sans-serif';
-  tc.textBaseline='middle';
-  tc.fillText('GEAR', cx, cy+30);
-  tc.fillStyle='#7c8189'; tc.font='500 13px ui-monospace,Menlo,monospace';
-  tc.fillText(Math.round(s.rpm)+' rpm', cx, cy-32);
+  // ---- sweep band, well inside the numerals ----
+  tc.lineCap='butt'; tc.lineWidth=9;
+  tc.strokeStyle='#e4e4e0';
+  tc.beginPath(); tc.arc(cx,cy,R_BAND,A0,A1); tc.stroke();
+  tc.strokeStyle='rgba(232,72,31,.22)';
+  tc.beginPath(); tc.arc(cx,cy,R_BAND,ang(s.redline),A1); tc.stroke();
+  tc.strokeStyle = s.limiter ? '#e8481f' : '#14161a';
+  tc.beginPath(); tc.arc(cx,cy,R_BAND,A0,ang(Math.max(s.rpm,1))); tc.stroke();
+
+  // ---- needle ----
+  const a=ang(s.rpm), c=Math.cos(a), sn=Math.sin(a);
+  tc.strokeStyle='#e8481f'; tc.lineWidth=2; tc.lineCap='round';
+  tc.beginPath();
+  tc.moveTo(cx+c*(R_BAND-16), cy+sn*(R_BAND-16));
+  tc.lineTo(cx+c*(R_TICK-16), cy+sn*(R_TICK-16));
+  tc.stroke();
+  tc.fillStyle='#e8481f';
+  tc.beginPath(); tc.arc(cx+c*(R_BAND-16), cy+sn*(R_BAND-16), 2.6, 0, 7); tc.fill();
+
+  // ---- digital block, inside the arc ----
+  tc.textAlign='center'; tc.textBaseline='alphabetic';
+  tc.fillStyle = s.limiter ? '#e8481f' : '#14161a';
+  tc.font='600 42px ui-monospace,Menlo,monospace';
+  tc.fillText(Math.round(s.rpm), cx, cy-26);
+  tc.fillStyle='#8b9097'; tc.font='600 8.5px ui-monospace,Menlo,monospace';
+  tc.fillText('R P M', cx, cy-12);
+
+  // ---- gear / speed strip below the arc ----
+  const y=cy+22;
+  tc.strokeStyle='#d8d9d4'; tc.lineWidth=1;
+  tc.beginPath(); tc.moveTo(cx-96,y-15.5); tc.lineTo(cx+96,y-15.5); tc.stroke();
+  tc.beginPath(); tc.moveTo(cx,y-15.5); tc.lineTo(cx,y+9.5); tc.stroke();
+  tc.fillStyle='#8b9097'; tc.font='600 8px ui-monospace,Menlo,monospace';
+  tc.textAlign='left';  tc.fillText('GEAR', cx-94, y-4);
+  tc.textAlign='right'; tc.fillText('KM/H', cx+94, y-4);
+  tc.fillStyle='#14161a'; tc.font='600 20px ui-monospace,Menlo,monospace';
+  tc.textAlign='left';  tc.fillText(s.shiftPhase?'\u2013\u2013':(s.gear===0?'N':s.gear), cx-56, y+2);
+  tc.textAlign='right'; tc.fillText(Math.round(s.speedKmh), cx+56, y+2);
 }
 
-/* ---------------- order spectrum ---------------- */
-const oc=$('orders').getContext('2d');
-$('orders').width=680*DPR; $('orders').height=120*DPR; oc.scale(DPR,DPR);
+/* ---- order spectrum ---- */
+const oc = $('orders').getContext('2d');
+$('orders').width = 620*DPR; $('orders').height = 132*DPR; oc.scale(DPR,DPR);
 function drawOrders(){
-  const p=ENGINE_PROFILES[sim.engineId];
-  const spec=orderSpectrum(p,bankAngles(p,0),0.6,14);
-  const W=680,H=120,pad=4,base=H-18;
+  const p = ENGINE_PROFILES[sim.engineId];
+  const spec = orderSpectrum(p, bankAngles(p,0), 0.6, 14);
+  const W=620, H=132, padL=8, padR=8, base=H-18;
   oc.clearRect(0,0,W,H);
-  const max=Math.max(...spec.map(s=>s.mag))||1;
-  const bw=(W-pad*2)/spec.length;
-  oc.strokeStyle='#1c1e22'; oc.lineWidth=1;
-  oc.beginPath(); oc.moveTo(pad,base+.5); oc.lineTo(W-pad,base+.5); oc.stroke();
+  oc.fillStyle='#fbfbfa'; oc.fillRect(0,0,W,H);
+
+  // horizontal reference rules
+  oc.strokeStyle='rgba(20,22,26,.07)'; oc.lineWidth=1;
+  for(let i=1;i<=4;i++){
+    const y=Math.round(base-(base-8)*(i/4))+.5;
+    oc.beginPath(); oc.moveTo(padL,y); oc.lineTo(W-padR,y); oc.stroke();
+  }
+  oc.strokeStyle='#c3c5bf';
+  oc.beginPath(); oc.moveTo(padL,base+.5); oc.lineTo(W-padR,base+.5); oc.stroke();
+
+  const max = Math.max(...spec.map(s=>s.mag))||1, bw=(W-padL-padR)/spec.length;
   spec.forEach((s,i)=>{
-    const half=Math.abs(s.order%1)>0.01;
-    const h=(s.mag/max)*(base-8);
-    oc.fillStyle = half ? '#ff5f1f' : '#3f4652';
-    oc.fillRect(pad+i*bw, base-h, Math.max(1.5,bw-2), h);
-    if(s.order%2===0){
-      oc.fillStyle='#4e535b'; oc.font='500 9px ui-monospace,Menlo,monospace';
-      oc.textAlign='center'; oc.fillText(s.order, pad+i*bw+bw/2, H-5);
+    const half = Math.abs(s.order%1)>0.01;
+    const h = Math.max(1,(s.mag/max)*(base-12));
+    const x = padL+i*bw, w = Math.max(2.5, bw-4);
+    oc.fillStyle = half ? '#e8481f' : '#9aa0a6';
+    oc.fillRect(x, base-h, w, h);
+    // A thin cap on half-orders marks them without the full-height wash that
+    // swamped the chart.
+    if (half){ oc.fillStyle='#14161a'; oc.fillRect(x, base-h-2, w, 2); }
+    if (s.order%2===0){
+      oc.fillStyle='#8b9097'; oc.font='600 8.5px ui-monospace,Menlo,monospace';
+      oc.textAlign='center'; oc.fillText(s.order, x+w/2, H-6);
     }
   });
-  const half=spec.filter(s=>Math.abs(s.order%1)>0.01).reduce((a,s)=>a+s.mag*s.mag,0);
-  const tot=spec.reduce((a,s)=>a+s.mag*s.mag,0);
+  const half = spec.filter(s=>Math.abs(s.order%1)>0.01).reduce((a,s)=>a+s.mag*s.mag,0);
+  const tot = spec.reduce((a,s)=>a+s.mag*s.mag,0);
   $('ordMeta').textContent =
-    `bank 1 fires ${bankAngles(p,0).map(a=>a.toFixed(0)+'°').join(' / ')} · half-order ${(100*half/tot).toFixed(0)}%`;
+    bankAngles(p,0).map(a=>a.toFixed(0)+'°').join(' / ') + '  ·  HALF-ORDER ' +
+    (100*half/tot).toFixed(0) + '%';
 }
 drawOrders();
+
+// Everything above evaluated without throwing, so the boot guard can stand down.
+window.__ENGINE_BOOTED = true;
 </script>
 </body>
 </html>

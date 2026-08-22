@@ -24,7 +24,7 @@ import { ExhaustSystem, IntakeResonator, CabinFilter } from './resonators.js';
 import { MechanicalLayer, TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
 import { ExhaustNoise, SubLayer, CharacterModulator } from './character.js';
 import { Drivetrain } from './physics.js';
-import { EQ, Reverb, Stereoizer } from './fx.js';
+import { EQ, Reverb, Stereoizer, Dynamics } from './fx.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -59,8 +59,15 @@ export class EngineSim {
 
     // Drivetrain owns its ShiftController — the shift state machine has to run
     // inside the sub-stepped integration, not alongside it.
-    this.physics = new Drivetrain(this.profile, this.vehicle,
-      { launchFlareRpm: 850, ...opts });
+    //
+    // This used to force launchFlareRpm to 850, which put the WOT launch hold at
+    // idle*1.05 + 850 = 1585 rpm on a V8. The engine sat on that one pitch for
+    // ~0.4 s every standing start — audibly stuck, and nothing like a launch.
+    // It was an over-correction for the launch bounce (ledger #24); what
+    // actually fixed the bounce was handing over at geared > 0.90 x target.
+    // physics.js's own 2400 default holds at ~3140 rpm instead, which is what a
+    // sports car at full throttle actually does.
+    this.physics = new Drivetrain(this.profile, this.vehicle, { ...opts });
 
     this._buildGraph();
     this._buildVoices();
@@ -78,20 +85,15 @@ export class EngineSim {
     this.master = ctx.createGain();
     this.master.gain.value = 0;
 
-    this.comp = ctx.createDynamicsCompressor();
-    this.comp.threshold.value = -5;
-    this.comp.knee.value = 26;
-    this.comp.ratio.value = 2.2;
-    // 22 ms attack so transients keep their leading edge. But at -16 dB / 4.5:1
-    // a loud bang then drove deep gain reduction and DUCKED THE ENGINE for the
-    // whole 160 ms release — every pop punched a hole in the mix, which is what
-    // "the pops interrupt the other sounds" is. Backing the threshold off to
-    // -5 dB and 2.2:1, with bus headroom, keeps the glue without the pumping:
-    // measured gain reduction on a full-scale bang falls from 15.3 dB to about
-    // 2 dB, which reads as cohesion rather than as a hole. A longer release
-    // makes what little remains a gradual lean rather than a lurch.
-    this.comp.attack.value = 0.022;
-    this.comp.release.value = 0.28;
+    // Three-band compressor. A single full-range compressor cannot win here:
+    // the loudest thing in an engine mix is nearly always low-frequency, so the
+    // low end decides the gain reduction and ducks everything else with it
+    // (ledger #17 — every pop punched a hole in the mix). Splitting first means
+    // a bang ducks the band it is in and the engine note carries on. The high
+    // band doubles as the harshness tamer: fast and firm above 2 kHz, so
+    // anything that spikes up there is held down without EQ'ing the brightness
+    // away permanently. See fx.js for the band rationale.
+    this.dynamics = new Dynamics(ctx, { amount: 1 });
 
     this.cabin = new CabinFilter(ctx, this.profile);
     this.mixBus = ctx.createGain();
@@ -160,8 +162,8 @@ export class EngineSim {
     this.cabin.output.connect(this.eq.input);
     this.eq.output.connect(this.reverb.input);
     this.reverb.output.connect(this.stereo.input);
-    this.stereo.output.connect(this.comp);
-    this.comp.connect(this.limiter);
+    this.stereo.output.connect(this.dynamics.input);
+    this.dynamics.output.connect(this.limiter);
     this.limiter.connect(this.master);
     this.master.connect(ctx.destination);
 
@@ -198,18 +200,33 @@ export class EngineSim {
     if (this.turbo) this.turbo.output.connect(this.busses.turbo);
 
     this.transients = new TransientBank(ctx, p);
+    // Mechanical transients — driveline clunk, clutch thump, synchro click.
+    // These radiate from the casing straight into the air; they have no
+    // business going anywhere near the exhaust.
     this.transients.output.connect(this.busses.transients);
 
     // A real exhaust bang happens IN THE PIPE and comes out of the tailpipe, so
     // it carries the same resonance, reflections and muffler colour as the
     // engine note. Sending them straight to the mix bus is why they sounded dry
     // and detached — like flicking a plastic bottle next to a car rather than
-    // something the car did. This send puts most of that energy back through
-    // the exhaust so the pops inherit the pipe and blend.
+    // something the car did.
+    //
+    // The combustion voices now go almost entirely through the pipe. What used
+    // to be a partial send off a shared output left a large dry component in
+    // the mix, and that dry component is what the ear locates OUTSIDE the car.
     this.popSend = ctx.createGain();
     this.popSend.gain.value = 1.05;
-    this.transients.output.connect(this.popSend);
+    this.transients.combustionOutput.connect(this.popSend);
     for (const inp of this.exhaust.inputs) this.popSend.connect(inp);
+
+    // A little direct sound is still needed: a tailpipe is not an anechoic
+    // termination and the initial crack does reach you before the pipe has
+    // finished ringing. Small, though — this is the leading edge, not the body
+    // of the report.
+    this.popDirect = ctx.createGain();
+    this.popDirect.gain.value = 0.22;
+    this.transients.combustionOutput.connect(this.popDirect);
+    this.popDirect.connect(this.busses.transients);
 
     // Broadband flow noise, fed INTO the exhaust waveguides so it resonates in
     // the same pipe as the combustion pulses. This is what turns a clean
@@ -311,6 +328,11 @@ export class EngineSim {
   dispose() {
     this.stop();
     for (const m of this._modules()) if (m.dispose) m.dispose();
+    // The output-stage FX are not in _modules() — they have no per-frame work,
+    // so they must not be walked every frame — but they still hold nodes.
+    for (const m of [this.eq, this.reverb, this.stereo, this.dynamics]) {
+      if (m && m.dispose) m.dispose();
+    }
     if (this.ownsContext) setTimeout(() => this.ctx.close(), 500);
   }
 
@@ -421,6 +443,16 @@ export class EngineSim {
 
   /** Stereo width, 0 = mono, 1 = very wide. Mono-sum safe. */
   setWidth(w) { return this.stereo.setWidth(w); }
+
+  /**
+   * How hard the three-band compressor works. 0 = effectively bypassed,
+   * 1 = the tuned default. Lower it if the mix should breathe more; raise
+   * nothing above 1, the bands are already at their intended thresholds.
+   */
+  setDynamics(amount) { return this.dynamics.setAmount(amount); }
+
+  /** Per-band gain reduction in dB — diagnostics for the console UI. */
+  getReduction() { return this.dynamics.getReduction(); }
 
   /** How much of the transient energy is routed through the exhaust pipe. */
   setPopDepth(v) {

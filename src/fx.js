@@ -273,3 +273,158 @@ export class Stereoizer {
                      this.tilt, this.plus, this.minus]) n.disconnect();
   }
 }
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Three-band compressor — the "make it pleasant" stage.
+ *
+ * A single full-range compressor on an engine mix has one unavoidable failure:
+ * the loudest thing in the signal is almost always low-frequency (a 150 Hz
+ * exhaust bang carrying the +9 dB rumble shelf), so the low end decides the
+ * gain reduction and everything else gets ducked with it. That is bug #17 in
+ * the ledger — every pop punched a 15 dB hole in the mix — and backing the
+ * threshold off to -5 dB / 2.2:1 only made it small enough to live with. It did
+ * not fix the mechanism.
+ *
+ * Splitting first fixes the mechanism. A bang now ducks the band it is actually
+ * in, and the engine note carries on in the other two.
+ *
+ * The split is Linkwitz-Riley 4th order: two cascaded Butterworth sections per
+ * edge. Two properties matter and only LR gives both — the bands sum back to
+ * FLAT magnitude (a Butterworth split has a +3 dB bump at the crossover), and
+ * the branches stay in phase through the crossover so the sum does not notch.
+ * Web Audio's lowpass/highpass Q is in DECIBELS, so Butterworth (linear Q
+ * 0.7071) is Q = -3.01 dB, not 0.7 — getting this wrong puts a resonant bump at
+ * every crossover.
+ *
+ *   in ─┬─[LP 240]²──────────────► low  comp ─┐
+ *       ├─[HP 240]²─[LP 2000]²──► mid  comp ─┼─► out
+ *       └─[HP 2000]²─────────────► high comp ─┘
+ *
+ * Why these three bands, and why they are set differently:
+ *
+ *   LOW  (< 240 Hz) is the chest and the body. Slow attack so a pulse keeps its
+ *        leading edge, moderate ratio, long release — this is glue, and the one
+ *        band where pumping would be heard as pumping.
+ *   MID  (240 Hz - 2 kHz) is where the engine note actually lives, so it gets
+ *        the gentlest treatment of the three. Touching this hard is what makes
+ *        a compressed engine sound small.
+ *   HIGH (> 2 kHz) is the harshness band, and it is the reason this class
+ *        exists. Everything that stings lives here: residual comb peaks,
+ *        valvetrain clatter, injector ticks, the turbo's edge band, the
+ *        waveshaper's high-order products. It gets a low threshold, a high
+ *        ratio and a 2 ms attack, so anything that spikes up there is caught
+ *        before it can sting rather than being EQ'd away permanently. Loud
+ *        stays bright; harsh gets held down.
+ *
+ * `amount` 0..1 scales how far each threshold drops below its resting point, so
+ * the whole stage can be dialled back to nearly transparent without rebuilding.
+ */
+export class Dynamics {
+  static BANDS = [
+    // f = upper edge of the band, Hz (the last band is open-ended).
+    { name: 'low', f: 240, threshold: -20, ratio: 3.0, attack: 0.014, release: 0.24, knee: 12, makeup: 1.30 },
+    { name: 'mid', f: 2000, threshold: -22, ratio: 2.4, attack: 0.020, release: 0.18, knee: 16, makeup: 1.24 },
+    { name: 'high', f: 0, threshold: -30, ratio: 5.0, attack: 0.002, release: 0.09, knee: 6, makeup: 1.55 },
+  ];
+
+  /** @param {object} [opts] { amount 0..1, makeup } */
+  constructor(ctx, opts = {}) {
+    this.ctx = ctx;
+    this._amount = clamp(fin(opts.amount, 1), 0, 1);
+
+    this.inGain = ctx.createGain();
+    this.out = ctx.createGain();
+    this.out.gain.value = clamp(fin(opts.makeup, 1), 0, 4);
+
+    // Butterworth in Web Audio's dB convention. Two in series = Linkwitz-Riley.
+    const BW_Q = -3.0103;
+    const pole = (type, f) => {
+      const b = ctx.createBiquadFilter();
+      b.type = type;
+      b.frequency.value = clamp(f, 20, 20000);
+      b.Q.value = BW_Q;
+      return b;
+    };
+
+    this.bands = [];
+    const [LOW, MID] = Dynamics.BANDS;
+
+    for (const spec of Dynamics.BANDS) {
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = spec.threshold;
+      comp.ratio.value = spec.ratio;
+      comp.attack.value = spec.attack;
+      comp.release.value = spec.release;
+      comp.knee.value = spec.knee;
+
+      const makeup = ctx.createGain();
+      makeup.gain.value = spec.makeup;
+
+      // Build the filter chain that isolates this band.
+      const chain = [];
+      if (spec.name === 'low') {
+        chain.push(pole('lowpass', LOW.f), pole('lowpass', LOW.f));
+      } else if (spec.name === 'mid') {
+        chain.push(pole('highpass', LOW.f), pole('highpass', LOW.f),
+                   pole('lowpass', MID.f), pole('lowpass', MID.f));
+      } else {
+        chain.push(pole('highpass', MID.f), pole('highpass', MID.f));
+      }
+
+      let node = this.inGain;
+      for (const f of chain) { node.connect(f); node = f; }
+      node.connect(comp);
+      comp.connect(makeup);
+      makeup.connect(this.out);
+
+      this.bands.push({ spec, comp, makeup, chain });
+    }
+
+    this.setAmount(this._amount);
+  }
+
+  get input() { return this.inGain; }
+  get output() { return this.out; }
+
+  /**
+   * 0 = effectively bypassed (thresholds parked above the signal), 1 = the
+   * tuned defaults. Scales each band's threshold rather than its ratio, so the
+   * character of each band is preserved as it is dialled back.
+   */
+  setAmount(a) {
+    this._amount = clamp(fin(a, 1), 0, 1);
+    const now = fin(this.ctx.currentTime, 0);
+    for (const b of this.bands) {
+      const th = clamp(b.spec.threshold * this._amount, -100, 0);
+      b.comp.threshold.setTargetAtTime(th, now, 0.05);
+      // Makeup has to come back with the threshold or dialling the stage down
+      // would read as a volume change instead of a dynamics change.
+      const mk = 1 + (b.spec.makeup - 1) * this._amount;
+      b.makeup.gain.setTargetAtTime(mk, now, 0.05);
+    }
+    return this._amount;
+  }
+
+  getAmount() { return this._amount; }
+
+  /** Live gain reduction per band, dB. Diagnostics only. */
+  getReduction() {
+    const r = {};
+    for (const b of this.bands) r[b.spec.name] = fin(b.comp.reduction, 0);
+    return r;
+  }
+
+  update() { /* nothing per-frame */ }
+
+  dispose() {
+    for (const b of this.bands) {
+      for (const f of b.chain) f.disconnect();
+      b.comp.disconnect();
+      b.makeup.disconnect();
+    }
+    this.inGain.disconnect();
+    this.out.disconnect();
+  }
+}

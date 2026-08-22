@@ -3,20 +3,54 @@
 Procedural engine audio synthesised from **firing geometry**, driven by a
 **compliant driveline**. Pure Web Audio API, no samples, no dependencies.
 
+## Running it
+
 ```sh
-python3 -m http.server 8000    # ES modules need a server; file:// won't work
+npm start                      # → http://localhost:8000
 ```
 
+No install step and nothing to download — `npm start` just runs
+`node tools/serve.mjs`, a ~90-line static server using only Node's stdlib. Run
+that directly if you would rather not go through npm:
+
+```sh
+node tools/serve.mjs           # or: node tools/serve.mjs 3000
 ```
+
+Then open **http://localhost:8000** and press **Ignition**. Browsers will not
+start audio without a user gesture, so the first click is doing real work.
+
+> **It has to be served over http://.** The app is built from ES modules, and
+> browsers refuse to load those from a `file://` origin — opening `index.html`
+> by double-clicking it gives you a page that renders but is completely dead.
+> The app detects this case and tells you, rather than failing silently. Any
+> static server works; `python3 -m http.server 8000` is equivalent.
+
+Controls: **W** throttle · **S** brake · **Q**/**E** shift down/up ·
+**A** auto/manual · **C** exterior/cabin · **Space** ignition.
+
+```sh
+npm test                       # 277 checks + the driving-behaviour suite
+npm run spectrum               # harshness table for every engine
+```
+
+## Layout
+
+```
+index.html          the console — the whole UI
+tools/serve.mjs     zero-dependency dev server
 src/profiles.js     engine + vehicle data (firing order, bank layout, pipe geometry)
 src/pulse.js        firing geometry → band-limited PeriodicWave tables
 src/resonators.js   exhaust waveguides, muffler, Helmholtz intake, shock rasp, cabin
 src/layers.js       valvetrain, gear whine, turbo, transient bank
 src/physics.js      drivetrain with torsional compliance and backlash
 src/shift.js        gear-shift state machine
+src/character.js    exhaust flow noise, sub layer, imperfection modulator
+src/fx.js           EQ, reverb, stereo widener, three-band compressor
 src/engine-sim.js   public API
-test/run.mjs        unit + sweep suite      (122 checks)
+test/run.mjs        unit + sweep suite      (277 checks)
 test/drive.mjs      driving-behaviour suite
+test/spectrum.mjs   analytic spectrum of the exhaust chain
 ```
 
 ---
@@ -64,15 +98,18 @@ MechanicalLayer   valvetrain @ 0.5 order, injectors, chain, block modes ──�
 TransmissionLayer mesh whine = driveshaft rpm × engaged gear's tooth count ─────────────────────┤
 TurboLayer        lagged spool whine, BOV, flutter ─────────────────────────────────────────────┤
 TransientBank     bangs, driveline clunk, clutch thump, synchro ────────────────────────────────┘
-                                              → mix bus → CabinFilter → compressor → master
+                    → mix bus → CabinFilter → EQ → Reverb → Stereoizer
+                    → Dynamics (3-band) → limiter → master
 ```
 
 - **Waveguide** — delay line + in-loop lowpass + reflection, i.e. the
   Karplus-Strong structure the PTR engine-sound model uses. Web Audio forces a
-  128-sample minimum delay inside a feedback loop; every profile's pipe delay
-  (164–389 samples) clears it, with a resonant-bandpass fallback for shorter
-  pipes. The in-loop lowpass has phase, which drops the resonance 2.7–6.1 %
-  below `c/4L`, so the delay is phase-compensated rather than taken raw.
+  128-sample minimum delay inside a feedback loop; bank pipes (164–389 samples)
+  clear it, with a resonant-bandpass fallback for shorter pipes. The in-loop
+  lowpass has phase, which drops the resonance below `c/4L`, so the delay is
+  phase-compensated rather than taken raw. **Where that lowpass sits decides how
+  many modes the pipe supports, and getting it wrong caused the worst tonal bug
+  in the project — see §3f.**
 - **Nonlinearity** — asymmetric saturation. A real exhaust pulse at high SPL
   steepens into a shock front, which is why an engine gets *raspy* under load
   rather than just louder. Asymmetric (not `tanh`) because shock steepening
@@ -210,23 +247,55 @@ sim.setThrottle(1); sim.update(dt);      // per frame
 
 | Method | |
 | --- | --- |
-| `setEngineType(id)` | `i3 i4 i5 i6 v6 boxer4 flat6 v8cross v8flat v10 v12` — hot-swappable while driving |
+| `setEngineType(id)` | 16 profiles (below) — hot-swappable while driving |
 | `setVehicle(id)` | `hatch sports supercar muscle truck` — road speed preserved across the swap |
 | `setThrottle/setBrake/setClutch(0..1)` | |
 | `shiftUp() / shiftDown() / setGear(n)` | returns `false` if refused (would over-rev) |
 | `setMix({exhaust, intake, mechanical, transmission, turbo, transients})` | per-voice balance |
 | `setTone({rumble, brightness})` | 0–2 each, 1 = default. Low-end lift and high-shelf cut |
+| `setDynamics(0..1)` | three-band compressor amount; 0 ≈ bypass, 1 = default |
+| `getReduction()` | live `{low, mid, high}` gain reduction, dB |
 | `setPerspective('exterior'\|'interior')` | |
 | `update(dt)` · `start()` · `stop()` · `dispose()` · `getState()` | |
 
+### The engines
+
+| id | |
+| --- | --- |
+| `vtwin` | 90° V-twin. Fires at 0/270° — a 270/450 split, so it is the lumpiest engine here (50.8 % half-order energy) and revs like a light switch |
+| `i3` | 1.0 turbo triple. Cheap recirculating valve, so it flutters hard |
+| `rotary2` | Two-rotor Wankel. Overlapping pulses, no valvetrain, 9000 rpm |
+| `i4` | 2.0 naturally aspirated four |
+| `boxer4` | Flat-four with unequal headers — the rumble is the header mismatch, not the firing order. Big atmospheric BOV: this is the "chiu" engine |
+| `i5` | 2.5 five-cylinder turbo, 2.5-order warble |
+| `i6` | 3.0 straight six, inherently balanced |
+| `i6diesel` | 6.7 turbo-diesel. Near-step pressure rise, loud injectors, 4600 rpm redline |
+| `v6` | 60° V6 |
+| `v6tt` | 3.8 twin-turbo V6, fast-spooling |
+| `flat6` | 3.8 flat-six, 8500 rpm, that induction howl |
+| `v8cross` | Cross-plane 5.0 — the burble |
+| `v8tt` | 4.0 twin-turbo V8. Same firing order as `v8cross`, muffled by the turbines into a thud |
+| `v8flat` | Flat-plane 4.5, 9000 rpm, zero half-orders, pure scream |
+| `v10` | 5.2 V10, 2.5 order per bank |
+| `v12` | 6.5 V12 |
+
+Turbocharged: `i3 boxer4 i5 i6 i6diesel v6tt v8tt`.
+
 ## 5. Verification, and its limits
 
-`node test/run.mjs` (122 checks) and `node test/drive.mjs`. A strict Web Audio
+`node test/run.mjs` (277 checks) and `node test/drive.mjs`. A strict Web Audio
 mock throws on non-finite AudioParam writes, out-of-range frequencies, and
-per-frame node allocation. Coverage: all 11 engines × 5 vehicles assembled and
+per-frame node allocation. Coverage: all 16 engines × 5 vehicles assembled and
 driven, 3600-frame input fuzz per vehicle, engine/vehicle hot-swap, stop/restart.
 
-Steady state: **253 nodes**, ~29 AudioParam writes per frame, zero per-frame
+`node test/spectrum.mjs` is a third tool and a different kind of check: it
+reconstructs the magnitude response of the entire exhaust chain **analytically**
+— Web Audio's own biquad formulas, delay lines as closed-form combs — and
+multiplies it by the wavetable's harmonics at a given rpm. It answers "is this
+harsh?" numerically, which no param-level test can. It found the worst tonal bug
+in the project (§8).
+
+Steady state: **291 nodes**, ~29 AudioParam writes per frame, zero per-frame
 allocation.
 
 ### Making transients audible
@@ -302,10 +371,13 @@ The shaft has its own inertia state (`spool`), separate from boost pressure —
 `boost = spool²` with a blow-off vent term. That split is what produces the
 turbo-car whistle across a gear change, and two details make or break it:
 
-- **Coast-down at 1.9x inertia**, not 4.0x. At 4.0x the shaft barely moved during
-  a 95 ms shift, so the whistle sat flat across gear changes. Measured on the
-  inline-6: the whistle now sags **3105 → 2585 Hz** (about three semitones)
-  through an upshift and swells back as boost rebuilds.
+- **Coast-down at 1.9x inertia**, not 4.0x — and 0.75x under fuel cut, because
+  with no exhaust enthalpy at all the turbine coasts on bearing drag alone. At
+  4.0x the shaft barely moved during a 95 ms shift, so the whistle sat flat
+  across gear changes. Measured on the inline-6: the whistle now sags
+  **2192 → 1654 Hz** (4.9 semitones) through the 2→3 upshift and swells back as
+  boost rebuilds. The three-way time constant is what gives each gear its own
+  swoop instead of one tone across the whole gearbox.
 - **Level weighted to tip speed, not throttle.** The whistle is aeroacoustic
   radiation from the compressor wheel, so it persists while the wheel spins.
   Weighting it `0.35 + 0.65 × flow` collapsed it to a third the instant the
@@ -314,7 +386,58 @@ turbo-car whistle across a gear change, and two details make or break it:
 
 A blow-off valve vents pressure in milliseconds but cannot stop a spinning
 turbine, so the whistle dips and recovers rather than cutting out and restarting.
-`p.turboSpeed` exposes normalised turbine speed for anything that wants it.
+
+### The whine is a wavetable, not a stack of sines
+
+It used to be three sine oscillators at f, 2f and 3f. Three sines at exact
+integer ratios with fixed relative levels are, to the ear, **one tone with a
+fixed timbre** — which is precisely what "sounds like a single uniform
+soundwave" means. And with the fundamental at 3.4–4.2 kHz, a near-pure tone sat
+exactly where human hearing is most sensitive.
+
+Now it is one oscillator carrying a band-limited `PeriodicWave` built from a
+blade-tone series (harmonics falling as `1/k^1.4`, odd ones stronger, because a
+compressor wheel is not symmetric front-to-back). Three things follow: the
+browser band-limits per playback frequency so the tone never aliases across the
+enormous sweep a spooling turbo covers; the harmonic tilt is set once and
+physically rather than by three hand-picked gains; and the fundamental is capped
+at **3 kHz**, with the wavetable's harmonics carrying the brightness above that.
+
+On top of it, a formant bandpass that tracks the blade tone (a real compressor
+housing is a cavity — the whistle has a vowel to it), shaft-rate sidebands at
+BPF/11, and **bearing wander**: two mutually irrational LFOs on detune, deepest
+off-boost where the rotor is least loaded and the oil film is thickest.
+
+### The "stu-stu-stu"
+
+Close the throttle while the compressor is still pumping and the air has nowhere
+to go. It stalls, flow briefly **reverses** through the wheel, pressure drops,
+flow re-establishes, and it repeats — compressor surge, at the Helmholtz
+frequency of the compressor-to-throttle volume, 8–30 Hz.
+
+The old version modulated a wide noise band with a **sine**, which gives smooth
+tremolo: "shoo-shoo-shoo". Real surge is a relaxation oscillation — abrupt stall,
+decaying recovery — so each cycle is a sharp burst with a tail. That shape is the
+entire difference between "shu" and "stu".
+
+So the envelope is a sawtooth through a `WaveShaper` carrying an attack/decay
+pulse curve. A sawtooth sweeps the whole curve exactly once per cycle, so the
+curve *is* the envelope and the oscillator frequency *is* the rate — no
+scheduling, no per-event allocation. It drives two bands: a body band (Q 3.5,
+700–1900 Hz) for the "tu", and a quiet edge band (Q 2.2, 2.2–3.4 kHz) for the
+"st", gated on `surge²` so only a hard stall gets the click.
+
+It is armed by **any** throttle closure against standing boost — which includes
+the ignition cut of a gear change. That is why a boosted car flutters on every
+upshift, and it is the most recognisable thing a turbocharged engine does.
+
+Whether a car goes "chiu" or "stu-stu-stu" is **one number**: `turbo.bov`, the
+valve's capacity. A big atmospheric valve empties the plenum, so nothing is left
+to reverse through the wheel and you get the chirp and nothing else. A small or
+recirculating valve leaves pressure standing and the compressor stalls anyway.
+Measured, `i6` (bov 0.25) flutters **8.6 dB louder** than `boxer4` (bov 0.80),
+and both still fire their valve. It is not a mode switch — it falls out of the
+physics.
 
 ### Whistle sweep, measured
 
@@ -323,12 +446,13 @@ each gear plus one blow-off chirp per upshift:
 
 | gear | whistle range | swing |
 | --- | --- | --- |
-| 1 | 120 – 2011 Hz | 48.8 semitones (spool-up from rest) |
-| 2 | 1637 – 2663 Hz | 8.4 semitones |
-| 3 | 1979 – 2884 Hz | 6.5 semitones |
-| 4 | 2050 – 2598 Hz | 4.1 semitones |
+| 1 | 120 – 1653 Hz | 45.4 semitones (spool-up from rest) |
+| 2 | 1320 – 2200 Hz | 8.9 semitones |
+| 3 | 1637 – 2386 Hz | 6.5 semitones |
+| 4 | 1684 – 2479 Hz | 6.7 semitones |
+| 5 | 1912 – 2277 Hz | 3.0 semitones |
 
-Three upshifts, three chirps. Mapped linearly against shaft speed the swing was
+Four upshifts, four events. Mapped linearly against shaft speed the swing was
 only 2–5 semitones — shaft speed saturates near the top of its range under full
 load, so the whistle sat almost still and read as one flat tone across the whole
 gearbox.
@@ -351,6 +475,56 @@ model. These make no claim to be physical — they are desk tone controls.
   `L = direct + w·delayed`, `R = direct − w·delayed`. The opposite polarity is
   the point — summed to mono the delayed copies cancel exactly, so this cannot
   comb-filter mono playback the way a plain Haas delay does.
+- **`Dynamics`** — a three-band compressor, and the one stage whose whole job is
+  to make the result pleasant rather than accurate. See below.
+
+### Why one compressor could never work
+
+A single full-range compressor on an engine mix has an unavoidable failure: the
+loudest thing in the signal is almost always low-frequency — a 150 Hz exhaust
+bang, which then collects the +9 dB rumble shelf on its way past. So the low end
+decides the gain reduction and **everything else gets ducked with it**. That is
+the "pops interrupt the other sounds" bug (§8), and backing the threshold off to
+−5 dB / 2.2:1 only made the hole small enough to live with. It did not fix the
+mechanism.
+
+Splitting the signal first fixes the mechanism. A bang now ducks the band it is
+actually in, and the engine note carries on in the other two.
+
+```
+in ─┬─[LP 240]² ─────────────► low   −20 dB, 3.0:1, 14 ms ─┐
+    ├─[HP 240]²─[LP 2000]² ──► mid   −22 dB, 2.4:1, 20 ms ─┼─► out
+    └─[HP 2000]² ────────────► high  −30 dB, 5.0:1,  2 ms ─┘
+```
+
+The crossover is **Linkwitz-Riley 4th order** — two cascaded Butterworth
+sections per edge. Only LR gives both properties that matter: the bands sum back
+to flat magnitude (a plain Butterworth split has a +3 dB bump at the crossover)
+and the branches stay in phase through it so the sum does not notch.
+
+One trap, and it is an easy one: **Web Audio's `Q` is in decibels for `lowpass`
+and `highpass`** and linear for every other filter type. Butterworth is
+`Q = −3.01`, not `0.7071`. Measured, the correct value sums to within
+**−0.17 dB** of flat across 25 Hz–18 kHz; the naive `0.7` puts **+7.4 dB** at
+240 Hz. The test suite asserts both, so the check can be seen to fail.
+
+Each band is set differently for a reason:
+
+- **low** (< 240 Hz) is the chest and the body. Slow attack so a pulse keeps its
+  leading edge, long release — this is glue, and the one band where pumping
+  would be heard as pumping.
+- **mid** (240 Hz – 2 kHz) is where the engine note actually lives, so it gets
+  the gentlest treatment. Squeezing this is what makes a compressed engine sound
+  small.
+- **high** (> 2 kHz) is the harshness band and the reason the stage exists.
+  Everything that stings lives here: residual comb peaks, valvetrain clatter,
+  injector ticks, the turbo's edge band, the waveshaper's high-order products.
+  Low threshold, high ratio, 2 ms attack — anything that spikes up there is
+  caught before it can sting, rather than being EQ'd away permanently. **Loud
+  stays bright; harsh gets held down.**
+
+`setDynamics(0..1)` scales every threshold (and its makeup) together, so the
+stage dials back to nearly transparent without rebuilding anything.
 
 ### Why the pops sounded like a plastic bottle
 
@@ -381,6 +555,19 @@ Three separate causes, none of them level:
 3. **The crackle preset sat at 1.4/3.2 kHz** — an octave and a half above where
    the engine actually lives (centroid ~133 Hz at 3000 rpm), so it registered as
    a separate bright event pasted on top. Moved to 850/1900 Hz.
+
+### Repeated throttle taps machine-gunned the driveline clunk
+
+Tapping the throttle produced a full-force clunk on **every** torque reversal:
+measured at ~25 impacts/second with 79 of them at or near maximum, which reads
+as a stream of clicks rather than a car. Gear-tooth contact is **inelastic** —
+restitution is well under 1, so a driveline being hammered back and forth loses
+energy on each strike and the strikes get progressively weaker. `lashHeat` now
+accumulates per impact and decays over 0.55 s, attenuating repeats, and impacts
+below 0.05 magnitude are dropped entirely rather than spending a voice.
+
+Measured after: 198 clunks → **41**, loud ones 79 → **1**. The first tap still
+lands a proper 0.72 clunk; rapid repeats fade to 0.10.
 
 ### The rev limiter was machine-gunning
 
@@ -441,82 +628,88 @@ curve again for the 2nd harmonic). Worst case across every chassis is now
   different gesture from the blow-off valve. Modelled as an 18–53 Hz gated noise
   chatter that appears only near the boost ceiling.
 
-Plus a third blade harmonic for edge.
+## 3f. The screaming resonance
 
-## 5b. Ambience (`ambience.js`)
+The worst tonal bug in the project, and the one that needed a new kind of test
+to find at all. Symptom: certain engines, at certain rpms, produced a piercing
+high-pitched tone that appeared and vanished as the revs swept past.
 
-Standalone environment bed — takes a context and exposes an output, so both the
-console and the drive scene use it without going through `EngineSim`.
+The cause is a coincidence between two independent series. A feedback waveguide
+is a comb — its peaks sit at multiples of `1/T`, where `T` is the pipe's
+round-trip delay. An engine's harmonics sit at multiples of `f0 = rpm/120`. At
+most rpms the two interleave harmlessly. At the rpm where they **coincide**, one
+harmonic lands exactly on a comb peak while its neighbours fall in the troughs.
 
-- **Rain** is two layers, not one: a bright hiss of drops on glass and metal, and
-  a duller roar off the road. Heavier rain shifts the balance as well as the
-  level, and a slow LFO keeps it from sitting still.
-- **Wind** rises with `speed^1.7` and opens its filter as it does — aerodynamic
-  noise climbs very steeply with velocity, so at a crawl it is a hum and at speed
-  a roar.
-- **Tyre roar** tracks speed for both level and brightness, and gets noticeably
-  louder on a wet road.
-- **Thunder** only fires when it is actually raining hard, on one shared
-  resonant path retriggered by scheduling. The attack is slow because distance
-  smears it completely.
+Measured on the V12 at 8000 rpm — the chain's magnitude response at the
+harmonics either side of the spike:
 
-## 6. Night Drive (`drive.html`)
+| harmonic | frequency | chain response |
+| --- | --- | --- |
+| order 14 | 1867 Hz | −23.6 dB |
+| **order 15** | **2000 Hz** | **−5.9 dB** |
+| order 16 | 2133 Hz | −26.9 dB |
 
-A real-time WebGL2 scene driven by the same `EngineSim` instance, reachable from
-the button in the console header. Still no external libraries — the renderer,
-the matrix maths and every shader are in `src/gl/`.
+A 21 dB spike, sitting 20 semitones above the engine note, present at one rpm
+and gone at the next. **71 % of all radiated power** was landing in the 2–6 kHz
+band where human hearing peaks.
 
-```
-src/gl/gfx.js       WebGL2 layer: mat4, programs, VAOs, instancing, render targets
-src/gl/shaders.js   GLSL: PBR scene, sky, volumetric shafts, bloom, composite
-src/gl/world.js     procedural geometry: road, cars, lamps, barriers, cockpit
-src/gl/renderer.js  pass chain + the chassis dynamics that give it feel
-```
+Why the peak was that sharp is the actual bug. The loop lowpass that models wall
+losses was placed at `f_pipe × (6/damping)` — about **20 surviving modes**. Real
+exhausts do not behave that way: thermoviscous wall losses rise with `√f`, and
+above the first cross-mode cutoff the plane-wave model stops holding at all, so
+a real pipe resolves a handful of modes and then smears into a smooth rolloff.
+Letting it ring in its 20th mode is what gave the comb enough Q to spike.
 
-### Pass chain
+`MODE_SURVIVAL` is now **2.2** — 5 to 8 modes. Measured across 11 engines × 9
+rpm × 3 loads, share of radiated power in 2–6 kHz:
 
-```
-sky (fullscreen)                    ┐
-scene, instanced, forward-lit, HDR  ├→ RGBA16F target
-cockpit (view space, same target)   ┘
-light shafts (raymarched, half res)
-       ↓ bright pass → blur H/V ×2 (quarter res)
-composite: radial blur → chromatic aberration → ACES → vignette → grain
-```
+| constant | worst case | mean | spectral centroid |
+| --- | --- | --- | --- |
+| 6.0 (was) | **71.04 %** | 1.42 % | 278 Hz |
+| 3.0 | 35.44 % | 0.31 % | 213 Hz |
+| **2.2 (now)** | **1.38 %** | 0.04 % | 199 Hz |
 
-- **Lighting** is GGX with a per-frame light list: two headlight spotlights plus
-  up to 32 point lights for oncoming headlamps, tail lights and sodium street
-  lamps. Worth the cost at night, when nearly every surface is lit at a grazing
-  angle by a moving light — exactly where cheaper models fall apart.
-- **Wet road** is not a texture swap. Rain drives roughness down toward 0.055 and
-  metallic up, so the specular lobe genuinely mirrors the lights instead of
-  washing out, with broad noise-driven puddles that pool more than the rest.
-- **Volumetric shafts** are raymarched at half resolution with a per-pixel
-  jitter — what makes headlights read as beams in air rather than as painted
-  patches on the tarmac.
-- **ACES tonemapping** matters more here than anything else: a headlight is
-  genuinely thousands of times brighter than tarmac, and a linear clamp turns
-  every one into a flat white disc.
-- The **cockpit is drawn into the HDR target**, not over the finished frame, so
-  it tonemaps with the world and its gauges feed the bloom like any other light.
-  Instruments are a 2D canvas uploaded as a texture and pushed past 1.0 by the
-  emissive shader, so they glow like real VFD segments.
+17 dB off the worst case for 79 Hz of centroid — the engines stay bright enough
+to keep their character and stop screaming. `test/run.mjs` now asserts every
+engine stays under 4 %, so this cannot silently come back.
 
-### Feel
+Two things are worth taking from this beyond the fix. First, it was invisible to
+every existing test: the graph was correct, every source was started, no
+parameter was out of range, nothing allocated. Second, it did not look like a
+resonance — it looked like brightness, and the instinct to reach for an EQ cut
+would have dulled every engine at every rpm without touching the actual spike.
+`test/spectrum.mjs` exists because measuring was the only way to tell.
 
-`Chassis` sits on top of the drivetrain and supplies everything the audio model
-does not: a body on damped springs that squats under power and dives under
-brakes, rolls into steering, and shivers from two separate sources — tyre roar
-scaled by speed² and engine buzz scaled by rpm and load. Gear engagement and
-driveline lash impacts (`evLash`, `evEngage`) punch the camera directly, so a
-clunk you *hear* is a jolt you *see*. Steering authority falls off as `1/(1+0.1v)`,
-which is what actually makes steering feel heavy at speed. FOV opens 57° → 74°
-with speed.
+## 7. Interface
 
-Controls: `W` throttle, `S` brake, arrows steer, `Q`/`E` shift, `A` auto,
-`C` toggles cockpit/chase camera.
+Blueprint / technical-grid aesthetic — the visual language of engineering
+drawings and instrument panels rather than a consumer dashboard.
 
-**Verified:** all six shader programs compile and link in Chrome, and half-float
-render targets are available, so the HDR path is live. The scene has not been
-looked at by a human — nothing here is a claim about how it looks.
-# Engine_Sim
+- **Engineering-paper ground**: a 10 px fine grid over an 80 px major grid,
+  fixed-attachment so panels sit *on* the drawing rather than float above it.
+- **Crop marks**: every panel carries corner registration ticks, the way a
+  technical drawing is cropped.
+- **Monospace throughout** for data, labels and controls, with tabular numerals
+  so digits do not jitter as values change. Uppercase micro-labels on wide
+  tracking.
+- **Near-monochrome** graphite palette with exactly one signal colour (safety
+  orange) reserved for live/hot state — throttle, redline, half-orders, clutch
+  slip above 50 rpm — plus a technical blue for the secondary FX controls.
+- **Square geometry**: 1 px hairlines, no rounded corners, no soft shadows.
+  Sliders run on ticked tracks with rectangular thumbs; segmented controls
+  invert to solid ink when active.
+- **Motion is mechanical**: 140 ms cubic transitions, no springs or bounce. The
+  only ambient animation is a scan line across the logo block and a pulse on the
+  ignition indicator.
+- **Spec table** with dotted leaders reports the actual profile data — firing
+  order, bank layout, exhaust bank length, Helmholtz frequency.
+
+The instrument is a **semicircular sweep**. A first radial attempt crowded its
+numerals against the sweep band — they sat only 8 px apart — which a screenshot
+made obvious; the fix was not to abandon the dial but to put the tick ring
+(r=130), the numeral ring (r=104) and the sweep band (r=78) on clearly separated
+radii. Graduations are fine at 250 rpm and major at 1000.
+
+Controls are grouped into four tabs — Machine, Voice mix, Tone, EQ & FX — with
+the instrument and telemetry always visible above them.
+Layout verified by screenshot at 1280 px.
