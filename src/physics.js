@@ -130,6 +130,25 @@ export class Drivetrain {
     // Time constant of the launch SLIP decay, seconds — how quickly the driver
     // takes the slip out. Not an actuator spec. See _launchClutch().
     this.launchTime = clamp(opts.launchTime != null ? opts.launchTime : 0.75, 0.15, 4);
+    // rpm/s the driver winds the engine up at during a launch.
+    //
+    // DERIVED from the car, not a constant. The whole point is that there is no
+    // audible step between "engine spinning up" and "engine dragging a car", so
+    // the wind-up rate has to be the rate THIS combination will actually
+    // sustain in 1st — which differs by more than 5x across the presets. A
+    // fixed value is right for one car and guarantees a step for the rest.
+    //
+    //   F = T·ratio₁·η/r    a = F/m    d(gearedRpm)/dt = (a/r)·ratio₁·60/2π
+    //
+    // ×0.55 because peak torque is not available at idle and the road load is
+    // not zero; measured, that lands within ~15 % of the rate each car actually
+    // achieves once the clutch is home.
+    const ratio1 = Math.abs(this.ratios[0] * this.fd) || 1;
+    const wheelForce = engine.peakTorque * ratio1 * this.eff / this.r;
+    const accel = wheelForce / Math.max(1, vehicle.mass);
+    const gearedRate = (accel / this.r) * ratio1 * RPM_PER_RADS;
+    this.launchRate = clamp(
+      opts.launchRate != null ? opts.launchRate : gearedRate * 0.55, 400, 12000);
 
     this.shift = opts.shiftController || new ShiftController({
       type: vehicle.gearbox,
@@ -172,7 +191,6 @@ export class Drivetrain {
     this.launchArmed = true;
     this.launchI = 0;
     this.launchT = 0;      // s since the launch controller took over
-    this.launchPeak = 0;   // highest rpm this launch; the anti-bog ratchet
     this.lockup = 0;             // auto: torque-converter lockup command
     this.bovArm = 0;
     this.boostDump = 0;
@@ -674,8 +692,7 @@ export class Drivetrain {
     const idle = this.engine.idleRpm;
     const geared = this.gearedRpm(this.gear);
     if (!inGear || this.gear === 0) {
-      this.launchI = 0; this.launchT = 0; this.launchPeak = 0;
-      this.launchArmed = true; return 0;
+      this.launchI = 0; this.launchT = 0; this.launchArmed = true; return 0;
     }
 
     // The hold rpm CREEPS UP with road speed instead of being a fixed number.
@@ -705,7 +722,7 @@ export class Drivetrain {
       this.launchArmed = true;
     }
 
-    if (!this.launchArmed) { this.launchI = 0; this.launchT = 0; this.launchPeak = 0; return 1; }
+    if (!this.launchArmed) { this.launchI = 0; this.launchT = 0; return 1; }
 
     // The clutch closes on a SCHEDULE, and the engine speed is then whatever
     // physics says it is. This replaced a PI controller that regulated rpm onto
@@ -732,7 +749,6 @@ export class Drivetrain {
     // what the slip decay should be referenced to.
     if (this.throttle < 0.05 && geared < idle * 0.5) {
       this.launchT = 0;
-      this.launchPeak = 0;
       this.launchI = Math.max(0, this.launchI - h / 0.20);
       // A real car in gear at idle creeps rather than sitting inert.
       return clamp(this.launchI, 0, 0.22);
@@ -751,32 +767,83 @@ export class Drivetrain {
     // is a rising road speed plus a shrinking slip, and lockup arrives when the
     // second runs out. Nothing is ever pinned to a fixed number, which is what
     // "stuck at 3200" was.
+    // The slip target RISES before it decays, and that attack is the fix for
+    // the last remaining artifact.
+    //
+    // With a pure decay the demand starts at its maximum, `geared + slip0`,
+    // which at t = 0 is ~2400 rpm above an idling engine. The controller
+    // therefore commands zero clutch, the engine free-revs at ~11 000 rpm/s
+    // (torque 540 N·m into 0.38 kg·m² of flywheel), overshoots the demand
+    // before the clutch can bite, and gets hauled back down — a jump followed
+    // by a stumble, which is what "jumps to 3200 and sticks" actually is.
+    //
+    // Giving the target a ~0.2 s attack means the demand climbs WITH the engine
+    // from idle instead of waiting above it. The clutch takes up progressively
+    // from the first frame, so the engine is guided up rather than let go and
+    // then caught. `env` is normalised so the peak is still exactly slip0.
     const slip0 = Math.max(300, flare - idle);
-    const targetSlip = slip0 * Math.exp(-this.launchT / this.launchTime);
-    const want = geared + targetSlip;
 
-    // RATCHET. Early on, `geared` is still near zero and rising more slowly
-    // than the slip term decays, so `want` can briefly fall — and a falling
-    // demand is exactly the dip that reads as the engine being dragged back.
-    // Latching the demand at its own maximum makes the launch monotonic BY
-    // CONSTRUCTION: the revs can only ever be asked to go up. Capped at the
-    // flare so the latch cannot run away with a bogged engine.
-    // Latches upward instantly, BLEEDS downward over ~0.45 s. A hard latch
-    // stops dips but then pins the engine: a heavy car's road speed climbs too
-    // slowly for `want` to catch the latched value, so the revs sat on it for
-    // half a second — the same plateau, in a new place. Bleeding turns the
-    // latch into a rate limit on falling demand, which is all it needs to be.
-    const cap = Math.min(want, flare);
-    let peak = this.launchPeak || 0;
-    if (cap > peak) peak = cap;
-    else peak += (cap - peak) * Math.min(1, h / 0.45);
-    this.launchPeak = peak;
-    const targetRpm = Math.max(want, peak);
+    // Slip decays with the car's PROGRESS, not with a wall clock.
+    //
+    // A time-based decay assumes the car is getting on with it. When it is not
+    // — a low-torque engine in a heavy chassis — the slip target shrinks faster
+    // than road speed grows, so the demanded rpm (`geared + slip`) actually
+    // FALLS, and the controller obediently drags the engine down with it.
+    // Measured on i4/supercar: the revs went negative for 0.8 s mid-launch.
+    //
+    // Tying the decay to `geared` makes the demand monotonic by construction:
+    //
+    //   want   = geared + slip0·(1 − geared/(flare·S))
+    //   d/dgeared = 1 − slip0/(flare·S)  >  0   for S > slip0/flare
+    //
+    // so as long as the car is speeding up at all, the demand rises — however
+    // slowly it is doing it. No ratchet, no bleed, no special cases. S = 1.6
+    // leaves the slope at about 0.5, i.e. the engine climbs at roughly half the
+    // rate road speed does, which is what a slipping clutch looks like.
+    const S = 1.8;
+    const progress = clamp(geared / Math.max(1, flare * S), 0, 1);
+    const targetSlip = slip0 * (1 - progress);
+
+    // RATE LIMIT — and this is the one that finally kills "it sticks at 3200".
+    //
+    // The wall was never a hold, it was a DISCONTINUITY. With the clutch open a
+    // V8 flywheel accelerates at ~11 400 rpm/s; once the car is hanging off it,
+    // the revs climb at ~2 500 rpm/s. Those two rates differ by four and a half
+    // times, so however the changeover is arranged, the revs rocket up and then
+    // appear to hit something. Every previous attempt moved WHERE that happened
+    // without removing it.
+    //
+    // So cap the rate the driver winds the engine up at, to something close to
+    // what the car itself will sustain. The engine then rises at one continuous
+    // rate from idle all the way to the redline and there is no changeover to
+    // hear. It is also what a driver does: nobody dumps a clutch at full flare
+    // pulling out of a junction.
+    //
+    // `min` of the two: the ramp binds early and sets the rev rate, the slip
+    // term binds later as road speed catches up, which converges the launch.
+    const rampCap = idle * 1.05 + this.launchRate * this.launchT;
+    const targetRpm = Math.max(idle * 1.05, Math.min(rampCap, geared + targetSlip));
 
     // Positive error = spinning faster than demanded = close the clutch.
     const e = (this.rpm - targetRpm) / targetRpm;
     this.launchI = clamp(this.launchI + 30 * e * h, 0, 1);
-    return clamp(this.launchI + 3.0 * e, 0, 1);
+    const pi = clamp(this.launchI + 3.0 * e, 0, 1);
+
+    // FORCED CONVERGENCE. Holding the engine above the gearing keeps the clutch
+    // partly open, and a partly open clutch transmits only part of the torque —
+    // so a badly matched combination (a 2.0 four in a 1560 kg supercar) could
+    // sit there slipping and accelerating at 650 rpm/s indefinitely, wasting
+    // most of the engine into heat. A real driver's foot comes off the pedal
+    // whether or not the car is impressing them.
+    //
+    // Slow enough (1.2 s) that it converges the last of the slip rather than
+    // snatching — and it YIELDS. If the engine has fallen below what is being
+    // asked of it, forcing the clutch further shut just drags it down harder:
+    // measured on the 1720 kg muscle car, the revs fell at 927 rpm/s through
+    // the back half of the launch. So the ramp only applies while the engine is
+    // keeping up, which is exactly when there is spare capacity to close into.
+    const close = clamp((this.launchT - 0.9) / 1.2, 0, 1);
+    return e < -0.03 ? pi : Math.max(pi, close);
   }
 
   /**

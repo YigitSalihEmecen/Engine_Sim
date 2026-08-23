@@ -364,50 +364,70 @@ A measured upshift:
    350  shuffle  3992    0.09784        0     329
 ```
 
-### Launch behaviour — controlled by SLIP, not by holding an rpm
+### Launch behaviour — read this before touching `_launchClutch`
 
-This has been got wrong three separate times, always the same way: **any
-controller that regulates the engine onto an rpm setpoint holds it at one pitch
-for as long as the clutch slips, and that reads as the engine being stuck.**
+Got wrong **four** times, and each attempt failed in a way the previous test
+could not see. The complaint was always the same sentence: *"it jumps to N rpm
+and gets stuck there."*
 
-The current controller does not have a setpoint. It targets a **slip** that
-decays exponentially from the flare, and the engine speed is then whatever
-physics puts it at:
-
-```
-slip0      = flare − idle                    flare = idle·1.05 + throttle·launchFlareRpm
-targetSlip = slip0 · e^(−t/launchTime)       launchTime = 0.75 s
-want       = gearedRpm + targetSlip          ← a RISING road speed plus a SHRINKING slip
-```
-
-Because the car is accelerating the whole time, `want` rises on its own and
-lockup arrives when the slip term runs out. Nothing is ever pinned.
-
-Two details are load-bearing:
-
-- **The demand ratchets.** Early on `geared` is near zero and rising more slowly
-  than the slip decays, so `want` can briefly fall — and a falling demand is the
-  dip that sounds like the engine being dragged back. `launchPeak` latches the
-  demand upward instantly and bleeds it **down** over 0.45 s, which makes it a
-  rate limit on falling demand rather than a hard floor. A hard latch stopped
-  the dip and then pinned heavy cars for half a second instead — the same
-  plateau in a new place.
-- **Sitting still with the throttle shut is not a launch.** The controller resets
-  while stationary and off-throttle, so flooring it starts from a genuinely open
-  clutch. Without that the integrator winds up during the idle beforehand, the
-  clutch is already half engaged when the throttle arrives, and the engine can
-  never flare.
-
-Measured, WOT from idle, longest stretch in 1st under 250 rpm/s:
-
-| | hold | flat spot |
+| attempt | what it did | why it failed |
 | --- | --- | --- |
-| `launchFlareRpm: 850`, fixed target | 1585 rpm | 0.27 s |
-| flare 2400 + a rising "creep" target | ~3200 rpm | ~1 s (user-reported) |
-| **slip control + bleeding ratchet** | — | **0.00–0.18 s** |
+| fixed hold at `idle·1.05 + 850` | regulated rpm onto a setpoint | held 1585 rpm for 0.27 s |
+| same, flare 2400 + a "creep" term | setpoint that rose with road speed | moved the plateau to 3200 rpm |
+| slip decaying on a clock + ratchet | no setpoint, but a timed decay | demand *fell* on slow cars; revs went negative for 0.8 s |
+| **current** | see below | — |
 
-`launchTime` (0.75 s) is the slip decay constant — how quickly the driver takes
-the slip out. `launchCreep` no longer exists; do not reintroduce it.
+**The fault was never a plateau — it was a DISCONTINUITY IN THE RATE.** With the
+clutch open a V8 flywheel accelerates at ~11 400 rpm/s; hang a 1450 kg car off
+it and that becomes ~2 900. Cross between the two and the revs rocket up and
+then appear to hit a wall, *while still technically rising* — so every
+flat-spot test sailed straight past it. That is why the old tests passed while
+the bug was live.
+
+Three pieces, and all three are load-bearing:
+
+**1. The wind-up rate is derived from the car.** The driver winds the engine up
+at the rate this combination will actually sustain in 1st, so there is no step
+between "engine spinning up" and "engine dragging a car":
+
+```
+F = T·ratio₁·η/r     a = F/m     launchRate = (a/r)·ratio₁·(60/2π) · 0.55
+```
+
+That is 3696 rpm/s for the hatch, 2897 for the sports car, 1377 for the muscle
+car — a 2.7× spread. Any fixed constant is right for one chassis and wrong for
+the rest.
+
+**2. Slip decays with the car's PROGRESS, not with a clock.**
+
+```
+targetRpm = max(idle·1.05, min(rampCap, geared + slip0·(1 − geared/(flare·S))))
+```
+
+`d(want)/d(geared) = 1 − slip0/(flare·S) > 0`, so **the demand rises whenever
+the car is speeding up at all, however slowly**. Monotonic by construction — no
+ratchet, no bleed, no special cases. A time-based decay assumes the car is
+getting on with it; when it is not, the demand falls and the controller drags
+the engine down with it.
+
+`S = 1.8`. Smaller converges sooner but makes the demand's slope shallow enough
+to sag at the bite; larger is flatter but slips longer.
+
+**3. A forced close that yields.** Holding the engine above the gearing keeps
+the clutch part-open, and a part-open clutch transmits part of the torque — a
+badly matched combination could slip indefinitely at 650 rpm/s. So the command
+is floored by a 1.2 s ramp from `launchT = 0.9`… **but only while `e ≥ −0.03`**.
+If the engine has fallen below what is being asked, closing further just drags
+it down harder (measured: −927 rpm/s on the muscle car).
+
+Also: sitting still with the throttle shut is **not** a launch. The controller
+resets while stationary and off-throttle, so flooring it starts from a genuinely
+open clutch — otherwise the integrator winds up during the idle beforehand and
+the clutch is already half engaged when the throttle arrives.
+
+Measured over all **80** engine × vehicle combinations: **zero** have the revs
+go backwards during a launch. `drive.mjs` asserts the rate profile holds
+together (`min/median > 0.35`) rather than looking for flat spots.
 
 ### Exhaust thermal model (drives popping)
 
@@ -662,7 +682,7 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 36 | Popped on **every** lift and every shift | 100 % of lifts fired; every gear change threw a 6-report volley (24 transients across 4 shifts) | stochastic ignition gate on EGT × revs × snap; `burstCount` 6 → 3; shift bang gated on heat and `cutBang` |
 | 37 | Pops sat outside the engine | shared output partly sent to the pipe, so pops kept a big dry component AND clunks were sent down the exhaust | split the voice pool into combustion / mechanical buses |
 | 38 | Crackle was an octave above the engine | `crackle` at 850/1900 Hz against a ~199 Hz centroid after #31 — half of it inside the 2-6 kHz sensitive band | 430/1150 Hz; `bang` 118/780 → 105/520 |
-| 39 | **Launch pinned at ~3200 rpm** | any controller that regulates rpm onto a setpoint holds ONE pitch for the whole slip phase | control **slip**, not rpm; bleeding ratchet on the demand. Flat spot → 0.00-0.18 s |
+| 39 | **Launch "jumps to 3200 and sticks"** | not a plateau — a RATE discontinuity: 11 400 rpm/s free-revving vs 2 900 rpm/s dragging the car. Flat-spot tests could not see it, and passed while it was live | wind-up rate derived per car; slip decays with road-speed PROGRESS not a clock; yielding forced close. **0 of 80** combos now reverse |
 | 40 | Launch integrator could never unwind | one-sided anti-bog wound to its -0.5 floor during the initial flare and stayed pinned, capping the clutch at 0.50 forever | let it recover when there is no sag |
 | 41 | **A hard click on tip-in, lift and every shift** | `clunk` was 1150/3100 Hz, Q 22/16, **0.8 ms** attack — a switch closing, not two castings colliding. Stranded alone in the mix after #31 | 330/1250 Hz, Q 7/6, 3.5 ms; `click` 3200/6400 → 1500/2800 and lvl 0.35 → 0.16, one per shift not two |
 | 42 | Pops went faint fixing #38 | dropping both presets an octave took the crackle's energy above 700 Hz from 71 % → **3 %**; `popDirect` 0.22 left only 8 % of the report in the dry path | midpoint by measurement: 112/680 and 700/1850, `popDirect` 0.75 → 38 % above 700 Hz, 2.3 % in 2-6 kHz |
@@ -761,9 +781,10 @@ Be honest about this with the user; it has been stated throughout.
     must never cross buses — it is hard-wired to one output, so it would come
     out of the wrong place. Add a preset without a `bus` field and it silently
     becomes mechanical.
-20. **Never regulate the launch onto an rpm setpoint.** Three separate attempts
-    produced the same complaint each time ("stuck at N rpm") because that is
-    precisely what a setpoint does while the clutch slips. Control slip. See §4.
+20. **The launch has eaten four attempts. Read §4 before touching it.** Three
+    of the four failed the same way and the tests could not see it, because the
+    audible fault is a discontinuity in the RATE, not a plateau in the value.
+    If you change anything there, measure the rate profile.
 21. **A sub-millisecond attack is a click, not an impact.** Anything above
     ~1 kHz with a fast attack and a high Q will read as a switch closing rather
     than as part of the car. `run.mjs` asserts every preset is ≥ 1.5 ms and

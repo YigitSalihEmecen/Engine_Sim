@@ -124,51 +124,80 @@ ok(!accepted || peak > dBefore + 150, 'downshift blips the throttle to rev-match
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-console.log('\n\x1b[1mstanding start — the engine must never sit on one pitch\x1b[0m');
+console.log('\n\x1b[1mstanding start — the revs must rise at ONE continuous rate\x1b[0m');
 {
   const { Drivetrain } = await import('../src/physics.js');
   const { ENGINE_PROFILES, VEHICLE_PRESETS } = await import('../src/profiles.js');
 
-  // A clutch-slip launch legitimately holds the revs while road speed catches
-  // up. What it must NOT do is hold them at one number long enough to read as
-  // the engine being stuck — which is exactly what a fixed hold target did:
-  // launchFlareRpm was forced to 850, putting a V8's WOT hold at 1585 rpm for
-  // ~0.4 s. It sounded like a bog, not a launch.
+  // THIS TEST EXISTS BECAUSE THE PREVIOUS ONE PASSED WHILE THE BUG WAS PRESENT.
+  //
+  // The complaint was always "it jumps to N rpm and sticks there", and the
+  // obvious thing to measure is a flat spot. That was the wrong quantity: the
+  // fault is a DISCONTINUITY in the rate, not a plateau in the value. With the
+  // clutch open a V8 flywheel accelerates at ~11 400 rpm/s; hanging a 1450 kg
+  // car off it drops that to ~2 900. Cross between the two and the revs rocket
+  // up and then appear to hit a wall — while still, technically, rising, so a
+  // flat-spot test sails straight past it.
+  //
+  // So measure the rate profile and require it to hold together.
   const launch = (engineId, vehId) => {
     const d = new Drivetrain(ENGINE_PROFILES[engineId], VEHICLE_PRESETS[vehId], {});
-    const tr = [];
     let t = 0;
+    // Idle first: flooring it from a standstill is the reported case, and the
+    // controller behaves differently if it has never been at rest.
+    for (let i = 0; i < 60 * 2; i++) { d.setThrottle(0); t += DT; d.step(DT, t); }
+    const tr = [];
     for (let i = 0; i < 60 * 3; i++) {
       d.setThrottle(1);
       t += DT;
       const p = d.step(DT, t);
-      tr.push({ rpm: p.rpm, gear: p.gear });
+      tr.push({ rpm: p.rpm, gear: p.gear, slip: p.clutchSlip });
     }
+    // Only the launch itself: gear 1, up to the moment the clutch is home.
     const g1 = tr.filter(x => x.gear === 1);
-    // Longest run in 1st where rpm moves slower than 250 rpm/s.
-    let worst = 0, cur = 0, at = 0;
-    for (let i = 6; i < g1.length; i++) {
-      const slope = Math.abs(g1[i].rpm - g1[i - 6].rpm) / (6 * DT);
-      if (slope < 250) { cur++; if (cur > worst) { worst = cur; at = g1[i].rpm; } }
-      else cur = 0;
+    let lock = g1.findIndex(x => x.slip < 25);
+    if (lock < 0) lock = g1.length;
+    const win = g1.slice(0, lock);
+
+    const rates = [];
+    for (let i = 6; i < win.length; i += 3) {
+      rates.push((win[i].rpm - win[i - 6].rpm) / (6 * DT));
     }
-    const hold = Math.min(...g1.slice(9).map(x => x.rpm));
-    return { flat: worst / 60, at, hold };
+    // Ignore the first two samples: the engine is coming off the idle governor.
+    const body = rates.slice(2);
+    if (!body.length) return { ok: false };
+    const sorted = [...body].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    return {
+      minRate: Math.min(...body),
+      median,
+      // How far the rate collapses relative to the rate it was running at.
+      collapse: median > 0 ? Math.min(...body) / median : 0,
+      rise: win[win.length - 1].rpm - win[0].rpm,
+      lockS: lock / 60,
+    };
   };
 
-  // 0.20 s, not zero. A heavy car genuinely does hang for a moment as the
-  // clutch takes up — the 1720 kg muscle car sits at ~0.17 s and that is a real
-  // bog, not a stuck note. What this guards against is the half-second-plus
-  // plateau that a fixed hold target produces (0.27 s measured, and worse by
-  // ear because the pitch was not merely slow but perfectly constant).
   for (const v of ['hatch', 'sports', 'supercar', 'muscle']) {
     const r = launch('v8cross', v);
-    ok(r.flat < 0.20, `${v}: no flat spot in 1st at full throttle`,
-       `longest ${r.flat.toFixed(2)} s at ${Math.round(r.at)} rpm`);
-    // A full-throttle launch holds well above idle. 1585 rpm was the bug.
-    ok(r.hold > 1900, `${v}: launch holds at launch revs, not a bog`,
-       `min ${Math.round(r.hold)} rpm`);
+    // The revs must never actually fall during the launch.
+    ok(r.minRate > -200, `${v}: the revs never go backwards during the launch`,
+       `min ${Math.round(r.minRate)} rpm/s`);
+    // ...and the rate must not collapse relative to itself. 0.35 is generous —
+    // the failing versions sat at 0.05-0.15 here.
+    ok(r.collapse > 0.35, `${v}: the rate holds together — no wall`,
+       `min/median ${r.collapse.toFixed(2)}, median ${Math.round(r.median)} rpm/s`);
+    ok(r.rise > 1500 && r.lockS < 2.5, `${v}: the launch actually completes`,
+       `+${Math.round(r.rise)} rpm, clutch home at ${r.lockS.toFixed(2)} s`);
   }
+
+  // The wind-up rate is derived per car, so it has to differ across chassis by
+  // roughly as much as their actual acceleration does.
+  const rates = ['hatch', 'sports', 'muscle'].map(v =>
+    new Drivetrain(ENGINE_PROFILES.v8cross, VEHICLE_PRESETS[v], {}).launchRate);
+  ok(Math.max(...rates) / Math.min(...rates) > 1.3,
+     'the launch wind-up rate is derived from the car, not fixed',
+     rates.map(r => Math.round(r)).join(' / ') + ' rpm/s');
 }
 
 // ---------------------------------------------------------------------------
