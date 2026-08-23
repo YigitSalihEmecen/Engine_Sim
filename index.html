@@ -1,277 +1,1352 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ENGINE SIM — procedural powertrain synthesis</title>
-<style>
-:root{
-  --paper:#f2f2ef;
-  --panel:#fbfbfa;
-  --panel2:#f6f6f3;
-  --ink:#14161a;
-  --ink2:#51565d;
-  --ink3:#8b9097;
-  --ink4:#b3b7bc;
-  --line:#d8d9d4;
-  --line2:#c3c5bf;
-  --hair:rgba(20,22,26,.10);
-  --acc:#e8481f;
-  --acc2:#1663c7;
-  --ok:#2b8a4e;
-  --warn:#c98a00;
-  --mono:ui-monospace,"SF Mono",SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
-  --sans:"Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  --t:.14s cubic-bezier(.3,.7,.4,1);
-}
-*{box-sizing:border-box;}
-html,body{margin:0;}
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ENGINE SIM — procedural powertrain synthesis</title>
+  <style>
+    :root {
+      --paper: #f2f2ef;
+      --panel: #fbfbfa;
+      --panel2: #f6f6f3;
+      --ink: #14161a;
+      --ink2: #51565d;
+      --ink3: #8b9097;
+      --ink4: #b3b7bc;
+      --line: #d8d9d4;
+      --line2: #c3c5bf;
+      --hair: rgba(20, 22, 26, .10);
+      --acc: #e8481f;
+      --acc2: #1663c7;
+      --ok: #2b8a4e;
+      --warn: #c98a00;
+      --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+      --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --t: .14s cubic-bezier(.3, .7, .4, 1);
+    }
 
-/* boot guard — see the markup near the top of <body> */
-#boot{
-  position:fixed;inset:0;z-index:999;
-  display:flex;align-items:center;justify-content:center;padding:24px;
-  background:var(--paper);
-}
-#boot[hidden]{display:none;}
-.boot-card{
-  max-width:620px;width:100%;
-  background:var(--panel);border:1px solid var(--line2);
-  padding:26px 28px;
-}
-.boot-card h1{
-  margin:0 0 14px;font:600 13px/1.3 var(--mono);
-  letter-spacing:.14em;text-transform:uppercase;color:var(--acc);
-}
-.boot-card p{margin:0 0 14px;font:13px/1.6 var(--sans);color:var(--ink2);}
-.boot-card pre{
-  margin:0 0 14px;padding:14px 16px;overflow-x:auto;
-  background:var(--panel2);border:1px solid var(--line);
-  font:12px/1.7 var(--mono);color:var(--ink);white-space:pre-wrap;
-}
-.boot-note{font-size:12px !important;color:var(--ink3) !important;}
-body{
-  color:var(--ink);min-height:100vh;padding:0 0 70px;
-  font:13px/1.5 var(--sans);
-  -webkit-font-smoothing:antialiased;
-  background-color:var(--paper);
-  /* engineering paper: 8 mm fine grid over an 80 mm major grid */
-  background-image:
-    linear-gradient(var(--hair) 1px,transparent 1px),
-    linear-gradient(90deg,var(--hair) 1px,transparent 1px),
-    linear-gradient(rgba(20,22,26,.045) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(20,22,26,.045) 1px,transparent 1px);
-  background-size:80px 80px,80px 80px,10px 10px,10px 10px;
-  background-position:-1px -1px,-1px -1px,-1px -1px,-1px -1px;
-  background-attachment:fixed;
-}
-.wrap{max-width:1180px;margin:0 auto;padding:0 20px;}
+    * {
+      box-sizing: border-box;
+    }
 
-/* ============ type ============ */
-.mono{font-family:var(--mono);}
-.lbl{font:600 9.5px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink3);}
-.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+    html,
+    body {
+      margin: 0;
+    }
 
-/* ============ header ============ */
-header{
-  display:flex;align-items:stretch;gap:0;margin:20px 0 16px;
-  border:1px solid var(--line2);background:var(--panel);position:relative;
-}
-.mark{
-  width:52px;flex:none;border-right:1px solid var(--line2);display:grid;place-items:center;
-  background:var(--ink);position:relative;overflow:hidden;
-}
-.mark svg{width:26px;height:26px;}
-.mark::after{content:"";position:absolute;left:0;right:0;height:1px;background:var(--acc);
-  top:0;animation:scan 3.4s cubic-bezier(.5,0,.5,1) infinite;}
-@keyframes scan{0%{top:0;opacity:0}12%{opacity:1}88%{opacity:1}100%{top:100%;opacity:0}}
+    /* boot guard — see the markup near the top of <body> */
+    #boot {
+      position: fixed;
+      inset: 0;
+      z-index: 999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: var(--paper);
+    }
 
-.htitle{padding:11px 16px;display:flex;flex-direction:column;justify-content:center;
-  border-right:1px solid var(--line);}
-.htitle h1{margin:0;font:650 14px/1.15 var(--sans);letter-spacing:.02em;}
-.htitle .sub{font:10px/1.4 var(--mono);color:var(--ink3);letter-spacing:.04em;margin-top:2px;}
-.hspec{flex:1;display:flex;align-items:center;gap:0;overflow:hidden;}
-.hspec .cell{padding:0 15px;border-right:1px solid var(--line);align-self:stretch;
-  display:flex;flex-direction:column;justify-content:center;min-width:0;}
-.hspec .cell .v{font:600 12px var(--mono);margin-top:3px;white-space:nowrap;}
-.hact{display:flex;align-items:center;gap:8px;padding:0 12px;}
+    #boot[hidden] {
+      display: none;
+    }
 
-/* ============ buttons ============ */
-.btn{
-  font:600 10.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
-  padding:10px 15px;border:1px solid var(--line2);background:var(--panel2);color:var(--ink2);
-  cursor:pointer;transition:var(--t);position:relative;text-decoration:none;
-  display:inline-flex;align-items:center;gap:7px;
-}
-.btn:hover{border-color:var(--ink3);color:var(--ink);background:#fff;}
-.btn:active{transform:translateY(1px);}
-.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff;}
-.btn.pri:hover{background:#d13d16;border-color:#d13d16;color:#fff;}
-.btn.on{background:var(--ink);border-color:var(--ink);color:#fff;}
-.btn .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.85;}
-.btn.pri .dot{animation:pulse 1.5s ease-in-out infinite;}
-@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+    .boot-card {
+      max-width: 620px;
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--line2);
+      padding: 26px 28px;
+    }
 
-/* ============ panels ============ */
-.panel{background:var(--panel);border:1px solid var(--line2);position:relative;}
-/* technical-drawing crop marks at the corners */
-.panel::before,.panel::after{content:"";position:absolute;width:7px;height:7px;pointer-events:none;}
-.panel::before{top:-1px;left:-1px;border-top:1px solid var(--ink);border-left:1px solid var(--ink);}
-.panel::after{bottom:-1px;right:-1px;border-bottom:1px solid var(--ink);border-right:1px solid var(--ink);}
-.phead{
-  display:flex;align-items:center;gap:10px;padding:8px 12px;
-  border-bottom:1px solid var(--line);background:var(--panel2);
-}
-.phead .id{font:600 9px var(--mono);letter-spacing:.12em;color:#fff;background:var(--ink);
-  padding:3px 6px;}
-.phead h2{margin:0;font:600 10px var(--mono);letter-spacing:.15em;text-transform:uppercase;
-  color:var(--ink2);}
-.phead .r{margin-left:auto;font:9.5px var(--mono);color:var(--ink4);letter-spacing:.08em;}
-.pbody{padding:16px;}
+    .boot-card h1 {
+      margin: 0 0 14px;
+      font: 600 13px/1.3 var(--mono);
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--acc);
+    }
 
-/* ============ layout ============ */
-.hero{display:grid;grid-template-columns:322px 1fr;gap:14px;margin-bottom:14px;}
-@media(max-width:900px){.hero{grid-template-columns:1fr;}}
+    .boot-card p {
+      margin: 0 0 14px;
+      font: 13px/1.6 var(--sans);
+      color: var(--ink2);
+    }
 
-/* ============ instrument ============ */
-canvas#tach{width:288px;height:212px;display:block;margin:0 auto;}
-.phase{display:grid;grid-template-columns:repeat(6,1fr);border-top:1px solid var(--line);}
-.phase span{
-  text-align:center;font:600 8px var(--mono);letter-spacing:.08em;text-transform:uppercase;
-  padding:7px 0;color:var(--ink4);border-right:1px solid var(--line);transition:var(--t);
-  position:relative;
-}
-.phase span:last-child{border-right:0;}
-.phase span.on{background:var(--acc);color:#fff;}
+    .boot-card pre {
+      margin: 0 0 14px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      background: var(--panel2);
+      border: 1px solid var(--line);
+      font: 12px/1.7 var(--mono);
+      color: var(--ink);
+      white-space: pre-wrap;
+    }
 
-/* ============ readouts ============ */
-.reads{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line);}
-@media(max-width:620px){.reads{grid-template-columns:repeat(2,1fr);}}
-.read{padding:12px 14px;border-right:1px solid var(--line);position:relative;}
-.read:last-child{border-right:0;}
-.read .v{font:600 26px/1 var(--mono);font-variant-numeric:tabular-nums;margin-top:6px;
-  letter-spacing:-.03em;}
-.read .v s{text-decoration:none;font-size:10px;color:var(--ink3);margin-left:3px;font-weight:500;}
-.read.hot .v{color:var(--acc);}
+    .boot-note {
+      font-size: 12px !important;
+      color: var(--ink3) !important;
+    }
 
-/* ============ bars ============ */
-.bars{padding:13px 14px;border-bottom:1px solid var(--line);}
-.bar{display:flex;align-items:center;gap:11px;margin-bottom:9px;}
-.bar:last-child{margin-bottom:0;}
-.bar .lbl{width:52px;flex:none;}
-.bar .tr{
-  flex:1;height:10px;background:
-    repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 10%);
-  border:1px solid var(--line);position:relative;overflow:hidden;
-}
-.bar .tr i{position:absolute;inset:0 auto 0 0;width:0;background:var(--ink);transition:width .06s linear;}
-.bar.a .tr i{background:var(--acc);}
-.bar.b .tr i{background:var(--acc2);}
-.bar.y .tr i{background:var(--warn);}
-.bar .pc{width:30px;text-align:right;font:10px var(--mono);color:var(--ink3);
-  font-variant-numeric:tabular-nums;}
+    body {
+      color: var(--ink);
+      min-height: 100vh;
+      padding: 0 0 70px;
+      font: 13px/1.5 var(--sans);
+      -webkit-font-smoothing: antialiased;
+      background-color: var(--paper);
+      /* engineering paper: 8 mm fine grid over an 80 mm major grid */
+      background-image:
+        linear-gradient(var(--hair) 1px, transparent 1px),
+        linear-gradient(90deg, var(--hair) 1px, transparent 1px),
+        linear-gradient(rgba(20, 22, 26, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(20, 22, 26, .045) 1px, transparent 1px);
+      background-size: 80px 80px, 80px 80px, 10px 10px, 10px 10px;
+      background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px;
+      background-attachment: fixed;
+    }
 
-/* ============ spec table ============ */
-.spec{display:grid;grid-template-columns:1fr 1fr;}
-.spec .r{display:flex;align-items:baseline;gap:8px;padding:7px 14px;
-  border-bottom:1px solid var(--line);border-right:1px solid var(--line);}
-.spec .r:nth-child(2n){border-right:0;}
-.spec .r .k{font:9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);
-  white-space:nowrap;}
-.spec .r .d{flex:1;border-bottom:1px dotted var(--line2);transform:translateY(-3px);}
-.spec .r .v{font:600 11px var(--mono);white-space:nowrap;}
+    .wrap {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
 
-/* ============ tabs ============ */
-.tabs{display:flex;border:1px solid var(--line2);border-bottom:0;background:var(--panel2);
-  overflow-x:auto;}
-.tabs button{
-  border:0;border-right:1px solid var(--line);background:transparent;cursor:pointer;
-  padding:11px 20px;font:600 10px var(--mono);letter-spacing:.13em;text-transform:uppercase;
-  color:var(--ink3);transition:var(--t);position:relative;white-space:nowrap;
-}
-.tabs button::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
-  background:var(--acc);transform:scaleX(0);transition:transform var(--t);}
-.tabs button:hover{color:var(--ink2);background:#fff;}
-.tabs button.on{color:var(--ink);background:var(--panel);}
-.tabs button.on::after{transform:scaleX(1);}
-.tabs .idx{color:var(--ink4);margin-right:7px;}
-.pane{display:none;}
-.pane.on{display:block;animation:in .2s ease-out;}
-@keyframes in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+    /* ============ type ============ */
+    .mono {
+      font-family: var(--mono);
+    }
 
-/* ============ controls ============ */
-.g2{display:grid;grid-template-columns:1fr 1fr;gap:0 26px;}
-@media(max-width:760px){.g2{grid-template-columns:1fr;}}
-.ctl{display:flex;align-items:center;gap:12px;padding:7px 0;border-bottom:1px dotted var(--line);}
-.ctl .lbl{width:82px;flex:none;}
-.ctl .val{width:42px;text-align:right;flex:none;font:600 10.5px var(--mono);color:var(--ink2);
-  font-variant-numeric:tabular-nums;}
+    .lbl {
+      font: 600 9.5px/1 var(--mono);
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--ink3);
+    }
 
-select{
-  flex:1;appearance:none;border:1px solid var(--line2);background:#fff;color:var(--ink);
-  padding:8px 30px 8px 10px;font:600 11px var(--mono);letter-spacing:.02em;cursor:pointer;
-  transition:var(--t);
-  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 5L9 0' fill='%2351565d'/%3E%3C/svg%3E");
-  background-repeat:no-repeat;background-position:right 10px center;
-}
-select:hover{border-color:var(--ink3);}
-select:focus{outline:none;border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc);}
+    .num {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -.01em;
+    }
 
-input[type=range]{
-  -webkit-appearance:none;appearance:none;flex:1;height:18px;background:transparent;margin:0;
-  cursor:ew-resize;
-}
-input[type=range]::-webkit-slider-runnable-track{
-  height:8px;border:1px solid var(--line2);
-  background:repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 10%);
-}
-input[type=range]::-webkit-slider-thumb{
-  -webkit-appearance:none;width:9px;height:16px;margin-top:-5px;background:var(--ink);
-  border:0;cursor:ew-resize;transition:background var(--t);
-}
-input[type=range]:hover::-webkit-slider-thumb{background:var(--acc);}
-input[type=range]::-moz-range-track{height:8px;border:1px solid var(--line2);
-  background:repeating-linear-gradient(90deg,var(--line) 0 1px,transparent 1px 10%);}
-input[type=range]::-moz-range-thumb{width:9px;height:16px;border-radius:0;background:var(--ink);border:0;}
-input[type=range].b::-webkit-slider-thumb{background:var(--acc2);}
-input[type=range].b:hover::-webkit-slider-thumb{background:var(--acc);}
+    /* ============ header ============ */
+    header {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      margin: 20px 0 16px;
+      border: 1px solid var(--line2);
+      background: var(--panel);
+      position: relative;
+    }
 
-.seg{display:inline-flex;border:1px solid var(--line2);}
-.seg button{border:0;border-right:1px solid var(--line2);background:var(--panel2);
-  padding:8px 14px;font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;
-  color:var(--ink3);cursor:pointer;transition:var(--t);}
-.seg button:last-child{border-right:0;}
-.seg button:hover{color:var(--ink);background:#fff;}
-.seg button.on{background:var(--ink);color:#fff;}
+    .mark {
+      width: 52px;
+      flex: none;
+      border-right: 1px solid var(--line2);
+      display: grid;
+      place-items: center;
+      background: var(--ink);
+      position: relative;
+      overflow: hidden;
+    }
 
-/* ============ EQ ============ */
-.eq{display:flex;gap:0;border:1px solid var(--line2);background:
-  repeating-linear-gradient(0deg,var(--line) 0 1px,transparent 1px 20%);}
-.eqb{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 4px 9px;
-  border-right:1px solid var(--line);}
-.eqb:last-child{border-right:0;}
-.eqb input{writing-mode:vertical-rl;direction:rtl;-webkit-appearance:slider-vertical;
-  appearance:slider-vertical;width:20px;height:104px;flex:none;accent-color:var(--acc);cursor:ns-resize;}
-.eqb .n{font:600 10px var(--mono);color:var(--ink);font-variant-numeric:tabular-nums;}
-.eqb .f{font:9.5px var(--mono);color:var(--ink3);}
-.eqb .t{font:600 8px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ink4);}
+    .mark svg {
+      width: 26px;
+      height: 26px;
+    }
 
-canvas#orders{width:100%;height:132px;display:block;border:1px solid var(--line);}
+    .mark::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: var(--acc);
+      top: 0;
+      animation: scan 3.4s cubic-bezier(.5, 0, .5, 1) infinite;
+    }
 
-.note{font:10.5px/1.65 var(--mono);color:var(--ink3);margin-top:12px;padding-left:11px;
-  border-left:2px solid var(--line2);}
-.note b{color:var(--ink2);font-weight:600;}
+    @keyframes scan {
+      0% {
+        top: 0;
+        opacity: 0
+      }
 
-footer{margin-top:18px;border:1px solid var(--line2);background:var(--panel);
-  padding:11px 14px;display:flex;gap:16px;flex-wrap:wrap;align-items:center;}
-kbd{font:9.5px var(--mono);background:var(--ink);color:#fff;padding:3px 6px;letter-spacing:.06em;}
-footer .f{font:10px var(--mono);color:var(--ink3);letter-spacing:.03em;}
-#status{font:10px var(--mono);color:var(--acc);letter-spacing:.05em;}
-</style>
+      12% {
+        opacity: 1
+      }
+
+      88% {
+        opacity: 1
+      }
+
+      100% {
+        top: 100%;
+        opacity: 0
+      }
+    }
+
+    .htitle {
+      padding: 11px 16px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-right: 1px solid var(--line);
+    }
+
+    .htitle h1 {
+      margin: 0;
+      font: 650 14px/1.15 var(--sans);
+      letter-spacing: .02em;
+    }
+
+    .htitle .sub {
+      font: 10px/1.4 var(--mono);
+      color: var(--ink3);
+      letter-spacing: .04em;
+      margin-top: 2px;
+    }
+
+    .hspec {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      overflow: hidden;
+    }
+
+    .hspec .cell {
+      padding: 0 15px;
+      border-right: 1px solid var(--line);
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .hspec .cell .v {
+      font: 600 12px var(--mono);
+      margin-top: 3px;
+      white-space: nowrap;
+    }
+
+    .hact {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+    }
+
+    /* ============ buttons ============ */
+    .btn {
+      font: 600 10.5px/1 var(--mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      padding: 10px 15px;
+      border: 1px solid var(--line2);
+      background: var(--panel2);
+      color: var(--ink2);
+      cursor: pointer;
+      transition: var(--t);
+      position: relative;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .btn:hover {
+      border-color: var(--ink3);
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn.pri {
+      background: var(--acc);
+      border-color: var(--acc);
+      color: #fff;
+    }
+
+    .btn.pri:hover {
+      background: #d13d16;
+      border-color: #d13d16;
+      color: #fff;
+    }
+
+    .btn.on {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+    }
+
+    .btn .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: .85;
+    }
+
+    .btn.pri .dot {
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: .35
+      }
+
+      50% {
+        opacity: 1
+      }
+    }
+
+    /* ============ panels ============ */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line2);
+      position: relative;
+    }
+
+    /* technical-drawing crop marks at the corners */
+    .panel::before,
+    .panel::after {
+      content: "";
+      position: absolute;
+      width: 7px;
+      height: 7px;
+      pointer-events: none;
+    }
+
+    .panel::before {
+      top: -1px;
+      left: -1px;
+      border-top: 1px solid var(--ink);
+      border-left: 1px solid var(--ink);
+    }
+
+    .panel::after {
+      bottom: -1px;
+      right: -1px;
+      border-bottom: 1px solid var(--ink);
+      border-right: 1px solid var(--ink);
+    }
+
+    .phead {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel2);
+    }
+
+    .phead .id {
+      font: 600 9px var(--mono);
+      letter-spacing: .12em;
+      color: #fff;
+      background: var(--ink);
+      padding: 3px 6px;
+    }
+
+    .phead h2 {
+      margin: 0;
+      font: 600 10px var(--mono);
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--ink2);
+    }
+
+    .phead .r {
+      margin-left: auto;
+      font: 9.5px var(--mono);
+      color: var(--ink4);
+      letter-spacing: .08em;
+    }
+
+    .pbody {
+      padding: 16px;
+    }
+
+    /* ============ layout ============ */
+    .hero {
+      display: grid;
+      grid-template-columns: 322px 1fr;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    @media(max-width:900px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* ============ instrument ============ */
+    canvas#tach {
+      width: 288px;
+      height: 212px;
+      display: block;
+      margin: 0 auto;
+    }
+
+    .phase {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      border-top: 1px solid var(--line);
+    }
+
+    .phase span {
+      text-align: center;
+      font: 600 8px var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 7px 0;
+      color: var(--ink4);
+      border-right: 1px solid var(--line);
+      transition: var(--t);
+      position: relative;
+    }
+
+    .phase span:last-child {
+      border-right: 0;
+    }
+
+    .phase span.on {
+      background: var(--acc);
+      color: #fff;
+    }
+
+    /* ============ readouts ============ */
+    .reads {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-bottom: 1px solid var(--line);
+    }
+
+    @media(max-width:620px) {
+      .reads {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+
+    .read {
+      padding: 12px 14px;
+      border-right: 1px solid var(--line);
+      position: relative;
+    }
+
+    .read:last-child {
+      border-right: 0;
+    }
+
+    .read .v {
+      font: 600 26px/1 var(--mono);
+      font-variant-numeric: tabular-nums;
+      margin-top: 6px;
+      letter-spacing: -.03em;
+    }
+
+    .read .v s {
+      text-decoration: none;
+      font-size: 10px;
+      color: var(--ink3);
+      margin-left: 3px;
+      font-weight: 500;
+    }
+
+    .read.hot .v {
+      color: var(--acc);
+    }
+
+    /* ============ bars ============ */
+    .bars {
+      padding: 13px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .bar {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      margin-bottom: 9px;
+    }
+
+    .bar:last-child {
+      margin-bottom: 0;
+    }
+
+    .bar .lbl {
+      width: 52px;
+      flex: none;
+    }
+
+    .bar .tr {
+      flex: 1;
+      height: 10px;
+      background:
+        repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 10%);
+      border: 1px solid var(--line);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .bar .tr i {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0;
+      background: var(--ink);
+      transition: width .06s linear;
+    }
+
+    .bar.a .tr i {
+      background: var(--acc);
+    }
+
+    .bar.b .tr i {
+      background: var(--acc2);
+    }
+
+    .bar.y .tr i {
+      background: var(--warn);
+    }
+
+    .bar .pc {
+      width: 30px;
+      text-align: right;
+      font: 10px var(--mono);
+      color: var(--ink3);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ============ spec table ============ */
+    .spec {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .spec .r {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 7px 14px;
+      border-bottom: 1px solid var(--line);
+      border-right: 1px solid var(--line);
+    }
+
+    .spec .r:nth-child(2n) {
+      border-right: 0;
+    }
+
+    .spec .r .k {
+      font: 9.5px var(--mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--ink3);
+      white-space: nowrap;
+    }
+
+    .spec .r .d {
+      flex: 1;
+      border-bottom: 1px dotted var(--line2);
+      transform: translateY(-3px);
+    }
+
+    .spec .r .v {
+      font: 600 11px var(--mono);
+      white-space: nowrap;
+    }
+
+    /* ============ tabs ============ */
+    .tabs {
+      display: flex;
+      border: 1px solid var(--line2);
+      border-bottom: 0;
+      background: var(--panel2);
+      overflow-x: auto;
+    }
+
+    .tabs button {
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      cursor: pointer;
+      padding: 11px 20px;
+      font: 600 10px var(--mono);
+      letter-spacing: .13em;
+      text-transform: uppercase;
+      color: var(--ink3);
+      transition: var(--t);
+      position: relative;
+      white-space: nowrap;
+    }
+
+    .tabs button::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -1px;
+      height: 2px;
+      background: var(--acc);
+      transform: scaleX(0);
+      transition: transform var(--t);
+    }
+
+    .tabs button:hover {
+      color: var(--ink2);
+      background: #fff;
+    }
+
+    .tabs button.on {
+      color: var(--ink);
+      background: var(--panel);
+    }
+
+    .tabs button.on::after {
+      transform: scaleX(1);
+    }
+
+    .tabs .idx {
+      color: var(--ink4);
+      margin-right: 7px;
+    }
+
+    .pane {
+      display: none;
+    }
+
+    .pane.on {
+      display: block;
+      animation: in .2s ease-out;
+    }
+
+    @keyframes in {
+      from {
+        opacity: 0;
+        transform: translateY(4px)
+      }
+
+      to {
+        opacity: 1;
+        transform: none
+      }
+    }
+
+    /* ============ controls ============ */
+    .g2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 26px;
+    }
+
+    @media(max-width:760px) {
+      .g2 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .ctl {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 7px 0;
+      border-bottom: 1px dotted var(--line);
+    }
+
+    .ctl .lbl {
+      width: 82px;
+      flex: none;
+    }
+
+    .ctl .val {
+      width: 42px;
+      text-align: right;
+      flex: none;
+      font: 600 10.5px var(--mono);
+      color: var(--ink2);
+      font-variant-numeric: tabular-nums;
+    }
+
+    select {
+      flex: 1;
+      appearance: none;
+      border: 1px solid var(--line2);
+      background: #fff;
+      color: var(--ink);
+      padding: 8px 30px 8px 10px;
+      font: 600 11px var(--mono);
+      letter-spacing: .02em;
+      cursor: pointer;
+      transition: var(--t);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 5L9 0' fill='%2351565d'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+    }
+
+    select:hover {
+      border-color: var(--ink3);
+    }
+
+    select:focus {
+      outline: none;
+      border-color: var(--acc);
+      box-shadow: inset 0 0 0 1px var(--acc);
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      flex: 1;
+      height: 18px;
+      background: transparent;
+      margin: 0;
+      cursor: ew-resize;
+    }
+
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 8px;
+      border: 1px solid var(--line2);
+      background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 10%);
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 9px;
+      height: 16px;
+      margin-top: -5px;
+      background: var(--ink);
+      border: 0;
+      cursor: ew-resize;
+      transition: background var(--t);
+    }
+
+    input[type=range]:hover::-webkit-slider-thumb {
+      background: var(--acc);
+    }
+
+    input[type=range]::-moz-range-track {
+      height: 8px;
+      border: 1px solid var(--line2);
+      background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 10%);
+    }
+
+    input[type=range]::-moz-range-thumb {
+      width: 9px;
+      height: 16px;
+      border-radius: 0;
+      background: var(--ink);
+      border: 0;
+    }
+
+    input[type=range].b::-webkit-slider-thumb {
+      background: var(--acc2);
+    }
+
+    input[type=range].b:hover::-webkit-slider-thumb {
+      background: var(--acc);
+    }
+
+    .seg {
+      display: inline-flex;
+      border: 1px solid var(--line2);
+    }
+
+    .seg button {
+      border: 0;
+      border-right: 1px solid var(--line2);
+      background: var(--panel2);
+      padding: 8px 14px;
+      font: 600 10px var(--mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--ink3);
+      cursor: pointer;
+      transition: var(--t);
+    }
+
+    .seg button:last-child {
+      border-right: 0;
+    }
+
+    .seg button:hover {
+      color: var(--ink);
+      background: #fff;
+    }
+
+    .seg button.on {
+      background: var(--ink);
+      color: #fff;
+    }
+
+    /* ============ EQ ============ */
+    .eq {
+      display: flex;
+      gap: 0;
+      border: 1px solid var(--line2);
+      background:
+        repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 20%);
+    }
+
+    .eqb {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 4px 9px;
+      border-right: 1px solid var(--line);
+    }
+
+    .eqb:last-child {
+      border-right: 0;
+    }
+
+    .eqb input {
+      writing-mode: vertical-rl;
+      direction: rtl;
+      -webkit-appearance: slider-vertical;
+      appearance: slider-vertical;
+      width: 20px;
+      height: 104px;
+      flex: none;
+      accent-color: var(--acc);
+      cursor: ns-resize;
+    }
+
+    .eqb .n {
+      font: 600 10px var(--mono);
+      color: var(--ink);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .eqb .f {
+      font: 9.5px var(--mono);
+      color: var(--ink3);
+    }
+
+    .eqb .t {
+      font: 600 8px var(--mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--ink4);
+    }
+
+    canvas#orders {
+      width: 100%;
+      height: 132px;
+      display: block;
+      border: 1px solid var(--line);
+    }
+
+    .note {
+      font: 10.5px/1.65 var(--mono);
+      color: var(--ink3);
+      margin-top: 12px;
+      padding-left: 11px;
+      border-left: 2px solid var(--line2);
+    }
+
+    .note b {
+      color: var(--ink2);
+      font-weight: 600;
+    }
+
+    footer {
+      margin-top: 18px;
+      border: 1px solid var(--line2);
+      background: var(--panel);
+      padding: 11px 14px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    kbd {
+      font: 9.5px var(--mono);
+      background: var(--ink);
+      color: #fff;
+      padding: 3px 6px;
+      letter-spacing: .06em;
+    }
+
+    footer .f {
+      font: 10px var(--mono);
+      color: var(--ink3);
+      letter-spacing: .03em;
+    }
+
+    #status {
+      font: 10px var(--mono);
+      color: var(--acc);
+      letter-spacing: .05em;
+    }
+
+    /* =====================================================================
+       DRIVE MODE — the touch cockpit
+       =====================================================================
+       A full-viewport overlay: gear gate under one thumb, pedals under the
+       other, telemetry between them. Laid out for a phone held in landscape,
+       which is the only way two thumbs reach both sides at once.
+
+       Sizing is entirely in vmin/clamp so it is resolution-independent: the
+       same layout has to work on a 320 px-wide phone and a 1400 px tablet
+       without a breakpoint per device. Nothing here is in px except hairlines.
+       ===================================================================== */
+    #drive {
+      position: fixed;
+      inset: 0;
+      z-index: 900;
+      display: none;
+      background: var(--paper);
+      background-image:
+        linear-gradient(var(--hair) 1px, transparent 1px),
+        linear-gradient(90deg, var(--hair) 1px, transparent 1px);
+      background-size: 28px 28px, 28px 28px;
+      /* Notches and home indicators. Without this the gate knob ends up under
+         the rounded corner on a phone and cannot be grabbed. */
+      padding:
+        max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+        max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+      /* Every child is a control: no scrolling, no text selection, no
+         double-tap zoom, no long-press callout. */
+      touch-action: none;
+      overscroll-behavior: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body.driving {
+      overflow: hidden;
+    }
+
+    body.driving #drive {
+      display: grid;
+    }
+
+    /* Landscape (and anything wide): gate | telemetry | pedals.
+       `dvh` so the layout does not jump when mobile browser chrome hides. */
+    #drive {
+      height: 100vh;
+      height: 100dvh;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.5fr) minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-areas:
+        "bar bar bar"
+        "left mid right";
+      gap: clamp(6px, 1.2vmin, 14px);
+    }
+
+    #drive.swap {
+      grid-template-areas:
+        "bar bar bar"
+        "right mid left";
+    }
+
+    .dv-bar {
+      grid-area: bar;
+      display: flex;
+      align-items: center;
+      gap: clamp(6px, 1.4vmin, 12px);
+      min-height: 0;
+    }
+
+    .dv-left {
+      grid-area: left;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .dv-mid {
+      grid-area: mid;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: clamp(4px, 1vmin, 10px);
+    }
+
+    .dv-right {
+      grid-area: right;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      gap: clamp(6px, 1.6vmin, 16px);
+    }
+
+    /* ---- top bar ---- */
+    .dv-btn {
+      font: 600 clamp(8px, 1.5vmin, 11px)/1 var(--mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      padding: clamp(7px, 1.5vmin, 11px) clamp(9px, 2vmin, 15px);
+      border: 1px solid var(--line2);
+      background: var(--panel);
+      color: var(--ink2);
+      cursor: pointer;
+      touch-action: manipulation;
+      white-space: nowrap;
+    }
+
+    .dv-btn.on {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+    }
+
+    .dv-btn.pri {
+      background: var(--acc);
+      border-color: var(--acc);
+      color: #fff;
+    }
+
+    .dv-spacer {
+      flex: 1;
+    }
+
+    .dv-tag {
+      font: 600 clamp(8px, 1.4vmin, 10px)/1 var(--mono);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--ink3);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+
+    /* ---- centre telemetry ---- */
+    .dv-read {
+      background: var(--panel);
+      border: 1px solid var(--line2);
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      gap: clamp(4px, 1vmin, 10px);
+      padding: clamp(4px, 1vmin, 10px);
+      min-height: 0;
+    }
+
+    .dv-rpm {
+      flex: 1;
+      flex-direction: column;
+      /* In a column flex the cross axis is horizontal, so the inherited
+         `align-items: baseline` from .dv-read was pinning the number to the
+         left edge. Both axes have to be set explicitly here. */
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .dv-rpm b {
+      font: 600 clamp(30px, 9vmin, 84px)/0.95 var(--mono);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -.03em;
+    }
+
+    .dv-rpm i {
+      font: 600 clamp(7px, 1.3vmin, 10px)/1 var(--mono);
+      font-style: normal;
+      letter-spacing: .18em;
+      color: var(--ink3);
+      margin-top: .5em;
+    }
+
+    .dv-rpm.hot b {
+      color: var(--acc);
+    }
+
+    /* rev bar — LEDs, sized off the container so it never overflows */
+    .dv-leds {
+      display: grid;
+      grid-template-columns: repeat(20, 1fr);
+      gap: clamp(1px, .35vmin, 3px);
+      height: clamp(8px, 2.2vmin, 18px);
+      flex: none;
+    }
+
+    .dv-leds i {
+      background: var(--line);
+      transition: background .05s linear;
+    }
+
+    .dv-leds i.on {
+      background: var(--ink2);
+    }
+
+    .dv-leds i.on.red {
+      background: var(--acc);
+    }
+
+    .dv-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: clamp(4px, 1vmin, 10px);
+      flex: none;
+    }
+
+    .dv-cell {
+      background: var(--panel);
+      border: 1px solid var(--line2);
+      padding: clamp(4px, 1.1vmin, 10px);
+      text-align: center;
+      min-width: 0;
+    }
+
+    .dv-cell span {
+      display: block;
+      font: 600 clamp(6.5px, 1.15vmin, 9px)/1 var(--mono);
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--ink3);
+    }
+
+    .dv-cell b {
+      display: block;
+      font: 600 clamp(13px, 3.4vmin, 30px)/1 var(--mono);
+      font-variant-numeric: tabular-nums;
+      margin-top: .35em;
+      letter-spacing: -.02em;
+    }
+
+    /* ---- gear gate ---- */
+    .gate {
+      width: 100%;
+      height: 100%;
+      background: var(--panel);
+      border: 1px solid var(--line2);
+      display: block;
+      touch-action: none;
+    }
+
+    .gate .slot {
+      stroke: var(--line);
+      stroke-linecap: round;
+      fill: none;
+    }
+
+    .gate .gnum {
+      font: 600 7px var(--mono);
+      fill: var(--ink3);
+      text-anchor: middle;
+      dominant-baseline: central;
+    }
+
+    .gate .gnum.lit {
+      fill: var(--acc);
+    }
+
+    .gate .stick {
+      stroke: var(--ink3);
+      stroke-width: 1.6;
+      stroke-linecap: round;
+    }
+
+    .gate .knob {
+      fill: var(--ink);
+      stroke: var(--panel);
+      stroke-width: 1.5;
+    }
+
+    .gate.grabbed .knob {
+      fill: var(--acc);
+    }
+
+    .gate.refuse .knob {
+      fill: var(--warn);
+    }
+
+    /* ---- pedals ---- */
+    .pedal {
+      flex: 1;
+      position: relative;
+      background: var(--panel);
+      border: 1px solid var(--line2);
+      overflow: hidden;
+      cursor: pointer;
+      touch-action: none;
+      min-width: 0;
+    }
+
+    .pedal .fill {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 0%;
+      background: var(--ink2);
+      transition: height .05s linear;
+    }
+
+    .pedal.gas .fill {
+      background: var(--ink);
+    }
+
+    .pedal.brk .fill {
+      background: var(--acc);
+    }
+
+    /* Pinned to the top, because the fill grows from the bottom — the label is
+       then always on the panel colour and never fighting the fill for contrast.
+       (A mix-blend-mode trick works until it meets a browser where it does not.) */
+    .pedal .cap {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: clamp(6px, 1.6vmin, 12px) 2px;
+      font: 600 clamp(8px, 1.7vmin, 12px)/1 var(--mono);
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--ink3);
+      pointer-events: none;
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      height: 100%;
+      justify-content: flex-start;
+    }
+
+    .pedal.down {
+      border-color: var(--ink);
+    }
+
+    /* ---- paddles ---- */
+    .dv-paddles {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: clamp(4px, 1vmin, 10px);
+      flex: none;
+    }
+
+    .paddle {
+      background: var(--panel);
+      border: 1px solid var(--line2);
+      color: var(--ink2);
+      font: 600 clamp(11px, 2.6vmin, 20px)/1 var(--mono);
+      padding: clamp(6px, 1.6vmin, 13px);
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .paddle:active,
+    .paddle.down {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+    }
+
+    /* ---- portrait: same controls, stacked, thumbs at the bottom ---- */
+    @media (orientation: portrait) {
+      #drive {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr) minmax(0, 1.15fr);
+        grid-template-areas:
+          "bar bar"
+          "mid mid"
+          "left right";
+      }
+
+      #drive.swap {
+        grid-template-areas:
+          "bar bar"
+          "mid mid"
+          "right left";
+      }
+
+      .dv-rpm b {
+        font-size: clamp(34px, 13vw, 92px);
+      }
+
+      .dv-cell b {
+        font-size: clamp(15px, 5.5vw, 34px);
+      }
+    }
+
+    /* Very short landscape (small phone rotated): drop the secondary cells so
+       the gate and pedals keep their height rather than being crushed. */
+    @media (orientation: landscape) and (max-height: 380px) {
+      .dv-row {
+        display: none;
+      }
+    }
+
+    /* The keyboard hint bar is meaningless without a keyboard. */
+    @media (pointer: coarse) {
+      footer .f:not(:last-child) {
+        display: none;
+      }
+    }
+
+    /* ---- console layout on small screens ---- */
+    @media (max-width: 760px) {
+      .wrap {
+        padding: 0 12px;
+      }
+
+      header {
+        flex-wrap: wrap;
+        margin: 12px 0;
+      }
+
+      .htitle {
+        flex: 1;
+      }
+
+      .hspec {
+        order: 3;
+        flex-basis: 100%;
+        border-top: 1px solid var(--line);
+      }
+
+      .hspec .cell {
+        flex: 1;
+        padding: 8px 10px;
+      }
+
+      .hact {
+        padding: 0 10px 0 0;
+      }
+    }
+
+    @media (max-width: 460px) {
+      .htitle {
+        padding: 9px 12px;
+      }
+
+      .htitle h1 {
+        font-size: 12.5px;
+      }
+
+      .htitle .sub {
+        display: none;
+      }
+
+      .mark {
+        width: 42px;
+      }
+    }
+  </style>
 </head>
+
 <body>
 
-<!-- Boot guard.
+  <!-- Boot guard.
      ES modules are fetched with CORS semantics, so opening this file straight
      off the disk gives it an opaque `file://` origin, every import is blocked,
      and the page renders as a silent, dead shell that looks exactly like a
@@ -279,585 +1354,957 @@ footer .f{font:10px var(--mono);color:var(--ink3);letter-spacing:.03em;}
      first minute with this, so it is detected explicitly and named. Kept as a
      CLASSIC script, not a module: if modules cannot load, a module cannot be
      the thing that tells you so. -->
-<div id="boot" hidden>
-  <div class="boot-card">
-    <h1>Engine Sim did not start</h1>
-    <p id="bootWhy"></p>
-    <pre id="bootFix"></pre>
-    <p class="boot-note" id="bootNote"></p>
-  </div>
-</div>
-<script>
-(function () {
-  var el = document.getElementById('boot');
-  var why = document.getElementById('bootWhy');
-  var fix = document.getElementById('bootFix');
-  var note = document.getElementById('bootNote');
-  var shown = false;
-
-  function show(reason, command, extra) {
-    if (shown) return;
-    shown = true;
-    why.textContent = reason;
-    fix.textContent = command;
-    note.textContent = extra || '';
-    el.hidden = false;
-  }
-
-  if (location.protocol === 'file:') {
-    show(
-      'This page was opened directly from the disk. It is built from ES modules, '
-      + 'which browsers refuse to load over file:// — so none of the code ran. '
-      + 'It needs to be served over http://.',
-      'cd ' + 'engine_sim\nnpm start\n\n# or, without npm:\nnode tools/serve.mjs\n'
-      + '\n# then open:\nhttp://localhost:8000',
-      'Any static server works. python3 -m http.server 8000 is equivalent.');
-    return;
-  }
-
-  // Anything else that stops the module evaluating — a syntax error, a missing
-  // file, a bad MIME type from a misconfigured server.
-  window.addEventListener('error', function (e) {
-    if (window.__ENGINE_BOOTED) return;
-    show('The app failed to load a module.',
-         String((e && (e.message || e.type)) || 'unknown error'),
-         'Full details are in the browser console.');
-  }, true);
-
-  // Belt and braces: if nothing has reported success in a few seconds,
-  // something went wrong quietly.
-  setTimeout(function () {
-    if (!window.__ENGINE_BOOTED) {
-      show('The app did not finish starting.',
-           'Check the browser console for the first red error.',
-           'If this page is served by something other than tools/serve.mjs, make '
-           + 'sure it sends .js files as text/javascript.');
-    }
-  }, 5000);
-})();
-</script>
-
-<div class="wrap">
-
-<header class="panel">
-  <div class="mark">
-    <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.3">
-      <circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3.1"/>
-      <path d="M12 1.6v2.6M12 19.8v2.6M1.6 12h2.6M19.8 12h2.6"/>
-      <path d="M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M19.4 4.6l-1.9 1.9M6.5 17.5l-1.9 1.9"
-            stroke-opacity=".5"/>
-    </svg>
-  </div>
-  <div class="htitle">
-    <h1>ENGINE SIM</h1>
-    <div class="sub">PROCEDURAL POWERTRAIN SYNTHESIS</div>
-  </div>
-  <div class="hspec">
-    <div class="cell"><span class="lbl">Unit</span><span class="v" id="hEngine">—</span></div>
-    <div class="cell"><span class="lbl">Chassis</span><span class="v" id="hChassis">—</span></div>
-    <div class="cell"><span class="lbl">Voices</span><span class="v" id="hVoices">—</span></div>
-  </div>
-  <div class="hact">
-    <span id="status"></span>
-    <button id="power" class="btn pri"><i class="dot"></i>Ignition</button>
-  </div>
-</header>
-
-<div class="hero">
-  <!-- instrument -->
-  <div class="panel">
-    <div class="phead"><span class="id">01</span><h2>Instrument</h2>
-      <span class="r" id="instrR">—</span></div>
-    <div style="padding:14px 0 10px"><canvas id="tach" width="576" height="420"></canvas></div>
-    <div class="phase" id="phase"></div>
-  </div>
-
-  <!-- telemetry -->
-  <div class="panel">
-    <div class="phead"><span class="id">02</span><h2>Telemetry</h2>
-      <span class="r">live · 60 Hz</span></div>
-    <div class="reads">
-      <div class="read"><span class="lbl">Crank</span><div class="v num" id="rpm">0<s>rpm</s></div></div>
-      <div class="read"><span class="lbl">Road</span><div class="v num" id="kmh">0<s>km/h</s></div></div>
-      <div class="read"><span class="lbl">Total ratio</span><div class="v num" id="ratio">—<s>:1</s></div></div>
-      <div class="read" id="slipCell"><span class="lbl">Clutch slip</span><div class="v num" id="slip">0<s>rpm</s></div></div>
+  <div id="boot" hidden>
+    <div class="boot-card">
+      <h1>Engine Sim did not start</h1>
+      <p id="bootWhy"></p>
+      <pre id="bootFix"></pre>
+      <p class="boot-note" id="bootNote"></p>
     </div>
-    <div class="bars">
-      <div class="bar a"><span class="lbl">Throttle</span><div class="tr"><i id="mThr"></i></div><span class="pc" id="pThr">0</span></div>
-      <div class="bar b"><span class="lbl">Brake</span><div class="tr"><i id="mBrk"></i></div><span class="pc" id="pBrk">0</span></div>
-      <div class="bar y" id="boostRow"><span class="lbl">Boost</span><div class="tr"><i id="mBst"></i></div><span class="pc" id="pBst">0</span></div>
-    </div>
-    <div class="spec" id="spec"></div>
-    <div style="padding:12px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <div class="seg">
-        <button id="autoBtn" class="on">Auto</button><button id="manBtn">Manual</button>
+  </div>
+  <script>
+    (function () {
+      var el = document.getElementById('boot');
+      var why = document.getElementById('bootWhy');
+      var fix = document.getElementById('bootFix');
+      var note = document.getElementById('bootNote');
+      var shown = false;
+
+      function show(reason, command, extra) {
+        if (shown) return;
+        shown = true;
+        why.textContent = reason;
+        fix.textContent = command;
+        note.textContent = extra || '';
+        el.hidden = false;
+      }
+
+      if (location.protocol === 'file:') {
+        show(
+          'This page was opened directly from the disk. It is built from ES modules, '
+          + 'which browsers refuse to load over file:// — so none of the code ran. '
+          + 'It needs to be served over http://.',
+          'cd ' + 'engine_sim\nnpm start\n\n# or, without npm:\nnode tools/serve.mjs\n'
+          + '\n# then open:\nhttp://localhost:8000',
+          'Any static server works. python3 -m http.server 8000 is equivalent.');
+        return;
+      }
+
+      // Anything else that stops the module evaluating — a syntax error, a missing
+      // file, a bad MIME type from a misconfigured server.
+      window.addEventListener('error', function (e) {
+        if (window.__ENGINE_BOOTED) return;
+        show('The app failed to load a module.',
+          String((e && (e.message || e.type)) || 'unknown error'),
+          'Full details are in the browser console.');
+      }, true);
+
+      // Belt and braces: if nothing has reported success in a few seconds,
+      // something went wrong quietly.
+      setTimeout(function () {
+        if (!window.__ENGINE_BOOTED) {
+          show('The app did not finish starting.',
+            'Check the browser console for the first red error.',
+            'If this page is served by something other than tools/serve.mjs, make '
+            + 'sure it sends .js files as text/javascript.');
+        }
+      }, 5000);
+    })();
+  </script>
+
+  <div class="wrap">
+
+    <header class="panel">
+      <div class="mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.3">
+          <circle cx="12" cy="12" r="8.2" />
+          <circle cx="12" cy="12" r="3.1" />
+          <path d="M12 1.6v2.6M12 19.8v2.6M1.6 12h2.6M19.8 12h2.6" />
+          <path d="M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M19.4 4.6l-1.9 1.9M6.5 17.5l-1.9 1.9" stroke-opacity=".5" />
+        </svg>
       </div>
-      <button class="btn" id="dn">↓ Down</button>
-      <button class="btn" id="up">↑ Up</button>
-      <div class="seg" style="margin-left:auto">
-        <button id="pExt" class="on">Exterior</button><button id="pInt">Cabin</button>
+      <div class="htitle">
+        <h1>ENGINE SIM</h1>
+        <div class="sub">PROCEDURAL POWERTRAIN SYNTHESIS</div>
       </div>
-    </div>
-  </div>
-</div>
+      <div class="hspec">
+        <div class="cell"><span class="lbl">Unit</span><span class="v" id="hEngine">—</span></div>
+        <div class="cell"><span class="lbl">Chassis</span><span class="v" id="hChassis">—</span></div>
+        <div class="cell"><span class="lbl">Voices</span><span class="v" id="hVoices">—</span></div>
+      </div>
+      <div class="hact">
+        <span id="status"></span>
+        <button id="driveBtn" class="btn">Drive</button>
+        <button id="power" class="btn pri"><i class="dot"></i>Ignition</button>
+      </div>
+    </header>
 
-<div class="tabs" id="tabs">
-  <button data-p="machine" class="on"><span class="idx">A</span>Machine</button>
-  <button data-p="mix"><span class="idx">B</span>Voice mix</button>
-  <button data-p="tone"><span class="idx">C</span>Tone</button>
-  <button data-p="fx"><span class="idx">D</span>EQ &amp; FX</button>
-</div>
-
-<div class="panel" style="border-top:0">
-  <div class="pbody">
-
-    <div class="pane on" data-p="machine">
-      <div class="g2">
-        <div>
-          <div class="ctl"><span class="lbl">Engine</span><select id="engine"></select></div>
-          <div class="ctl"><span class="lbl">Chassis</span><select id="vehicle"></select></div>
-          <div class="note">Firing geometry drives everything. A bank that fires at uneven
-            intervals produces <b>half-orders</b> — that is the burble. Compare
-            <b>V8 cross-plane</b> against <b>V8 flat-plane</b>.</div>
+    <div class="hero">
+      <!-- instrument -->
+      <div class="panel">
+        <div class="phead"><span class="id">01</span>
+          <h2>Instrument</h2>
+          <span class="r" id="instrR">—</span>
         </div>
-        <div>
-          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
-            <span class="lbl">Order spectrum</span>
-            <span class="r" id="ordMeta" style="font:9.5px var(--mono);color:var(--ink4);
+        <div style="padding:14px 0 10px"><canvas id="tach" width="576" height="420"></canvas></div>
+        <div class="phase" id="phase"></div>
+      </div>
+
+      <!-- telemetry -->
+      <div class="panel">
+        <div class="phead"><span class="id">02</span>
+          <h2>Telemetry</h2>
+          <span class="r">live · 60 Hz</span>
+        </div>
+        <div class="reads">
+          <div class="read"><span class="lbl">Crank</span>
+            <div class="v num" id="rpm">0<s>rpm</s></div>
+          </div>
+          <div class="read"><span class="lbl">Road</span>
+            <div class="v num" id="kmh">0<s>km/h</s></div>
+          </div>
+          <div class="read"><span class="lbl">Total ratio</span>
+            <div class="v num" id="ratio">—<s>:1</s></div>
+          </div>
+          <div class="read" id="slipCell"><span class="lbl">Clutch slip</span>
+            <div class="v num" id="slip">0<s>rpm</s></div>
+          </div>
+        </div>
+        <div class="bars">
+          <div class="bar a"><span class="lbl">Throttle</span>
+            <div class="tr"><i id="mThr"></i></div><span class="pc" id="pThr">0</span>
+          </div>
+          <div class="bar b"><span class="lbl">Brake</span>
+            <div class="tr"><i id="mBrk"></i></div><span class="pc" id="pBrk">0</span>
+          </div>
+          <div class="bar y" id="boostRow"><span class="lbl">Boost</span>
+            <div class="tr"><i id="mBst"></i></div><span class="pc" id="pBst">0</span>
+          </div>
+        </div>
+        <div class="spec" id="spec"></div>
+        <div style="padding:12px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <div class="seg">
+            <button id="autoBtn" class="on">Auto</button><button id="manBtn">Manual</button>
+          </div>
+          <button class="btn" id="dn">↓ Down</button>
+          <button class="btn" id="up">↑ Up</button>
+          <div class="seg" style="margin-left:auto">
+            <button id="pExt" class="on">Exterior</button><button id="pInt">Cabin</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button data-p="machine" class="on"><span class="idx">A</span>Machine</button>
+      <button data-p="mix"><span class="idx">B</span>Voice mix</button>
+      <button data-p="tone"><span class="idx">C</span>Tone</button>
+      <button data-p="fx"><span class="idx">D</span>EQ &amp; FX</button>
+    </div>
+
+    <div class="panel" style="border-top:0">
+      <div class="pbody">
+
+        <div class="pane on" data-p="machine">
+          <div class="g2">
+            <div>
+              <div class="ctl"><span class="lbl">Engine</span><select id="engine"></select></div>
+              <div class="ctl"><span class="lbl">Chassis</span><select id="vehicle"></select></div>
+              <div class="note">Firing geometry drives everything. A bank that fires at uneven
+                intervals produces <b>half-orders</b> — that is the burble. Compare
+                <b>V8 cross-plane</b> against <b>V8 flat-plane</b>.
+              </div>
+            </div>
+            <div>
+              <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+                <span class="lbl">Order spectrum</span>
+                <span class="r" id="ordMeta" style="font:9.5px var(--mono);color:var(--ink4);
               letter-spacing:.05em;margin-left:auto"></span>
-          </div>
-          <canvas id="orders" width="1240" height="264"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <div class="pane" data-p="mix">
-      <div class="g2" id="mix"></div>
-      <div class="note">Balance between synthesis voices. Transients route mostly through the
-        exhaust waveguides, so <b>Pops</b> and <b>Exhaust</b> interact.</div>
-    </div>
-
-    <div class="pane" data-p="tone">
-      <div class="g2">
-        <div>
-          <div class="ctl"><span class="lbl">Rumble</span>
-            <input id="rum" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="rumN"></span></div>
-          <div class="ctl"><span class="lbl">Brightness</span>
-            <input id="bri" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="briN"></span></div>
-        </div>
-        <div>
-          <div class="ctl"><span class="lbl">Pop depth</span>
-            <input id="popD" type="range" min="0" max="2" step="0.01" value="1.05"><span class="val" id="popDN"></span></div>
-          <div class="ctl"><span class="lbl">Dynamics</span>
-            <input id="dyn" type="range" min="0" max="1" step="0.01" value="1"><span class="val" id="dynN"></span></div>
-          <div class="ctl"><span class="lbl">Master</span>
-            <input id="vol" type="range" min="0" max="1" step="0.01" value="0.7"><span class="val" id="volN"></span></div>
-        </div>
-      </div>
-      <div class="note">Rumble lifts the 145 Hz shelf and the 78 Hz body bump. Pop depth sets how
-        much transient energy is fed back through the exhaust waveguides. Dynamics drives a
-        three-band compressor split at 240 Hz and 2 kHz — the low band glues, the high band
-        holds down anything that would sting.</div>
-      <div class="ctl" style="margin-top:10px"><span class="lbl">Reduction</span>
-        <span class="val" id="dynMeter" style="font:10px var(--mono);color:var(--ink4)"></span></div>
-    </div>
-
-    <div class="pane" data-p="fx">
-      <div class="g2">
-        <div>
-          <div style="display:flex;align-items:baseline;margin-bottom:9px">
-            <span class="lbl">Equaliser</span>
-            <span style="margin-left:auto;font:9.5px var(--mono);color:var(--ink4)">±18 dB</span>
-          </div>
-          <div class="eq" id="eq"></div>
-          <div style="display:flex;gap:8px;margin-top:12px">
-            <button class="btn" id="eqFlat">Flat</button>
-            <button class="btn" id="fxOff">Bypass</button>
+              </div>
+              <canvas id="orders" width="1240" height="264"></canvas>
+            </div>
           </div>
         </div>
-        <div>
-          <div class="lbl" style="display:block;margin-bottom:9px">Space</div>
-          <div class="ctl"><span class="lbl">Reverb</span>
-            <input id="rvMix" class="b" type="range" min="0" max="1" step="0.01" value="0.14"><span class="val" id="rvMixN"></span></div>
-          <div class="ctl"><span class="lbl">Size</span>
-            <input id="rvSize" class="b" type="range" min="0.05" max="1" step="0.01" value="0.32"><span class="val" id="rvSizeN"></span></div>
-          <div class="ctl"><span class="lbl">Damping</span>
-            <input id="rvDamp" class="b" type="range" min="800" max="14000" step="100" value="4200"><span class="val" id="rvDampN"></span></div>
-          <div class="ctl"><span class="lbl">Width</span>
-            <input id="width" class="b" type="range" min="0" max="1" step="0.01" value="0.35"><span class="val" id="widthN"></span></div>
-          <div class="note">Width is mono-sum safe — the delayed copies carry opposite polarity and
-            cancel exactly when summed.</div>
+
+        <div class="pane" data-p="mix">
+          <div class="g2" id="mix"></div>
+          <div class="note">Balance between synthesis voices. Transients route mostly through the
+            exhaust waveguides, so <b>Pops</b> and <b>Exhaust</b> interact.</div>
         </div>
+
+        <div class="pane" data-p="tone">
+          <div class="g2">
+            <div>
+              <div class="ctl"><span class="lbl">Rumble</span>
+                <input id="rum" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="rumN"></span>
+              </div>
+              <div class="ctl"><span class="lbl">Brightness</span>
+                <input id="bri" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="briN"></span>
+              </div>
+            </div>
+            <div>
+              <div class="ctl"><span class="lbl">Pop depth</span>
+                <input id="popD" type="range" min="0" max="2" step="0.01" value="1.05"><span class="val"
+                  id="popDN"></span>
+              </div>
+              <div class="ctl"><span class="lbl">Dynamics</span>
+                <input id="dyn" type="range" min="0" max="1" step="0.01" value="1"><span class="val" id="dynN"></span>
+              </div>
+              <div class="ctl"><span class="lbl">Master</span>
+                <input id="vol" type="range" min="0" max="1" step="0.01" value="0.7"><span class="val" id="volN"></span>
+              </div>
+            </div>
+          </div>
+          <div class="note">Rumble lifts the 145 Hz shelf and the 78 Hz body bump. Pop depth sets how
+            much transient energy is fed back through the exhaust waveguides. Dynamics drives a
+            three-band compressor split at 240 Hz and 2 kHz — the low band glues, the high band
+            holds down anything that would sting.</div>
+          <div class="ctl" style="margin-top:10px"><span class="lbl">Reduction</span>
+            <span class="val" id="dynMeter" style="font:10px var(--mono);color:var(--ink4)"></span>
+          </div>
+        </div>
+
+        <div class="pane" data-p="fx">
+          <div class="g2">
+            <div>
+              <div style="display:flex;align-items:baseline;margin-bottom:9px">
+                <span class="lbl">Equaliser</span>
+                <span style="margin-left:auto;font:9.5px var(--mono);color:var(--ink4)">±18 dB</span>
+              </div>
+              <div class="eq" id="eq"></div>
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <button class="btn" id="eqFlat">Flat</button>
+                <button class="btn" id="fxOff">Bypass</button>
+              </div>
+            </div>
+            <div>
+              <div class="lbl" style="display:block;margin-bottom:9px">Space</div>
+              <div class="ctl"><span class="lbl">Reverb</span>
+                <input id="rvMix" class="b" type="range" min="0" max="1" step="0.01" value="0.14"><span class="val"
+                  id="rvMixN"></span>
+              </div>
+              <div class="ctl"><span class="lbl">Size</span>
+                <input id="rvSize" class="b" type="range" min="0.05" max="1" step="0.01" value="0.32"><span class="val"
+                  id="rvSizeN"></span>
+              </div>
+              <div class="ctl"><span class="lbl">Damping</span>
+                <input id="rvDamp" class="b" type="range" min="800" max="14000" step="100" value="4200"><span
+                  class="val" id="rvDampN"></span>
+              </div>
+              <div class="ctl"><span class="lbl">Width</span>
+                <input id="width" class="b" type="range" min="0" max="1" step="0.01" value="0.35"><span class="val"
+                  id="widthN"></span>
+              </div>
+              <div class="note">Width is mono-sum safe — the delayed copies carry opposite polarity and
+                cancel exactly when summed.</div>
+            </div>
+          </div>
+        </div>
+
+
       </div>
-    </div>
-
 
     </div>
-
   </div>
-</div>
 
-<footer>
-  <span class="f"><kbd>W</kbd> throttle</span>
-  <span class="f"><kbd>S</kbd> brake</span>
-  <span class="f"><kbd>E</kbd> up</span>
-  <span class="f"><kbd>Q</kbd> down</span>
-  <span class="f"><kbd>A</kbd> auto</span>
-  <span class="f"><kbd>C</kbd> cabin</span>
-  <span class="f"><kbd>SPC</kbd> run</span>
-  <span class="f" style="margin-left:auto">Lift above 3000 rpm after a hard run for bangs ·
-    <span id="turboHint"></span></span>
-</footer>
-</div>
+  <footer>
+    <span class="f"><kbd>W</kbd> throttle</span>
+    <span class="f"><kbd>S</kbd> brake</span>
+    <span class="f"><kbd>E</kbd> up</span>
+    <span class="f"><kbd>Q</kbd> down</span>
+    <span class="f"><kbd>A</kbd> auto</span>
+    <span class="f"><kbd>C</kbd> cabin</span>
+    <span class="f"><kbd>SPC</kbd> run</span>
+    <span class="f" style="margin-left:auto">Lift above 3000 rpm after a hard run for bangs ·
+      <span id="turboHint"></span></span>
+  </footer>
+  </div>
 
-<script type="module">
-import { EngineSim, ENGINE_PROFILES, VEHICLE_PRESETS } from './src/engine-sim.js';
-import { orderSpectrum } from './src/pulse.js';
-import { bankAngles } from './src/profiles.js';
-import { EQ } from './src/fx.js';
+  <!-- ===================================================================
+       DRIVE MODE. A real H-gate you drag between gears with one thumb, and
+       pedals under the other. The gate is an SVG with a viewBox, so it is
+       resolution-independent and needs no devicePixelRatio handling.
+       =================================================================== -->
+  <div id="drive">
+    <div class="dv-bar">
+      <button class="dv-btn" id="dvExit">&larr; Console</button>
+      <button class="dv-btn pri" id="dvPower">Ignition</button>
+      <button class="dv-btn" id="dvAuto">Auto</button>
+      <div class="dv-spacer"></div>
+      <span class="dv-tag" id="dvTag">—</span>
+      <button class="dv-btn" id="dvSwap" title="Swap which side the gate is on">Swap sides</button>
+    </div>
 
-const $ = id => document.getElementById(id);
-const sim = new EngineSim(null, { engine:'v8cross', vehicle:'sports', volume:0.7 });
-window.sim = sim;
+    <div class="dv-left">
+      <svg class="gate" id="gate" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"
+        aria-label="Gear gate">
+        <g id="gateSlots"></g>
+        <g id="gateNums"></g>
+        <line id="gateStick" class="stick" x1="50" y1="50" x2="50" y2="50" />
+        <circle id="gateKnob" class="knob" cx="50" cy="50" r="9" />
+      </svg>
+    </div>
 
-/* tabs */
-$('tabs').onclick = e => {
-  const b = e.target.closest('button'); if (!b) return;
-  for (const x of $('tabs').children) x.classList.toggle('on', x === b);
-  for (const p of document.querySelectorAll('.pane')) p.classList.toggle('on', p.dataset.p === b.dataset.p);
-};
+    <div class="dv-mid">
+      <div class="dv-read dv-rpm" id="dvRpmCell">
+        <b id="dvRpm">0</b><i>RPM</i>
+      </div>
+      <div class="dv-leds" id="dvLeds"></div>
+      <div class="dv-row">
+        <div class="dv-cell"><span>km/h</span><b id="dvKmh">0</b></div>
+        <div class="dv-cell"><span>Gear</span><b id="dvGear">N</b></div>
+        <div class="dv-cell"><span>Boost</span><b id="dvBoost">—</b></div>
+      </div>
+      <div class="dv-paddles">
+        <button class="paddle" id="dvDown">− DOWN</button>
+        <button class="paddle" id="dvUp">UP +</button>
+      </div>
+    </div>
 
-/* machine */
-// Built from the public listings rather than the profile tables, so this is
-// also a check that a host project can populate a picker without importing
-// anything internal.
-for (const e of EngineSim.engines()) $('engine').add(new Option(e.label, e.id, false, e.id==='v8cross'));
-for (const v of EngineSim.vehicles()) $('vehicle').add(new Option(v.label, v.id, false, v.id==='sports'));
-$('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); sync(); };
-$('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); };
+    <div class="dv-right">
+      <div class="pedal brk" id="pedBrake">
+        <div class="fill"></div>
+        <div class="cap">Brake</div>
+      </div>
+      <div class="pedal gas" id="pedGas">
+        <div class="fill"></div>
+        <div class="cap">Throttle</div>
+      </div>
+    </div>
+  </div>
 
-function sync(){
-  const p = ENGINE_PROFILES[sim.engineId], st = sim.getState();
-  $('boostRow').style.display = p.turbo ? '' : 'none';
-  $('hEngine').textContent = p.cylinders + ' CYL · ' + (p.turbo ? 'TURBO' : 'NA');
-  $('hChassis').textContent = st.gearbox.toUpperCase() + ' · ' + st.gearCount + 'SP';
-  $('hVoices').textContent = Object.keys(sim.mix).length + ' BUS · ' + p.banks.length + ' BANK';
-  $('instrR').textContent = (p.redlineRpm/1000).toFixed(1) + 'k limit';
-  const row = (k,v) => `<div class="r"><span class="k">${k}</span><span class="d"></span><span class="v">${v}</span></div>`;
-  $('spec').innerHTML =
-    row('Firing order', p.firingOrder.join('-')) +
-    row('Bank layout', p.banks.length===2 ? 'twin, ' + p.banks[0].length + '+' + p.banks[1].length : 'single') +
-    row('Idle / limit', p.idleRpm + ' / ' + p.redlineRpm + ' rpm') +
-    row('Peak torque', p.peakTorque + ' N·m @ ' + p.peakTorqueRpm) +
-    row('Exhaust bank', p.exhaust.bank.toFixed(2) + ' m') +
-    row('Intake helm.', p.intake.helmholtz + ' Hz');
-}
+  <script type="module">
+    import { EngineSim, ENGINE_PROFILES, VEHICLE_PRESETS } from './src/engine-sim.js';
+    import { orderSpectrum } from './src/pulse.js';
+    import { bankAngles } from './src/profiles.js';
+    import { EQ } from './src/fx.js';
 
-/* equaliser */
-EQ.BANDS.forEach((b,i)=>{
-  const d = document.createElement('div');
-  d.className = 'eqb';
-  d.innerHTML = `<span class="n">0</span>
+    const $ = id => document.getElementById(id);
+    const sim = new EngineSim(null, { engine: 'v8cross', vehicle: 'sports', volume: 0.7 });
+    window.sim = sim;
+
+    /* tabs */
+    $('tabs').onclick = e => {
+      const b = e.target.closest('button'); if (!b) return;
+      for (const x of $('tabs').children) x.classList.toggle('on', x === b);
+      for (const p of document.querySelectorAll('.pane')) p.classList.toggle('on', p.dataset.p === b.dataset.p);
+    };
+
+    /* machine */
+    // Built from the public listings rather than the profile tables, so this is
+    // also a check that a host project can populate a picker without importing
+    // anything internal.
+    for (const e of EngineSim.engines()) $('engine').add(new Option(e.label, e.id, false, e.id === 'v8cross'));
+    for (const v of EngineSim.vehicles()) $('vehicle').add(new Option(v.label, v.id, false, v.id === 'sports'));
+    $('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); sync(); };
+    // Gear COUNT changes with the chassis (5, 6 or 7 here), so the gate has to
+    // be rebuilt or the lever would offer gears the gearbox does not have.
+    $('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); buildGate(); };
+
+    const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+    function sync() {
+      const p = ENGINE_PROFILES[sim.engineId], st = sim.getState();
+      $('boostRow').style.display = p.turbo ? '' : 'none';
+      $('hEngine').textContent = p.cylinders + ' CYL · ' + (p.turbo ? 'TURBO' : 'NA');
+      $('hChassis').textContent = st.gearbox.toUpperCase() + ' · ' + st.gearCount + 'SP';
+      $('hVoices').textContent = Object.keys(sim.mix).length + ' BUS · ' + p.banks.length + ' BANK';
+      $('instrR').textContent = (p.redlineRpm / 1000).toFixed(1) + 'k limit';
+      const row = (k, v) => `<div class="r"><span class="k">${k}</span><span class="d"></span><span class="v">${v}</span></div>`;
+      $('spec').innerHTML =
+        row('Firing order', p.firingOrder.join('-')) +
+        row('Bank layout', p.banks.length === 2 ? 'twin, ' + p.banks[0].length + '+' + p.banks[1].length : 'single') +
+        row('Idle / limit', p.idleRpm + ' / ' + p.redlineRpm + ' rpm') +
+        row('Peak torque', p.peakTorque + ' N·m @ ' + p.peakTorqueRpm) +
+        row('Exhaust bank', p.exhaust.bank.toFixed(2) + ' m') +
+        row('Intake helm.', p.intake.helmholtz + ' Hz');
+    }
+
+    /* equaliser */
+    EQ.BANDS.forEach((b, i) => {
+      const d = document.createElement('div');
+      d.className = 'eqb';
+      d.innerHTML = `<span class="n">0</span>
     <input type="range" min="-18" max="18" step="0.5" value="0">
-    <span class="f">${b.f>=1000?(b.f/1000)+'k':b.f}</span><span class="t">${b.label}</span>`;
-  const inp = d.querySelector('input'), num = d.querySelector('.n');
-  inp.oninput = () => { sim.setEQBand(i, +inp.value);
-    num.textContent = (+inp.value).toFixed(1).replace(/\.0$/,''); };
-  $('eq').appendChild(d);
-});
-$('eqFlat').onclick = () => {
-  sim.resetEQ();
-  $('eq').querySelectorAll('input').forEach(i=>i.value=0);
-  $('eq').querySelectorAll('.n').forEach(n=>n.textContent='0');
-};
-$('fxOff').onclick = () => {
-  $('rvMix').value = 0; $('width').value = 0;
-  $('rvMix').dispatchEvent(new Event('input'));
-  $('width').dispatchEvent(new Event('input'));
-};
+    <span class="f">${b.f >= 1000 ? (b.f / 1000) + 'k' : b.f}</span><span class="t">${b.label}</span>`;
+      const inp = d.querySelector('input'), num = d.querySelector('.n');
+      inp.oninput = () => {
+        sim.setEQBand(i, +inp.value);
+        num.textContent = (+inp.value).toFixed(1).replace(/\.0$/, '');
+      };
+      $('eq').appendChild(d);
+    });
+    $('eqFlat').onclick = () => {
+      sim.resetEQ();
+      $('eq').querySelectorAll('input').forEach(i => i.value = 0);
+      $('eq').querySelectorAll('.n').forEach(n => n.textContent = '0');
+    };
+    $('fxOff').onclick = () => {
+      $('rvMix').value = 0; $('width').value = 0;
+      $('rvMix').dispatchEvent(new Event('input'));
+      $('width').dispatchEvent(new Event('input'));
+    };
 
-/* bindings */
-const bind = (id, fn, fmt = v => Math.round(v*100), opts = {}) => {
-  const el = $(id), out = $(id+'N');
-  const show = () => { if (out) out.textContent = fmt(+el.value); };
-  if (opts.debounce){
-    let t = 0;
-    el.oninput = () => { show(); clearTimeout(t); t = setTimeout(()=>fn(+el.value), opts.debounce); };
-  } else el.oninput = () => { fn(+el.value); show(); };
-  fn(+el.value); show();
-};
-bind('vol',    v => sim.setVolume(v));
-bind('rum',    v => sim.setTone({rumble:v}));
-bind('bri',    v => sim.setTone({brightness:v}));
-bind('popD',   v => sim.setPopDepth(v));
-bind('dyn',    v => sim.setDynamics(v));
-bind('rvMix',  v => sim.setReverb({mix:v}));
-// Reverb size rebuilds an impulse response (~6 ms) — debounce so dragging stays smooth.
-bind('rvSize', v => sim.setReverb({size:v}), v => (0.15+2.05*v).toFixed(1)+'s', {debounce:140});
-bind('rvDamp', v => sim.setReverb({damping:v}), v => (v/1000).toFixed(1)+'k');
-bind('width',  v => sim.setWidth(v));
+    /* bindings */
+    const bind = (id, fn, fmt = v => Math.round(v * 100), opts = {}) => {
+      const el = $(id), out = $(id + 'N');
+      const show = () => { if (out) out.textContent = fmt(+el.value); };
+      if (opts.debounce) {
+        let t = 0;
+        el.oninput = () => { show(); clearTimeout(t); t = setTimeout(() => fn(+el.value), opts.debounce); };
+      } else el.oninput = () => { fn(+el.value); show(); };
+      fn(+el.value); show();
+    };
+    bind('vol', v => sim.setVolume(v));
+    bind('rum', v => sim.setTone({ rumble: v }));
+    bind('bri', v => sim.setTone({ brightness: v }));
+    bind('popD', v => sim.setPopDepth(v));
+    bind('dyn', v => sim.setDynamics(v));
+    bind('rvMix', v => sim.setReverb({ mix: v }));
+    // Reverb size rebuilds an impulse response (~6 ms) — debounce so dragging stays smooth.
+    bind('rvSize', v => sim.setReverb({ size: v }), v => (0.15 + 2.05 * v).toFixed(1) + 's', { debounce: 140 });
+    bind('rvDamp', v => sim.setReverb({ damping: v }), v => (v / 1000).toFixed(1) + 'k');
+    bind('width', v => sim.setWidth(v));
 
-/* voice mix */
-const MIX = { exhaust:'Exhaust', intake:'Intake', mechanical:'Mechanical',
-              transmission:'Gearbox', turbo:'Turbo', transients:'Pops', sub:'Sub' };
-const colA = document.createElement('div'), colB = document.createElement('div');
-$('mix').append(colA, colB);
-Object.entries(MIX).forEach(([k,label],i)=>{
-  const row = document.createElement('div');
-  row.className = 'ctl';
-  row.innerHTML = `<span class="lbl">${label}</span>
+    /* voice mix */
+    const MIX = {
+      exhaust: 'Exhaust', intake: 'Intake', mechanical: 'Mechanical',
+      transmission: 'Gearbox', turbo: 'Turbo', transients: 'Pops', sub: 'Sub'
+    };
+    const colA = document.createElement('div'), colB = document.createElement('div');
+    $('mix').append(colA, colB);
+    Object.entries(MIX).forEach(([k, label], i) => {
+      const row = document.createElement('div');
+      row.className = 'ctl';
+      row.innerHTML = `<span class="lbl">${label}</span>
     <input type="range" min="0" max="1.6" step="0.01" value="${sim.mix[k]}"><span class="val"></span>`;
-  const inp = row.querySelector('input'), num = row.querySelector('.val');
-  num.textContent = Math.round(sim.mix[k]*100);
-  inp.oninput = () => { sim.setMix({[k]:+inp.value}); num.textContent = Math.round(inp.value*100); };
-  (i % 2 ? colB : colA).appendChild(row);
-});
+      const inp = row.querySelector('input'), num = row.querySelector('.val');
+      num.textContent = Math.round(sim.mix[k] * 100);
+      inp.oninput = () => { sim.setMix({ [k]: +inp.value }); num.textContent = Math.round(inp.value * 100); };
+      (i % 2 ? colB : colA).appendChild(row);
+    });
 
-/* transport */
-const keys = new Set();
-const HANDLED = ['w','a','s','d','q','e','c',' ','arrowup','arrowdown','arrowleft','arrowright'];
-addEventListener('keydown', ev => {
-  const k = ev.key.toLowerCase();
-  // Guard BEFORE preventDefault, not after: space on a focused button or arrow
-  // keys on a focused slider are that control's input, and swallowing them
-  // makes the panel feel broken.
-  if (ev.repeat || /^(input|select|button)$/i.test(ev.target.tagName)) return;
-  if (HANDLED.includes(k)) ev.preventDefault();
-  keys.add(k);
-  if (k==='e'||k==='arrowright') sim.shiftUp();
-  if (k==='q'||k==='arrowleft')  sim.shiftDown();
-  if (k==='a') setAuto(!sim.getState().auto);
-  if (k==='c') setPos(sim.getState().perspective==='exterior'?'interior':'exterior');
-  if (k===' ') togglePower();
-});
-addEventListener('keyup', ev => keys.delete(ev.key.toLowerCase()));
-addEventListener('blur', () => keys.clear());
+    /* transport */
+    const keys = new Set();
+    const HANDLED = ['w', 'a', 's', 'd', 'q', 'e', 'c', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
+    addEventListener('keydown', ev => {
+      const k = ev.key.toLowerCase();
+      // Guard BEFORE preventDefault, not after: space on a focused button or arrow
+      // keys on a focused slider are that control's input, and swallowing them
+      // makes the panel feel broken.
+      if (ev.repeat || /^(input|select|button)$/i.test(ev.target.tagName)) return;
+      if (HANDLED.includes(k)) ev.preventDefault();
+      keys.add(k);
+      if (k === 'e' || k === 'arrowright') sim.shiftUp();
+      if (k === 'q' || k === 'arrowleft') sim.shiftDown();
+      if (k === 'a') setAuto(!sim.getState().auto);
+      if (k === 'c') setPos(sim.getState().perspective === 'exterior' ? 'interior' : 'exterior');
+      if (k === ' ') togglePower();
+    });
+    addEventListener('keyup', ev => keys.delete(ev.key.toLowerCase()));
+    addEventListener('blur', () => keys.clear());
 
-/* Ignition.
-   start() is async — it awaits ctx.resume(), which a browser will reject if it
-   does not consider this a user gesture. The old version neither awaited it nor
-   caught it, so a rejection left the button reading "Shutdown" over a sim that
-   was not running, with nothing on screen to say so. */
-let powerBusy = false;
-async function togglePower(){
-  if (powerBusy) return;                 // double-tap of SPACE while resuming
-  const b = $('power');
-  powerBusy = true;
-  try {
-    if (sim.running){
-      sim.stop();
-      b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
-      $('status').textContent = 'STOPPED';
-    } else {
-      b.disabled = true;
-      $('status').textContent = 'STARTING';
-      await sim.start();
-      b.innerHTML = '<i class="dot"></i>Shutdown'; b.classList.remove('pri');
-      $('status').textContent = 'RUNNING';
+    /* Ignition.
+       start() is async — it awaits ctx.resume(), which a browser will reject if it
+       does not consider this a user gesture. The old version neither awaited it nor
+       caught it, so a rejection left the button reading "Shutdown" over a sim that
+       was not running, with nothing on screen to say so. */
+    let powerBusy = false;
+    async function togglePower() {
+      if (powerBusy) return;                 // double-tap of SPACE while resuming
+      const b = $('power');
+      powerBusy = true;
+      try {
+        if (sim.running) {
+          sim.stop();
+          b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
+          $('status').textContent = 'STOPPED';
+        } else {
+          b.disabled = true;
+          $('status').textContent = 'STARTING';
+          await sim.start();
+          b.innerHTML = '<i class="dot"></i>Shutdown'; b.classList.remove('pri');
+          $('status').textContent = 'RUNNING';
+        }
+      } catch (err) {
+        // Leave the button showing what is actually true.
+        b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
+        $('status').textContent = 'AUDIO BLOCKED — CLICK IGNITION';
+        console.error('EngineSim.start() failed:', err);
+      } finally {
+        b.disabled = false;
+        powerBusy = false;
+      }
     }
-  } catch (err) {
-    // Leave the button showing what is actually true.
-    b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
-    $('status').textContent = 'AUDIO BLOCKED — CLICK IGNITION';
-    console.error('EngineSim.start() failed:', err);
-  } finally {
-    b.disabled = false;
-    powerBusy = false;
-  }
-}
-function setAuto(on){
-  sim.setAutoShift(on);
-  $('autoBtn').classList.toggle('on', on);
-  $('manBtn').classList.toggle('on', !on);
-}
-function setPos(m){
-  sim.setPerspective(m);
-  $('pExt').classList.toggle('on', m==='exterior');
-  $('pInt').classList.toggle('on', m==='interior');
-}
-$('power').onclick = togglePower;
-$('autoBtn').onclick = () => setAuto(true);
-$('manBtn').onclick  = () => setAuto(false);
-$('up').onclick = () => sim.shiftUp();
-$('dn').onclick = () => sim.shiftDown();
-$('pExt').onclick = () => setPos('exterior');
-$('pInt').onclick = () => setPos('interior');
-$('status').textContent = 'AWAITING GESTURE';
-// Derived, so adding a turbocharged profile never leaves this hint stale.
-$('turboHint').textContent = 'turbo: ' + EngineSim.engines()
-  .filter(e => e.turbo).map(e => e.id.toUpperCase()).join(' · ');
-sync();
-
-/* loop */
-const PH = ['cut','open','sync','engage','lash','shuffle'];
-$('phase').innerHTML = PH.map(p=>`<span data-p="${p}">${p}</span>`).join('');
-const phEls = [...$('phase').children];
-let last = performance.now();
-let lastMeter = 0;
-function frame(now){
-  const dt = (now-last)/1000; last = now;
-  sim.setThrottle(keys.has('w')||keys.has('arrowup')?1:0);
-  sim.setBrake(keys.has('s')||keys.has('arrowdown')?1:0);
-  sim.update(dt);
-  const s = sim.getState();
-
-  $('rpm').innerHTML = Math.round(s.rpm)+'<s>rpm</s>';
-  $('kmh').innerHTML = Math.round(s.speedKmh)+'<s>km/h</s>';
-  // This cell was labelled "Ratio" but displayed the gear NUMBER, which the
-  // instrument already shows. Total ratio (gearbox × final drive) is the thing
-  // the label promises and is genuinely useful: it is what maps road speed to
-  // rpm, so it explains the pitch you are hearing.
-  $('ratio').innerHTML = s.gearRatio > 0 ? s.gearRatio.toFixed(2)+'<s>:1</s>' : '—<s>N</s>';
-  const slip = Math.round(Math.abs(s.clutchSlip||0));
-  $('slip').innerHTML = slip+'<s>rpm</s>';
-  $('slipCell').classList.toggle('hot', slip > 50);
-  const set = (bar,pc,v) => { $(bar).style.width=(v*100)+'%'; $(pc).textContent=Math.round(v*100); };
-  set('mThr','pThr', s.throttle); set('mBrk','pBrk', s.brake); set('mBst','pBst', s.boost||0);
-  for (const e of phEls) e.classList.toggle('on', e.dataset.p === s.shiftPhase);
-  // Gain reduction at 60 Hz is a blur and allocates an object per frame for
-  // nothing. 10 Hz is as fast as a meter is readable anyway.
-  if (now - lastMeter > 100) {
-    lastMeter = now;
-    const gr = sim.getReduction();
-    $('dynMeter').textContent =
-      `LOW ${gr.low.toFixed(1)}  MID ${gr.mid.toFixed(1)}  HIGH ${gr.high.toFixed(1)}  dB`;
-  }
-  drawTach(s);
-}
-
-/* One bad frame must not kill the render loop — if it did, the whole console
-   would freeze with no indication of why. Log the first failure and keep
-   going; a repeating error is still visible in the console. */
-let frameErr = false;
-function tick(now){
-  requestAnimationFrame(tick);
-  try { frame(now); }
-  catch (err) {
-    if (!frameErr) { frameErr = true; console.error('frame() threw:', err); }
-  }
-}
-requestAnimationFrame(tick);
-
-/* ---- instrument ----------------------------------------------------------
-   A true semicircle. The first radial attempt crowded its numerals against the
-   sweep band because the two sat only 8 px apart; here the tick ring, the
-   numeral ring and the sweep band are on clearly separated radii. */
-const tc = $('tach').getContext('2d');
-const DPR = Math.min(devicePixelRatio||1, 2);
-$('tach').width = 288*DPR; $('tach').height = 212*DPR; tc.scale(DPR,DPR);
-
-const R_TICK = 130, R_NUM = 104, R_BAND = 78;
-function drawTach(s){
-  const W=288, cx=W/2, cy=178;
-  tc.clearRect(0,0,W,212);
-  const max = s.redline + 500;
-  const A0 = Math.PI, A1 = Math.PI*2;
-  const ang = v => A0 + (A1-A0)*Math.min(1,Math.max(0,v/max));
-
-  // ---- graduations: fine 250, major 1000 ----
-  for (let k=0;k<=max;k+=250){
-    const a=ang(k), c=Math.cos(a), sn=Math.sin(a);
-    const major = k%1000===0, red = k>=s.redline;
-    const inner = major ? R_TICK-14 : R_TICK-7;
-    tc.strokeStyle = red ? (major?'#e8481f':'rgba(232,72,31,.42)')
-                         : (major?'#14161a':'rgba(20,22,26,.26)');
-    tc.lineWidth = major?1.6:1;
-    tc.beginPath();
-    tc.moveTo(cx+c*R_TICK, cy+sn*R_TICK);
-    tc.lineTo(cx+c*inner,  cy+sn*inner);
-    tc.stroke();
-    if (major){
-      tc.fillStyle = red ? '#e8481f' : '#51565d';
-      tc.font='600 10px ui-monospace,Menlo,monospace';
-      tc.textAlign='center'; tc.textBaseline='middle';
-      tc.fillText(k/1000, cx+c*R_NUM, cy+sn*R_NUM);
+    function setAuto(on) {
+      sim.setAutoShift(on);
+      $('autoBtn').classList.toggle('on', on);
+      $('manBtn').classList.toggle('on', !on);
     }
-  }
-
-  // ---- sweep band, well inside the numerals ----
-  tc.lineCap='butt'; tc.lineWidth=9;
-  tc.strokeStyle='#e4e4e0';
-  tc.beginPath(); tc.arc(cx,cy,R_BAND,A0,A1); tc.stroke();
-  tc.strokeStyle='rgba(232,72,31,.22)';
-  tc.beginPath(); tc.arc(cx,cy,R_BAND,ang(s.redline),A1); tc.stroke();
-  tc.strokeStyle = s.limiter ? '#e8481f' : '#14161a';
-  tc.beginPath(); tc.arc(cx,cy,R_BAND,A0,ang(Math.max(s.rpm,1))); tc.stroke();
-
-  // ---- needle ----
-  const a=ang(s.rpm), c=Math.cos(a), sn=Math.sin(a);
-  tc.strokeStyle='#e8481f'; tc.lineWidth=2; tc.lineCap='round';
-  tc.beginPath();
-  tc.moveTo(cx+c*(R_BAND-16), cy+sn*(R_BAND-16));
-  tc.lineTo(cx+c*(R_TICK-16), cy+sn*(R_TICK-16));
-  tc.stroke();
-  tc.fillStyle='#e8481f';
-  tc.beginPath(); tc.arc(cx+c*(R_BAND-16), cy+sn*(R_BAND-16), 2.6, 0, 7); tc.fill();
-
-  // ---- digital block, inside the arc ----
-  tc.textAlign='center'; tc.textBaseline='alphabetic';
-  tc.fillStyle = s.limiter ? '#e8481f' : '#14161a';
-  tc.font='600 42px ui-monospace,Menlo,monospace';
-  tc.fillText(Math.round(s.rpm), cx, cy-26);
-  tc.fillStyle='#8b9097'; tc.font='600 8.5px ui-monospace,Menlo,monospace';
-  tc.fillText('R P M', cx, cy-12);
-
-  // ---- gear / speed strip below the arc ----
-  const y=cy+22;
-  tc.strokeStyle='#d8d9d4'; tc.lineWidth=1;
-  tc.beginPath(); tc.moveTo(cx-96,y-15.5); tc.lineTo(cx+96,y-15.5); tc.stroke();
-  tc.beginPath(); tc.moveTo(cx,y-15.5); tc.lineTo(cx,y+9.5); tc.stroke();
-  tc.fillStyle='#8b9097'; tc.font='600 8px ui-monospace,Menlo,monospace';
-  tc.textAlign='left';  tc.fillText('GEAR', cx-94, y-4);
-  tc.textAlign='right'; tc.fillText('KM/H', cx+94, y-4);
-  tc.fillStyle='#14161a'; tc.font='600 20px ui-monospace,Menlo,monospace';
-  tc.textAlign='left';  tc.fillText(s.shiftPhase?'\u2013\u2013':(s.gear===0?'N':s.gear), cx-56, y+2);
-  tc.textAlign='right'; tc.fillText(Math.round(s.speedKmh), cx+56, y+2);
-}
-
-/* ---- order spectrum ---- */
-const oc = $('orders').getContext('2d');
-$('orders').width = 620*DPR; $('orders').height = 132*DPR; oc.scale(DPR,DPR);
-function drawOrders(){
-  const p = ENGINE_PROFILES[sim.engineId];
-  const spec = orderSpectrum(p, bankAngles(p,0), 0.6, 14);
-  const W=620, H=132, padL=8, padR=8, base=H-18;
-  oc.clearRect(0,0,W,H);
-  oc.fillStyle='#fbfbfa'; oc.fillRect(0,0,W,H);
-
-  // horizontal reference rules
-  oc.strokeStyle='rgba(20,22,26,.07)'; oc.lineWidth=1;
-  for(let i=1;i<=4;i++){
-    const y=Math.round(base-(base-8)*(i/4))+.5;
-    oc.beginPath(); oc.moveTo(padL,y); oc.lineTo(W-padR,y); oc.stroke();
-  }
-  oc.strokeStyle='#c3c5bf';
-  oc.beginPath(); oc.moveTo(padL,base+.5); oc.lineTo(W-padR,base+.5); oc.stroke();
-
-  const max = Math.max(...spec.map(s=>s.mag))||1, bw=(W-padL-padR)/spec.length;
-  spec.forEach((s,i)=>{
-    const half = Math.abs(s.order%1)>0.01;
-    const h = Math.max(1,(s.mag/max)*(base-12));
-    const x = padL+i*bw, w = Math.max(2.5, bw-4);
-    oc.fillStyle = half ? '#e8481f' : '#9aa0a6';
-    oc.fillRect(x, base-h, w, h);
-    // A thin cap on half-orders marks them without the full-height wash that
-    // swamped the chart.
-    if (half){ oc.fillStyle='#14161a'; oc.fillRect(x, base-h-2, w, 2); }
-    if (s.order%2===0){
-      oc.fillStyle='#8b9097'; oc.font='600 8.5px ui-monospace,Menlo,monospace';
-      oc.textAlign='center'; oc.fillText(s.order, x+w/2, H-6);
+    function setPos(m) {
+      sim.setPerspective(m);
+      $('pExt').classList.toggle('on', m === 'exterior');
+      $('pInt').classList.toggle('on', m === 'interior');
     }
-  });
-  const half = spec.filter(s=>Math.abs(s.order%1)>0.01).reduce((a,s)=>a+s.mag*s.mag,0);
-  const tot = spec.reduce((a,s)=>a+s.mag*s.mag,0);
-  $('ordMeta').textContent =
-    bankAngles(p,0).map(a=>a.toFixed(0)+'°').join(' / ') + '  ·  HALF-ORDER ' +
-    (100*half/tot).toFixed(0) + '%';
-}
-drawOrders();
+    $('power').onclick = togglePower;
+    $('autoBtn').onclick = () => setAuto(true);
+    $('manBtn').onclick = () => setAuto(false);
+    $('up').onclick = () => sim.shiftUp();
+    $('dn').onclick = () => sim.shiftDown();
+    $('pExt').onclick = () => setPos('exterior');
+    $('pInt').onclick = () => setPos('interior');
+    $('status').textContent = 'AWAITING GESTURE';
+    // Derived, so adding a turbocharged profile never leaves this hint stale.
+    $('turboHint').textContent = 'turbo: ' + EngineSim.engines()
+      .filter(e => e.turbo).map(e => e.id.toUpperCase()).join(' · ');
+    sync();
 
-// Everything above evaluated without throwing, so the boot guard can stand down.
-window.__ENGINE_BOOTED = true;
-</script>
+    /* =====================================================================
+       DRIVE MODE
+       =====================================================================
+       An H-pattern gate you actually drag through, and two pedals. Everything
+       is pointer-event based rather than touch-event based, so one code path
+       serves finger, stylus and mouse — and, critically, `pointerId` tracking
+       lets both thumbs work at once. A touch-event implementation that assumed
+       one contact would drop the throttle the moment you moved the shifter.
+       ===================================================================== */
+
+    /* ---- gate geometry -------------------------------------------------
+       Gears are laid out in an H: pairs share a column, odd gears up, even
+       gears down, neutral along the centre channel. Six gears give three
+       columns, seven give four with 7 alone at the top of the last — exactly
+       how a real seven-speed gate is drawn. Rebuilt whenever the chassis
+       changes, because gear COUNT changes with it (5, 6 or 7 here). */
+    const GATE = { top: 20, bot: 80, mid: 50, chan: 9, cols: [], slots: [], n: 0 };
+
+    function buildGate() {
+      const n = sim.getState().gearCount;
+      if (n === GATE.n) return;
+      GATE.n = n;
+      const cols = Math.ceil(n / 2);
+      // Inset so the knob (r=9) never overhangs the panel edge.
+      const x0 = 20, x1 = 80;
+      GATE.cols = cols === 1
+        ? [50]
+        : Array.from({ length: cols }, (_, i) => x0 + (x1 - x0) * i / (cols - 1));
+      GATE.slots = [];
+      for (let g = 1; g <= n; g++) {
+        const c = Math.floor((g - 1) / 2);
+        GATE.slots.push({ gear: g, col: c, x: GATE.cols[c], y: (g - 1) % 2 === 0 ? GATE.top : GATE.bot });
+      }
+      const path = [], nums = [];
+      // The neutral channel, drawn as one thick line the knob rides along.
+      path.push(`<line class="slot" x1="${GATE.cols[0]}" y1="${GATE.mid}" ` +
+        `x2="${GATE.cols[cols - 1]}" y2="${GATE.mid}" stroke-width="${GATE.chan * 2}"/>`);
+      for (const c of GATE.cols) {
+        const hasUp = GATE.slots.some(s => s.x === c && s.y === GATE.top);
+        const hasDn = GATE.slots.some(s => s.x === c && s.y === GATE.bot);
+        if (hasUp) path.push(`<line class="slot" x1="${c}" y1="${GATE.top}" x2="${c}" y2="${GATE.mid}" stroke-width="${GATE.chan * 2}"/>`);
+        if (hasDn) path.push(`<line class="slot" x1="${c}" y1="${GATE.bot}" x2="${c}" y2="${GATE.mid}" stroke-width="${GATE.chan * 2}"/>`);
+      }
+      for (const s of GATE.slots) {
+        const dy = s.y === GATE.top ? -12 : 12;
+        nums.push(`<text class="gnum" data-g="${s.gear}" x="${s.x}" y="${s.y + dy}">${s.gear}</text>`);
+      }
+      nums.push(`<text class="gnum" data-g="0" x="${(GATE.cols[0] + GATE.cols[cols - 1]) / 2}" y="${GATE.mid - GATE.chan - 6}">N</text>`);
+      $('gateSlots').innerHTML = path.join('');
+      $('gateNums').innerHTML = nums.join('');
+      gateSnapTo(sim.getState().gear);
+    }
+
+    /* Knob position in gate space, and which channel/column it is captured in. */
+    const knob = { x: 50, y: GATE.mid, col: -1, grabbed: false, pid: null };
+
+    function gateRender() {
+      $('gateKnob').setAttribute('cx', knob.x);
+      $('gateKnob').setAttribute('cy', knob.y);
+      const st = $('gateStick');
+      st.setAttribute('x1', 50); st.setAttribute('y1', GATE.mid);
+      st.setAttribute('x2', knob.x); st.setAttribute('y2', knob.y);
+      const g = sim.getState().gear;
+      for (const t of $('gateNums').children) t.classList.toggle('lit', +t.dataset.g === g);
+    }
+
+    function gateSnapTo(gear) {
+      const s = GATE.slots.find(x => x.gear === gear);
+      if (s) { knob.x = s.x; knob.y = s.y; knob.col = s.col; }
+      else { knob.x = (GATE.cols[0] + GATE.cols[GATE.cols.length - 1]) / 2; knob.y = GATE.mid; knob.col = -1; }
+      gateRender();
+    }
+
+    /* Client coords → the SVG's own 0-100 space. getBoundingClientRect is the
+       only reliable way to do this across zoom levels and `preserveAspectRatio`
+       letterboxing, and it costs nothing at pointer rates. */
+    function gatePoint(ev) {
+      const r = $('gate').getBoundingClientRect();
+      // preserveAspectRatio="xMidYMid meet": the viewBox is squared inside the
+      // element, so back out the letterboxing or the knob lags the finger.
+      const side = Math.min(r.width, r.height);
+      const ox = r.left + (r.width - side) / 2;
+      const oy = r.top + (r.height - side) / 2;
+      return { x: (ev.clientX - ox) / side * 100, y: (ev.clientY - oy) / side * 100 };
+    }
+
+    /* THE GATE CONSTRAINT — this is what makes it feel like a lever rather than
+       a draggable dot. In the neutral channel the knob slides sideways only; to
+       leave it you must pull into a column, and then you are locked to that
+       column until you come back to the channel. That is exactly the path a
+       real H-gate forces your hand along, and it is why you can find a gear
+       without looking. */
+    function gateMove(p) {
+      const nearChannel = Math.abs(p.y - GATE.mid) <= GATE.chan;
+      if (knob.col < 0) {
+        knob.y = GATE.mid;
+        knob.x = clamp(p.x, GATE.cols[0], GATE.cols[GATE.cols.length - 1]);
+        if (!nearChannel) {
+          // Pulled out of the channel: capture the nearest column if we are on it.
+          let best = -1, bd = 1e9;
+          GATE.cols.forEach((cx, i) => { const d = Math.abs(p.x - cx); if (d < bd) { bd = d; best = i; } });
+          const wanted = p.y < GATE.mid ? GATE.top : GATE.bot;
+          const exists = GATE.slots.some(s => s.col === best && s.y === wanted);
+          if (bd <= GATE.chan * 1.6 && exists) { knob.col = best; knob.x = GATE.cols[best]; }
+        }
+      } else {
+        knob.x = GATE.cols[knob.col];
+        const up = GATE.slots.some(s => s.col === knob.col && s.y === GATE.top);
+        const dn = GATE.slots.some(s => s.col === knob.col && s.y === GATE.bot);
+        knob.y = clamp(p.y, up ? GATE.top : GATE.mid, dn ? GATE.bot : GATE.mid);
+        if (Math.abs(knob.y - GATE.mid) <= GATE.chan * 0.55) knob.col = -1;   // back to neutral
+      }
+      gateRender();
+    }
+
+    function gateRelease() {
+      const gate = $('gate');
+      gate.classList.remove('grabbed');
+      knob.grabbed = false; knob.pid = null;
+      // Engaged only if the knob is properly home in a slot, not hovering.
+      let target = 0;
+      if (knob.col >= 0) {
+        for (const s of GATE.slots) {
+          if (s.col === knob.col && Math.abs(knob.y - s.y) < (GATE.bot - GATE.mid) * 0.55) target = s.gear;
+        }
+      }
+      const cur = sim.getState().gear;
+      if (target !== cur) {
+        // Moving the lever means you are driving it yourself.
+        if (sim.getState().auto) setAuto(false);
+        const okShift = target === 0 ? sim.setGear(0) : sim.setGear(target);
+        if (okShift === false) {
+          // The gearbox refused (it would over-rev). Let the lever spring back —
+          // a physical gate that will not take the gear is the honest feedback.
+          gate.classList.add('refuse');
+          setTimeout(() => gate.classList.remove('refuse'), 260);
+          gateSnapTo(cur);
+          return;
+        }
+      }
+      gateSnapTo(target);
+    }
+
+    {
+      const gate = $('gate');
+      gate.addEventListener('pointerdown', ev => {
+        if (knob.pid !== null) return;
+        ev.preventDefault();
+        knob.pid = ev.pointerId;
+        knob.grabbed = true;
+        gate.setPointerCapture(ev.pointerId);
+        gate.classList.add('grabbed');
+        gateMove(gatePoint(ev));
+      });
+      gate.addEventListener('pointermove', ev => {
+        if (ev.pointerId !== knob.pid) return;
+        ev.preventDefault();
+        gateMove(gatePoint(ev));
+      });
+      const up = ev => { if (ev.pointerId === knob.pid) { ev.preventDefault(); gateRelease(); } };
+      gate.addEventListener('pointerup', up);
+      gate.addEventListener('pointercancel', up);
+    }
+
+    /* ---- pedals ---------------------------------------------------------
+       Held, not tapped. `pointerId` per pedal so the two are independent and
+       neither cares what the other thumb is doing. */
+    const pedal = { gas: 0, brake: 0 };
+    function bindPedal(id, key) {
+      const el = $(id), fill = el.querySelector('.fill');
+      let pid = null;
+      const set = v => {
+        pedal[key] = v;
+        fill.style.height = (v * 100) + '%';
+        el.classList.toggle('down', v > 0);
+      };
+      el.addEventListener('pointerdown', ev => {
+        if (pid !== null) return;
+        ev.preventDefault();
+        pid = ev.pointerId;
+        el.setPointerCapture(ev.pointerId);
+        set(1);
+      });
+      const release = ev => { if (ev.pointerId === pid) { ev.preventDefault(); pid = null; set(0); } };
+      el.addEventListener('pointerup', release);
+      el.addEventListener('pointercancel', release);
+      // Losing the window mid-press would otherwise leave the throttle stuck on.
+      addEventListener('blur', () => { pid = null; set(0); });
+      return set;
+    }
+    bindPedal('pedGas', 'gas');
+    bindPedal('pedBrake', 'brake');
+
+    /* ---- paddles, bar ---- */
+    const paddle = (id, fn) => {
+      const el = $(id);
+      el.addEventListener('pointerdown', ev => {
+        ev.preventDefault();
+        el.classList.add('down');
+        fn();
+      });
+      const up = () => el.classList.remove('down');
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+      el.addEventListener('pointerleave', up);
+    };
+    paddle('dvUp', () => { if (sim.getState().auto) setAuto(false); sim.shiftUp(); });
+    paddle('dvDown', () => { if (sim.getState().auto) setAuto(false); sim.shiftDown(); });
+
+    function setDriving(on) {
+      document.body.classList.toggle('driving', on);
+      if (on) {
+        buildGate();
+        gateSnapTo(sim.getState().gear);
+        // A phone will happily sleep mid-drive otherwise. Best-effort only.
+        if (navigator.wakeLock && !wakeLock) {
+          navigator.wakeLock.request('screen').then(w => { wakeLock = w; }).catch(() => { });
+        }
+      } else {
+        pedal.gas = 0; pedal.brake = 0;
+        if (wakeLock) { wakeLock.release().catch(() => { }); wakeLock = null; }
+      }
+    }
+    let wakeLock = null;
+    $('driveBtn').onclick = () => setDriving(true);
+    // Deep link straight into the cockpit: ?drive. Handy on a phone (save it to
+    // the home screen and it opens ready to drive) and it is what the layout
+    // screenshots are taken through.
+    if (/[?&]drive\b/.test(location.search)) setDriving(true);
+    $('dvExit').onclick = () => setDriving(false);
+    $('dvPower').onclick = togglePower;
+    $('dvAuto').onclick = () => setAuto(!sim.getState().auto);
+    $('dvSwap').onclick = () => $('drive').classList.toggle('swap');
+
+    // Rev LEDs, built once.
+    $('dvLeds').innerHTML = Array.from({ length: 20 }, () => '<i></i>').join('');
+    const ledEls = [...$('dvLeds').children];
+
+    function driveHud(s) {
+      $('dvRpm').textContent = Math.round(s.rpm);
+      $('dvRpmCell').classList.toggle('hot', s.rpm > s.redline * 0.92);
+      $('dvKmh').textContent = Math.round(s.speedKmh);
+      $('dvGear').textContent = s.shiftPhase ? '–' : (s.gear === 0 ? 'N' : s.gear);
+      $('dvBoost').textContent = ENGINE_PROFILES[s.engine].turbo
+        ? Math.round((s.boost || 0) * 100) : '—';
+      const frac = s.redline ? s.rpm / s.redline : 0;
+      const lit = Math.round(frac * ledEls.length);
+      for (let i = 0; i < ledEls.length; i++) {
+        const on = i < lit;
+        ledEls[i].classList.toggle('on', on);
+        ledEls[i].classList.toggle('red', i >= ledEls.length - 3);
+      }
+      $('dvAuto').classList.toggle('on', s.auto);
+      $('dvTag').textContent = s.engineLabel + ' · ' + s.vehicleLabel;
+      $('dvPower').textContent = sim.running ? 'Shutdown' : 'Ignition';
+      $('dvPower').classList.toggle('pri', !sim.running);
+      // The gearbox may shift itself (auto mode, or an auto-upshift), so the
+      // lever has to follow rather than being the only source of truth.
+      if (!knob.grabbed) {
+        const want = s.shiftPhase ? null : s.gear;
+        if (want !== null && (knob.col >= 0 ? GATE.slots.find(x => x.col === knob.col && Math.abs(knob.y - x.y) < 1)?.gear : 0) !== want) {
+          gateSnapTo(want);
+        }
+      }
+    }
+
+    /* loop */
+    const PH = ['cut', 'open', 'sync', 'engage', 'lash', 'shuffle'];
+    $('phase').innerHTML = PH.map(p => `<span data-p="${p}">${p}</span>`).join('');
+    const phEls = [...$('phase').children];
+    let last = performance.now();
+    let lastMeter = 0;
+    function frame(now) {
+      const dt = (now - last) / 1000; last = now;
+      // Keyboard and pedals are ORed, so a plugged-in keyboard keeps working
+      // while drive mode is open and neither input starves the other.
+      sim.setThrottle(Math.max(keys.has('w') || keys.has('arrowup') ? 1 : 0, pedal.gas));
+      sim.setBrake(Math.max(keys.has('s') || keys.has('arrowdown') ? 1 : 0, pedal.brake));
+      sim.update(dt);
+      const s = sim.getState();
+
+      // Drive mode owns the whole viewport when it is open, so the console
+      // readouts and the tach are not visible — skip all of that work.
+      if (document.body.classList.contains('driving')) {
+        driveHud(s);
+        return;
+      }
+
+      $('rpm').innerHTML = Math.round(s.rpm) + '<s>rpm</s>';
+      $('kmh').innerHTML = Math.round(s.speedKmh) + '<s>km/h</s>';
+      // This cell was labelled "Ratio" but displayed the gear NUMBER, which the
+      // instrument already shows. Total ratio (gearbox × final drive) is the thing
+      // the label promises and is genuinely useful: it is what maps road speed to
+      // rpm, so it explains the pitch you are hearing.
+      $('ratio').innerHTML = s.gearRatio > 0 ? s.gearRatio.toFixed(2) + '<s>:1</s>' : '—<s>N</s>';
+      const slip = Math.round(Math.abs(s.clutchSlip || 0));
+      $('slip').innerHTML = slip + '<s>rpm</s>';
+      $('slipCell').classList.toggle('hot', slip > 50);
+      const set = (bar, pc, v) => { $(bar).style.width = (v * 100) + '%'; $(pc).textContent = Math.round(v * 100); };
+      set('mThr', 'pThr', s.throttle); set('mBrk', 'pBrk', s.brake); set('mBst', 'pBst', s.boost || 0);
+      for (const e of phEls) e.classList.toggle('on', e.dataset.p === s.shiftPhase);
+      // Gain reduction at 60 Hz is a blur and allocates an object per frame for
+      // nothing. 10 Hz is as fast as a meter is readable anyway.
+      if (now - lastMeter > 100) {
+        lastMeter = now;
+        const gr = sim.getReduction();
+        $('dynMeter').textContent =
+          `LOW ${gr.low.toFixed(1)}  MID ${gr.mid.toFixed(1)}  HIGH ${gr.high.toFixed(1)}  dB`;
+      }
+      drawTach(s);
+    }
+
+    /* One bad frame must not kill the render loop — if it did, the whole console
+       would freeze with no indication of why. Log the first failure and keep
+       going; a repeating error is still visible in the console. */
+    let frameErr = false;
+    function tick(now) {
+      requestAnimationFrame(tick);
+      try { frame(now); }
+      catch (err) {
+        if (!frameErr) { frameErr = true; console.error('frame() threw:', err); }
+      }
+    }
+    requestAnimationFrame(tick);
+
+    /* ---- instrument ----------------------------------------------------------
+       A true semicircle. The first radial attempt crowded its numerals against the
+       sweep band because the two sat only 8 px apart; here the tick ring, the
+       numeral ring and the sweep band are on clearly separated radii. */
+    const tc = $('tach').getContext('2d');
+    const DPR = Math.min(devicePixelRatio || 1, 2);
+    $('tach').width = 288 * DPR; $('tach').height = 212 * DPR; tc.scale(DPR, DPR);
+
+    const R_TICK = 130, R_NUM = 104, R_BAND = 78;
+    function drawTach(s) {
+      const W = 288, cx = W / 2, cy = 178;
+      tc.clearRect(0, 0, W, 212);
+      const max = s.redline + 500;
+      const A0 = Math.PI, A1 = Math.PI * 2;
+      const ang = v => A0 + (A1 - A0) * Math.min(1, Math.max(0, v / max));
+
+      // ---- graduations: fine 250, major 1000 ----
+      for (let k = 0; k <= max; k += 250) {
+        const a = ang(k), c = Math.cos(a), sn = Math.sin(a);
+        const major = k % 1000 === 0, red = k >= s.redline;
+        const inner = major ? R_TICK - 14 : R_TICK - 7;
+        tc.strokeStyle = red ? (major ? '#e8481f' : 'rgba(232,72,31,.42)')
+          : (major ? '#14161a' : 'rgba(20,22,26,.26)');
+        tc.lineWidth = major ? 1.6 : 1;
+        tc.beginPath();
+        tc.moveTo(cx + c * R_TICK, cy + sn * R_TICK);
+        tc.lineTo(cx + c * inner, cy + sn * inner);
+        tc.stroke();
+        if (major) {
+          tc.fillStyle = red ? '#e8481f' : '#51565d';
+          tc.font = '600 10px ui-monospace,Menlo,monospace';
+          tc.textAlign = 'center'; tc.textBaseline = 'middle';
+          tc.fillText(k / 1000, cx + c * R_NUM, cy + sn * R_NUM);
+        }
+      }
+
+      // ---- sweep band, well inside the numerals ----
+      tc.lineCap = 'butt'; tc.lineWidth = 9;
+      tc.strokeStyle = '#e4e4e0';
+      tc.beginPath(); tc.arc(cx, cy, R_BAND, A0, A1); tc.stroke();
+      tc.strokeStyle = 'rgba(232,72,31,.22)';
+      tc.beginPath(); tc.arc(cx, cy, R_BAND, ang(s.redline), A1); tc.stroke();
+      tc.strokeStyle = s.limiter ? '#e8481f' : '#14161a';
+      tc.beginPath(); tc.arc(cx, cy, R_BAND, A0, ang(Math.max(s.rpm, 1))); tc.stroke();
+
+      // ---- needle ----
+      const a = ang(s.rpm), c = Math.cos(a), sn = Math.sin(a);
+      tc.strokeStyle = '#e8481f'; tc.lineWidth = 2; tc.lineCap = 'round';
+      tc.beginPath();
+      tc.moveTo(cx + c * (R_BAND - 16), cy + sn * (R_BAND - 16));
+      tc.lineTo(cx + c * (R_TICK - 16), cy + sn * (R_TICK - 16));
+      tc.stroke();
+      tc.fillStyle = '#e8481f';
+      tc.beginPath(); tc.arc(cx + c * (R_BAND - 16), cy + sn * (R_BAND - 16), 2.6, 0, 7); tc.fill();
+
+      // ---- digital block, inside the arc ----
+      tc.textAlign = 'center'; tc.textBaseline = 'alphabetic';
+      tc.fillStyle = s.limiter ? '#e8481f' : '#14161a';
+      tc.font = '600 42px ui-monospace,Menlo,monospace';
+      tc.fillText(Math.round(s.rpm), cx, cy - 26);
+      tc.fillStyle = '#8b9097'; tc.font = '600 8.5px ui-monospace,Menlo,monospace';
+      tc.fillText('R P M', cx, cy - 12);
+
+      // ---- gear / speed strip below the arc ----
+      const y = cy + 22;
+      tc.strokeStyle = '#d8d9d4'; tc.lineWidth = 1;
+      tc.beginPath(); tc.moveTo(cx - 96, y - 15.5); tc.lineTo(cx + 96, y - 15.5); tc.stroke();
+      tc.beginPath(); tc.moveTo(cx, y - 15.5); tc.lineTo(cx, y + 9.5); tc.stroke();
+      tc.fillStyle = '#8b9097'; tc.font = '600 8px ui-monospace,Menlo,monospace';
+      tc.textAlign = 'left'; tc.fillText('GEAR', cx - 94, y - 4);
+      tc.textAlign = 'right'; tc.fillText('KM/H', cx + 94, y - 4);
+      tc.fillStyle = '#14161a'; tc.font = '600 20px ui-monospace,Menlo,monospace';
+      tc.textAlign = 'left'; tc.fillText(s.shiftPhase ? '\u2013\u2013' : (s.gear === 0 ? 'N' : s.gear), cx - 56, y + 2);
+      tc.textAlign = 'right'; tc.fillText(Math.round(s.speedKmh), cx + 56, y + 2);
+    }
+
+    /* ---- order spectrum ---- */
+    const oc = $('orders').getContext('2d');
+    $('orders').width = 620 * DPR; $('orders').height = 132 * DPR; oc.scale(DPR, DPR);
+    function drawOrders() {
+      const p = ENGINE_PROFILES[sim.engineId];
+      const spec = orderSpectrum(p, bankAngles(p, 0), 0.6, 14);
+      const W = 620, H = 132, padL = 8, padR = 8, base = H - 18;
+      oc.clearRect(0, 0, W, H);
+      oc.fillStyle = '#fbfbfa'; oc.fillRect(0, 0, W, H);
+
+      // horizontal reference rules
+      oc.strokeStyle = 'rgba(20,22,26,.07)'; oc.lineWidth = 1;
+      for (let i = 1; i <= 4; i++) {
+        const y = Math.round(base - (base - 8) * (i / 4)) + .5;
+        oc.beginPath(); oc.moveTo(padL, y); oc.lineTo(W - padR, y); oc.stroke();
+      }
+      oc.strokeStyle = '#c3c5bf';
+      oc.beginPath(); oc.moveTo(padL, base + .5); oc.lineTo(W - padR, base + .5); oc.stroke();
+
+      const max = Math.max(...spec.map(s => s.mag)) || 1, bw = (W - padL - padR) / spec.length;
+      spec.forEach((s, i) => {
+        const half = Math.abs(s.order % 1) > 0.01;
+        const h = Math.max(1, (s.mag / max) * (base - 12));
+        const x = padL + i * bw, w = Math.max(2.5, bw - 4);
+        oc.fillStyle = half ? '#e8481f' : '#9aa0a6';
+        oc.fillRect(x, base - h, w, h);
+        // A thin cap on half-orders marks them without the full-height wash that
+        // swamped the chart.
+        if (half) { oc.fillStyle = '#14161a'; oc.fillRect(x, base - h - 2, w, 2); }
+        if (s.order % 2 === 0) {
+          oc.fillStyle = '#8b9097'; oc.font = '600 8.5px ui-monospace,Menlo,monospace';
+          oc.textAlign = 'center'; oc.fillText(s.order, x + w / 2, H - 6);
+        }
+      });
+      const half = spec.filter(s => Math.abs(s.order % 1) > 0.01).reduce((a, s) => a + s.mag * s.mag, 0);
+      const tot = spec.reduce((a, s) => a + s.mag * s.mag, 0);
+      $('ordMeta').textContent =
+        bankAngles(p, 0).map(a => a.toFixed(0) + '°').join(' / ') + '  ·  HALF-ORDER ' +
+        (100 * half / tot).toFixed(0) + '%';
+    }
+    drawOrders();
+
+    // Everything above evaluated without throwing, so the boot guard can stand down.
+    window.__ENGINE_BOOTED = true;
+  </script>
 </body>
+
 </html>
