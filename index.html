@@ -968,6 +968,20 @@
       grid-area: left;
       min-height: 0;
       min-width: 0;
+      /* Bottom-anchored: the gate keeps its square aspect (an H-gate must not
+         be stretched — the knob would go oval and the slot spacing would lie),
+         so a tall area would otherwise centre it and leave the lever out of
+         thumb reach. Pushing it down puts it where the hand already is. */
+      display: flex;
+      align-items: flex-end;
+      /* The panel surface belongs to the container, not the SVG: the gate
+         graphic sits inside a full-height panel rather than being a short
+         panel floating in an empty column. Centred in landscape, where the
+         column is barely taller than the square; pushed to the bottom in
+         portrait, where it would otherwise float out of thumb reach. */
+      align-items: center;
+      background: var(--panel);
+      border: 1px solid var(--line2);
     }
 
     .dv-mid {
@@ -1052,7 +1066,7 @@
     }
 
     .dv-rpm b {
-      font: 600 clamp(30px, 9vmin, 84px)/0.95 var(--mono);
+      font: 600 clamp(34px, 17vmin, 120px)/0.95 var(--mono);
       font-variant-numeric: tabular-nums;
       letter-spacing: -.03em;
     }
@@ -1125,9 +1139,9 @@
     /* ---- gear gate ---- */
     .gate {
       width: 100%;
-      height: 100%;
-      background: var(--panel);
-      border: 1px solid var(--line2);
+      height: auto;
+      aspect-ratio: 1 / 1;
+      max-height: 100%;
       display: block;
       touch-action: none;
     }
@@ -1255,7 +1269,7 @@
     @media (orientation: portrait) {
       #drive {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        grid-template-rows: auto minmax(0, 1fr) minmax(0, 1.15fr);
+        grid-template-rows: auto minmax(0, 0.8fr) minmax(0, 1.35fr);
         grid-template-areas:
           "bar bar"
           "mid mid"
@@ -1275,6 +1289,10 @@
 
       .dv-cell b {
         font-size: clamp(15px, 5.5vw, 34px);
+      }
+
+      .dv-left {
+        align-items: flex-end;
       }
     }
 
@@ -1678,6 +1696,8 @@
     import { orderSpectrum } from './src/pulse.js';
     import { bankAngles } from './src/profiles.js';
     import { EQ } from './src/fx.js';
+    import { buildGate, moveGate, gateSelection, gatePosition, GATE_TOP, GATE_BOT, GATE_MID, GATE_CHAN }
+      from './src/gate.js';
 
     const $ = id => document.getElementById(id);
     const sim = new EngineSim(null, { engine: 'v8cross', vehicle: 'sports', volume: 0.7 });
@@ -1699,7 +1719,7 @@
     $('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); sync(); };
     // Gear COUNT changes with the chassis (5, 6 or 7 here), so the gate has to
     // be rebuilt or the lever would offer gears the gearbox does not have.
-    $('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); buildGate(); };
+    $('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); buildGateUI(); };
 
     const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -1869,130 +1889,74 @@
        one contact would drop the throttle the moment you moved the shifter.
        ===================================================================== */
 
-    /* ---- gate geometry -------------------------------------------------
-       Gears are laid out in an H: pairs share a column, odd gears up, even
-       gears down, neutral along the centre channel. Six gears give three
-       columns, seven give four with 7 alone at the top of the last — exactly
-       how a real seven-speed gate is drawn. Rebuilt whenever the chassis
-       changes, because gear COUNT changes with it (5, 6 or 7 here). */
-    const GATE = { top: 20, bot: 80, mid: 50, chan: 9, cols: [], slots: [], n: 0 };
+    /* ---- gear gate ------------------------------------------------------
+       Geometry and the constraint itself live in src/gate.js so they can be
+       unit tested in Node; everything here is rendering and wiring. */
+    let geom = buildGate(6);
+    let gateGears = 0;
+    const knob = { x: 50, y: GATE_MID, col: -1, grabbed: false, pid: null };
 
-    function buildGate() {
+    function buildGateUI() {
       const n = sim.getState().gearCount;
-      if (n === GATE.n) return;
-      GATE.n = n;
-      const cols = Math.ceil(n / 2);
-      // Inset so the knob (r=9) never overhangs the panel edge.
-      const x0 = 20, x1 = 80;
-      GATE.cols = cols === 1
-        ? [50]
-        : Array.from({ length: cols }, (_, i) => x0 + (x1 - x0) * i / (cols - 1));
-      GATE.slots = [];
-      for (let g = 1; g <= n; g++) {
-        const c = Math.floor((g - 1) / 2);
-        GATE.slots.push({ gear: g, col: c, x: GATE.cols[c], y: (g - 1) % 2 === 0 ? GATE.top : GATE.bot });
-      }
-      const path = [], nums = [];
-      // The neutral channel, drawn as one thick line the knob rides along.
-      path.push(`<line class="slot" x1="${GATE.cols[0]}" y1="${GATE.mid}" ` +
-        `x2="${GATE.cols[cols - 1]}" y2="${GATE.mid}" stroke-width="${GATE.chan * 2}"/>`);
-      for (const c of GATE.cols) {
-        const hasUp = GATE.slots.some(s => s.x === c && s.y === GATE.top);
-        const hasDn = GATE.slots.some(s => s.x === c && s.y === GATE.bot);
-        if (hasUp) path.push(`<line class="slot" x1="${c}" y1="${GATE.top}" x2="${c}" y2="${GATE.mid}" stroke-width="${GATE.chan * 2}"/>`);
-        if (hasDn) path.push(`<line class="slot" x1="${c}" y1="${GATE.bot}" x2="${c}" y2="${GATE.mid}" stroke-width="${GATE.chan * 2}"/>`);
-      }
-      for (const s of GATE.slots) {
-        const dy = s.y === GATE.top ? -12 : 12;
-        nums.push(`<text class="gnum" data-g="${s.gear}" x="${s.x}" y="${s.y + dy}">${s.gear}</text>`);
-      }
-      nums.push(`<text class="gnum" data-g="0" x="${(GATE.cols[0] + GATE.cols[cols - 1]) / 2}" y="${GATE.mid - GATE.chan - 6}">N</text>`);
+      if (n === gateGears) return;
+      gateGears = n;
+      geom = buildGate(n);
+      const last = geom.cols[geom.cols.length - 1];
+      const w = GATE_CHAN * 2;
+      const path = [`<line class="slot" x1="${geom.cols[0]}" y1="${GATE_MID}" x2="${last}" y2="${GATE_MID}" stroke-width="${w}"/>`];
+      geom.cols.forEach((c, i) => {
+        if (geom.slots.some(s => s.col === i && s.y === GATE_TOP))
+          path.push(`<line class="slot" x1="${c}" y1="${GATE_TOP}" x2="${c}" y2="${GATE_MID}" stroke-width="${w}"/>`);
+        if (geom.slots.some(s => s.col === i && s.y === GATE_BOT))
+          path.push(`<line class="slot" x1="${c}" y1="${GATE_BOT}" x2="${c}" y2="${GATE_MID}" stroke-width="${w}"/>`);
+      });
+      const nums = geom.slots.map(s =>
+        `<text class="gnum" data-g="${s.gear}" x="${s.x}" y="${s.y + (s.y === GATE_TOP ? -12 : 12)}">${s.gear}</text>`);
+      nums.push(`<text class="gnum" data-g="0" x="${(geom.cols[0] + last) / 2}" y="${GATE_MID - GATE_CHAN - 6}">N</text>`);
       $('gateSlots').innerHTML = path.join('');
       $('gateNums').innerHTML = nums.join('');
       gateSnapTo(sim.getState().gear);
     }
 
-    /* Knob position in gate space, and which channel/column it is captured in. */
-    const knob = { x: 50, y: GATE.mid, col: -1, grabbed: false, pid: null };
-
     function gateRender() {
       $('gateKnob').setAttribute('cx', knob.x);
       $('gateKnob').setAttribute('cy', knob.y);
       const st = $('gateStick');
-      st.setAttribute('x1', 50); st.setAttribute('y1', GATE.mid);
+      st.setAttribute('x1', 50); st.setAttribute('y1', GATE_MID);
       st.setAttribute('x2', knob.x); st.setAttribute('y2', knob.y);
       const g = sim.getState().gear;
       for (const t of $('gateNums').children) t.classList.toggle('lit', +t.dataset.g === g);
     }
 
     function gateSnapTo(gear) {
-      const s = GATE.slots.find(x => x.gear === gear);
-      if (s) { knob.x = s.x; knob.y = s.y; knob.col = s.col; }
-      else { knob.x = (GATE.cols[0] + GATE.cols[GATE.cols.length - 1]) / 2; knob.y = GATE.mid; knob.col = -1; }
+      Object.assign(knob, gatePosition(gear, geom));
       gateRender();
     }
 
-    /* Client coords → the SVG's own 0-100 space. getBoundingClientRect is the
-       only reliable way to do this across zoom levels and `preserveAspectRatio`
-       letterboxing, and it costs nothing at pointer rates. */
+    /* Client coords -> the SVG's own 0-100 space. preserveAspectRatio letterboxes
+       the square viewBox inside the element, so the offset has to be backed out
+       or the lever lags the finger. */
     function gatePoint(ev) {
       const r = $('gate').getBoundingClientRect();
-      // preserveAspectRatio="xMidYMid meet": the viewBox is squared inside the
-      // element, so back out the letterboxing or the knob lags the finger.
       const side = Math.min(r.width, r.height);
       const ox = r.left + (r.width - side) / 2;
       const oy = r.top + (r.height - side) / 2;
       return { x: (ev.clientX - ox) / side * 100, y: (ev.clientY - oy) / side * 100 };
     }
 
-    /* THE GATE CONSTRAINT — this is what makes it feel like a lever rather than
-       a draggable dot. In the neutral channel the knob slides sideways only; to
-       leave it you must pull into a column, and then you are locked to that
-       column until you come back to the channel. That is exactly the path a
-       real H-gate forces your hand along, and it is why you can find a gear
-       without looking. */
-    function gateMove(p) {
-      const nearChannel = Math.abs(p.y - GATE.mid) <= GATE.chan;
-      if (knob.col < 0) {
-        knob.y = GATE.mid;
-        knob.x = clamp(p.x, GATE.cols[0], GATE.cols[GATE.cols.length - 1]);
-        if (!nearChannel) {
-          // Pulled out of the channel: capture the nearest column if we are on it.
-          let best = -1, bd = 1e9;
-          GATE.cols.forEach((cx, i) => { const d = Math.abs(p.x - cx); if (d < bd) { bd = d; best = i; } });
-          const wanted = p.y < GATE.mid ? GATE.top : GATE.bot;
-          const exists = GATE.slots.some(s => s.col === best && s.y === wanted);
-          if (bd <= GATE.chan * 1.6 && exists) { knob.col = best; knob.x = GATE.cols[best]; }
-        }
-      } else {
-        knob.x = GATE.cols[knob.col];
-        const up = GATE.slots.some(s => s.col === knob.col && s.y === GATE.top);
-        const dn = GATE.slots.some(s => s.col === knob.col && s.y === GATE.bot);
-        knob.y = clamp(p.y, up ? GATE.top : GATE.mid, dn ? GATE.bot : GATE.mid);
-        if (Math.abs(knob.y - GATE.mid) <= GATE.chan * 0.55) knob.col = -1;   // back to neutral
-      }
-      gateRender();
-    }
-
     function gateRelease() {
       const gate = $('gate');
       gate.classList.remove('grabbed');
       knob.grabbed = false; knob.pid = null;
-      // Engaged only if the knob is properly home in a slot, not hovering.
-      let target = 0;
-      if (knob.col >= 0) {
-        for (const s of GATE.slots) {
-          if (s.col === knob.col && Math.abs(knob.y - s.y) < (GATE.bot - GATE.mid) * 0.55) target = s.gear;
-        }
-      }
+      const target = gateSelection(knob, geom);
       const cur = sim.getState().gear;
       if (target !== cur) {
         // Moving the lever means you are driving it yourself.
         if (sim.getState().auto) setAuto(false);
-        const okShift = target === 0 ? sim.setGear(0) : sim.setGear(target);
-        if (okShift === false) {
-          // The gearbox refused (it would over-rev). Let the lever spring back —
-          // a physical gate that will not take the gear is the honest feedback.
+        if (sim.setGear(target) === false) {
+          // The gearbox refused — it would over-rev, or a shift is already in
+          // flight. Let the lever spring back: a gate that will not take the
+          // gear is the honest feedback, and it is what a real one does.
           gate.classList.add('refuse');
           setTimeout(() => gate.classList.remove('refuse'), 260);
           gateSnapTo(cur);
@@ -2009,14 +1973,20 @@
         ev.preventDefault();
         knob.pid = ev.pointerId;
         knob.grabbed = true;
-        gate.setPointerCapture(ev.pointerId);
         gate.classList.add('grabbed');
-        gateMove(gatePoint(ev));
+        // Capture LAST and guarded. setPointerCapture throws NotFoundError if
+        // the pointer is no longer active — which happens for real when a touch
+        // ends between dispatch and handling — and an exception here would
+        // abort the rest of the handler, leaving the lever grabbed but unmoved.
+        try { gate.setPointerCapture(ev.pointerId); } catch (e) { /* no capture */ }
+        Object.assign(knob, moveGate(knob, gatePoint(ev), geom));
+        gateRender();
       });
       gate.addEventListener('pointermove', ev => {
         if (ev.pointerId !== knob.pid) return;
         ev.preventDefault();
-        gateMove(gatePoint(ev));
+        Object.assign(knob, moveGate(knob, gatePoint(ev), geom));
+        gateRender();
       });
       const up = ev => { if (ev.pointerId === knob.pid) { ev.preventDefault(); gateRelease(); } };
       gate.addEventListener('pointerup', up);
@@ -2039,8 +2009,9 @@
         if (pid !== null) return;
         ev.preventDefault();
         pid = ev.pointerId;
-        el.setPointerCapture(ev.pointerId);
         set(1);
+        // Guarded, and after the pedal is already down — see the gate handler.
+        try { el.setPointerCapture(ev.pointerId); } catch (e) { /* no capture */ }
       });
       const release = ev => { if (ev.pointerId === pid) { ev.preventDefault(); pid = null; set(0); } };
       el.addEventListener('pointerup', release);
@@ -2071,7 +2042,7 @@
     function setDriving(on) {
       document.body.classList.toggle('driving', on);
       if (on) {
-        buildGate();
+        buildGateUI();
         gateSnapTo(sim.getState().gear);
         // A phone will happily sleep mid-drive otherwise. Best-effort only.
         if (navigator.wakeLock && !wakeLock) {
@@ -2117,11 +2088,8 @@
       $('dvPower').classList.toggle('pri', !sim.running);
       // The gearbox may shift itself (auto mode, or an auto-upshift), so the
       // lever has to follow rather than being the only source of truth.
-      if (!knob.grabbed) {
-        const want = s.shiftPhase ? null : s.gear;
-        if (want !== null && (knob.col >= 0 ? GATE.slots.find(x => x.col === knob.col && Math.abs(knob.y - x.y) < 1)?.gear : 0) !== want) {
-          gateSnapTo(want);
-        }
+      if (!knob.grabbed && !s.shiftPhase && gateSelection(knob, geom) !== s.gear) {
+        gateSnapTo(s.gear);
       }
     }
 

@@ -44,6 +44,19 @@ The bundled console is a tuning rig, not the product — an instrument cluster,
 live telemetry, a per-bank order spectrum, and controls for the voice mix, tone,
 EQ, reverb and compressor.
 
+### On a phone
+
+Press **Drive** (or open `index.html?drive`) for the touch cockpit: a real
+H-pattern shift lever you drag between gears under one thumb, throttle and brake
+under the other, telemetry between them. Turn the phone landscape and both
+thumbs reach without moving your hands.
+
+The lever is properly gated — slide along the neutral channel, pull into a
+column, and you are locked to that column until you come back, so you can find a
+gear without looking at it. The gate springs back if the gearbox refuses one.
+**Swap sides** mirrors the layout for left-handers, and there are up/down
+paddles as well, which is usually what you want in auto mode.
+
 ---
 
 ## How it works
@@ -201,7 +214,7 @@ converter slip.
 ## Development
 
 ```sh
-npm test           # 320 checks + a driving-behaviour suite
+npm test           # 335 checks + a driving-behaviour suite
 npm run spectrum   # analytic harshness table for every engine
 ```
 
@@ -216,6 +229,7 @@ src/character.js    exhaust flow noise, sub layer, imperfection modulator
 src/fx.js           EQ, reverb, stereo widener, three-band compressor
 src/physics.js      drivetrain with torsional compliance and backlash
 src/shift.js        gear-shift state machine
+src/gate.js         H-pattern gear-gate geometry (UI-side, no audio)
 src/engine-sim.js   public API
 ```
 

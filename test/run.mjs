@@ -238,6 +238,71 @@ await suite('physics — driveline', () => {
   }
 });
 
+await suite('gear gate — the H-pattern constraint', async () => {
+  const G = await import('../src/gate.js');
+  const { buildGate, moveGate, gateSelection, gatePosition,
+          GATE_TOP, GATE_BOT, GATE_MID } = G;
+
+  /** Drag the lever through a list of points and return where it ends up. */
+  const drag = (geom, from, path) => {
+    let k = gatePosition(from, geom);
+    for (const [x, y] of path) k = moveGate(k, { x, y }, geom);
+    return { knob: k, gear: gateSelection(k, geom) };
+  };
+
+  for (const n of [5, 6, 7]) {
+    const geom = buildGate(n);
+    ok(geom.slots.length === n, `${n}-speed: every gear gets a slot`);
+    ok(geom.cols.length === Math.ceil(n / 2), `${n}-speed: gears pair into columns`,
+       `${geom.cols.length} columns`);
+    // Every gear must be reachable: into the channel, across, then pull.
+    let reachable = 0;
+    for (const s of geom.slots) {
+      const r = drag(geom, 0, [[s.x, GATE_MID], [s.x, s.y]]);
+      if (r.gear === s.gear) reachable++;
+    }
+    ok(reachable === n, `${n}-speed: every gear is reachable through the gate`,
+       `${reachable}/${n}`);
+  }
+
+  const geom = buildGate(6);
+
+  // The constraint itself: you cannot cut the corner.
+  const diag = drag(geom, 1, [[80, 80]]);
+  ok(diag.gear !== 6, 'a diagonal cannot jump straight from 1st to 6th',
+     `ended in ${diag.gear || 'N'}`);
+
+  // 1 -> N -> 3, the path a hand actually takes, including a release the
+  // instant the lever reaches the slot. This is the case that was broken:
+  // the column was captured but the lever kept the channel's height, so
+  // letting go immediately selected neutral instead of the gear.
+  const flick = drag(geom, 1, [[20, GATE_MID], [50, GATE_MID], [50, GATE_TOP]]);
+  ok(flick.gear === 3, 'a flick into a gear engages it without a second move',
+     `ended in ${flick.gear || 'N'}`);
+
+  // Releasing anywhere along the channel is neutral.
+  const neutral = drag(geom, 3, [[50, GATE_MID], [35, GATE_MID]]);
+  ok(neutral.gear === 0, 'releasing in the channel selects neutral');
+
+  // Half out of the channel is not a gear yet.
+  const half = drag(geom, 0, [[50, GATE_MID - 7]]);
+  ok(half.gear === 0, 'a half-pull does not engage anything');
+
+  // A 5-speed's last column has only a top slot; the lever must not be able to
+  // drop into a 6th that does not exist.
+  const g5 = buildGate(5);
+  const lastCol = g5.cols[g5.cols.length - 1];
+  const ghost = drag(g5, 0, [[lastCol, GATE_MID], [lastCol, GATE_BOT]]);
+  ok(ghost.gear === 0 && ghost.knob.y <= GATE_MID + 1,
+     '5-speed: the lever cannot enter the empty half of the last column',
+     `y=${ghost.knob.y.toFixed(1)}, gear ${ghost.gear || 'N'}`);
+
+  // Coming back to the channel releases the column, so you can cross to another.
+  const cross = drag(geom, 1, [[20, GATE_MID], [80, GATE_MID], [80, GATE_BOT]]);
+  ok(cross.gear === 6, 'returning to the channel frees the lever to cross',
+     `ended in ${cross.gear || 'N'}`);
+});
+
 await suite('public API — what a host project actually needs', async () => {
   const { EngineSim } = await import('../src/engine-sim.js');
 

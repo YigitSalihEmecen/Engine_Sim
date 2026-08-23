@@ -54,11 +54,12 @@ engine_sim/
 │   ├── fx.js                      EQ, reverb, stereo widener, 3-band compressor
 │   ├── physics.js                 drivetrain: inertias, clutch, torsional spring
 │   ├── shift.js                   gear-shift state machine
+│   ├── gate.js                    H-pattern gear-gate maths (UI, no audio)
 │   ├── engine-sim.js              PUBLIC API + orchestration
 │   └── CONTRACT.md                module interface contract
 └── test/
     ├── mock-audio.mjs             strict Web Audio mock + graph audit
-    ├── run.mjs                    unit + sweep suite (320 checks)
+    ├── run.mjs                    unit + sweep suite (335 checks)
     ├── drive.mjs                  driving-behaviour suite
     └── spectrum.mjs               ANALYTIC spectrum of the exhaust chain
 ```
@@ -77,7 +78,7 @@ Commands:
 ```
 npm start                   # dev server on :8000  (= node tools/serve.mjs)
 npm test                    # run.mjs + drive.mjs
-node test/run.mjs           # 320 checks, exits non-zero on failure
+node test/run.mjs           # 335 checks, exits non-zero on failure
 node test/drive.mjs         # driving behaviour, 80 engine×vehicle combos
 node test/run.mjs orders    # run one suite by substring
 node test/spectrum.mjs      # harshness table, all engines
@@ -569,7 +570,7 @@ every other assertion passed: params were still written, node count was stable,
 the graph looked correct. A source that is never started is invisible to a
 param-level test.
 
-Current: **320 checks** in `run.mjs` + a driving-behaviour suite in `drive.mjs`
+Current: **335 checks** in `run.mjs` + a driving-behaviour suite in `drive.mjs`
 (realistic manoeuvres, shift traces, shuffle, rev-match, 3600-frame input fuzz
 per vehicle — that fuzz caught five real bugs).
 
@@ -622,6 +623,34 @@ Useful assertions on the dumped DOM, all of which have caught something:
 ---
 
 ## 8. UI (`index.html`)
+
+### Drive mode — the touch cockpit
+
+`?drive`, or the Drive button. A full-viewport overlay: H-pattern shift lever
+on one side, throttle and brake on the other, telemetry between. Laid out for
+a phone in landscape, because that is the only way two thumbs reach both sides
+at once; portrait stacks the same controls with the thumbs at the bottom.
+
+Three things are worth knowing before editing it:
+
+- **The gate maths lives in `src/gate.js`, not in the page.** It was written
+  inline first and a real bug hid in it — capturing a column did not apply the
+  finger's height until the NEXT move event, so flicking into a gear and
+  letting go selected neutral. That is invisible when you drag slowly, and it
+  cost a round of browser-poking to find. As a module it is 15 assertions in
+  `run.mjs` that run in milliseconds.
+- **Pointer events, not touch events, and `pointerId` is tracked per control.**
+  A touch implementation that assumes one contact drops the throttle the moment
+  the other thumb moves the lever.
+- **`setPointerCapture` is wrapped in try/catch.** It throws `NotFoundError` if
+  the pointer is already gone — which happens for real when a touch ends between
+  dispatch and handling — and an unguarded throw aborts the rest of the handler,
+  leaving a pedal stuck down or a lever grabbed but unmoved.
+
+Sizing is entirely `vmin`/`clamp()`/`dvh` with `env(safe-area-inset-*)` padding.
+There is no per-device breakpoint: the same layout has to hold from a 320 px
+phone to a tablet, and `dvh` is what stops it jumping when mobile browser chrome
+hides.
 
 Blueprint / technical-grid aesthetic — engineering drawings and instrument
 panels, not a consumer dashboard.
