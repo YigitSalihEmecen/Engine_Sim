@@ -34,7 +34,7 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
  * @param {string} type lowpass|highpass|bandpass|peaking|lowshelf|highshelf
  * @returns {(f: number) => number} magnitude response
  */
-function biquad(type, f0, Q, dbGain = 0, sr = SR) {
+export function biquad(type, f0, Q, dbGain = 0, sr = SR) {
   const w0 = 2 * Math.PI * clamp(f0, 1, 0.499 * sr) / sr;
   const cw = Math.cos(w0), sw = Math.sin(w0);
   const A = Math.pow(10, dbGain / 40);
@@ -236,7 +236,7 @@ function decorrelate(delays, spread) {
 }
 
 /** The fixed-frequency tone stage in engine-sim.js, plus exterior cabin. */
-function toneStage() {
+export function toneStage() {
   const fs = [
     biquad('lowshelf', 145, 0.7, 9),
     biquad('peaking', 78, 1.0, 5.5),

@@ -528,8 +528,11 @@ $('tabs').onclick = e => {
 };
 
 /* machine */
-for (const [id,p] of Object.entries(ENGINE_PROFILES)) $('engine').add(new Option(p.label,id,false,id==='v8cross'));
-for (const [id,v] of Object.entries(VEHICLE_PRESETS)) $('vehicle').add(new Option(v.label,id,false,id==='sports'));
+// Built from the public listings rather than the profile tables, so this is
+// also a check that a host project can populate a picker without importing
+// anything internal.
+for (const e of EngineSim.engines()) $('engine').add(new Option(e.label, e.id, false, e.id==='v8cross'));
+for (const v of EngineSim.vehicles()) $('vehicle').add(new Option(v.label, v.id, false, v.id==='sports'));
 $('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); sync(); };
 $('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); };
 
@@ -681,8 +684,8 @@ $('pExt').onclick = () => setPos('exterior');
 $('pInt').onclick = () => setPos('interior');
 $('status').textContent = 'AWAITING GESTURE';
 // Derived, so adding a turbocharged profile never leaves this hint stale.
-$('turboHint').textContent = 'turbo: ' + Object.entries(ENGINE_PROFILES)
-  .filter(([, p]) => p.turbo).map(([id]) => id.toUpperCase()).join(' · ');
+$('turboHint').textContent = 'turbo: ' + EngineSim.engines()
+  .filter(e => e.turbo).map(e => e.id.toUpperCase()).join(' · ');
 sync();
 
 /* loop */
@@ -704,8 +707,7 @@ function frame(now){
   // instrument already shows. Total ratio (gearbox × final drive) is the thing
   // the label promises and is genuinely useful: it is what maps road speed to
   // rpm, so it explains the pitch you are hearing.
-  const ratio = sim._lastParams ? sim._lastParams.gearRatio : 0;
-  $('ratio').innerHTML = ratio > 0 ? ratio.toFixed(2)+'<s>:1</s>' : '—<s>N</s>';
+  $('ratio').innerHTML = s.gearRatio > 0 ? s.gearRatio.toFixed(2)+'<s>:1</s>' : '—<s>N</s>';
   const slip = Math.round(Math.abs(s.clutchSlip||0));
   $('slip').innerHTML = slip+'<s>rpm</s>';
   $('slipCell').classList.toggle('hot', slip > 50);

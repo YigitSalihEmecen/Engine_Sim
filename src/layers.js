@@ -1411,24 +1411,45 @@ const TRANSIENT_PRESETS = Object.freeze({
   // Unburnt charge lighting off in the exhaust: a gas explosion in a pipe, so
   // low and broad, with the pipe's own ring on top.
   //
-  // fB was 780 Hz. Once MODE_SURVIVAL dropped the exhaust's own centroid to
-  // ~199 Hz (ledger #31) that upper band stood well clear of everything else in
-  // the mix, and a report that does not share a register with the engine reads
-  // as a separate object next to the car rather than as the car.
-  bang:    Object.freeze({ bus: 'combustion', fA: 105,  qA: 1.6, fB: 520,  qB: 2.0, mixB: 0.50, atk: 0.0050, dec: 0.190, lvl: 1.0 }),
-  // The little ones that follow it. Brighter, shorter, quieter — but 850/1900
-  // put the whole crackle above the engine and half of it inside the 2-6 kHz
-  // band the ear is most sensitive to. Down an octave, it reads as the same
-  // gas in the same pipe.
-  crackle: Object.freeze({ bus: 'combustion', fA: 430,  qA: 3.0, fB: 1150, qB: 3.6, mixB: 0.45, atk: 0.0030, dec: 0.055, lvl: 0.5 }),
-  // Backlash take-up: two hardened steel faces colliding. NOT a pop — no low
-  // end to speak of, very fast, high Q, inharmonic pair (2.7×) so it reads as
-  // metal rather than as a pitched note.
-  clunk:   Object.freeze({ bus: 'mechanical', fA: 1150, qA: 22,  fB: 3100, qB: 16,  mixB: 0.75, atk: 0.0008, dec: 0.055, lvl: 0.9 }),
+  // Twice corrected, and the second correction is the interesting one.
+  //
+  // 118/780 stood clear of everything after MODE_SURVIVAL dropped the exhaust's
+  // centroid to ~199 Hz (#31), so both combustion presets came down an octave.
+  // That fixed the detachment and went too far: measured, the crackle's share
+  // of energy above 700 Hz fell from 71 % to 3 %, which is not "blended" but
+  // "gone". A pop needs the pipe for its BODY and its own high end for its
+  // DEFINITION, and the octave drop threw the second away along with the
+  // problem. 112/680 and 700/1850 are the midpoint, chosen by measurement.
+  bang:    Object.freeze({ bus: 'combustion', fA: 112,  qA: 1.6, fB: 680,  qB: 2.0, mixB: 0.58, atk: 0.0050, dec: 0.190, lvl: 1.0 }),
+  // The little ones that follow it: brighter, shorter, quieter, and the part
+  // that carries a pop's definition. 850/1900 put half of it inside the 2-6 kHz
+  // band; 430/1150 removed it from the mix entirely. 700/1850 keeps the top of
+  // the band under 2 kHz while restoring the crackle's edge.
+  crackle: Object.freeze({ bus: 'combustion', fA: 700,  qA: 3.0, fB: 1850, qB: 3.6, mixB: 0.62, atk: 0.0030, dec: 0.055, lvl: 0.5 }),
+  // Backlash take-up: two hardened steel faces colliding.
+  //
+  // This was 1150/3100 Hz at Q 22/16 with a 0.8 ms attack, which is not a
+  // driveline clunk — it is a CLICK, and it was the most out-of-place sound in
+  // the mix. Three things were wrong. A propshaft and diff are heavy castings
+  // bolted into a body shell, so the impact radiates a dull low-mid thunk, not
+  // a 1-3 kHz ping. They are also full of oil and clamped at both ends, so
+  // their modes are damped — Q around 6-8, not 22, which is a ringing tone.
+  // And an impact between two large masses is not instantaneous: the contact
+  // patch takes milliseconds to develop, so a sub-millisecond attack reads as
+  // a switch clicking rather than as metal landing.
+  //
+  // It matters more now than it used to: once the exhaust's centroid dropped to
+  // ~199 Hz (ledger #31) anything left up at 1-3 kHz stands alone in the mix,
+  // which is the same trap the crackle fell into (#38).
+  clunk:   Object.freeze({ bus: 'mechanical', fA: 330,  qA: 7.0, fB: 1250, qB: 6.0, mixB: 0.45, atk: 0.0035, dec: 0.075, lvl: 0.62 }),
   // Clutch bite: a big soft mass being grabbed. Low, dull, comparatively long.
   thump:   Object.freeze({ bus: 'mechanical', fA: 95,   qA: 2.2, fB: 320,  qB: 3.0, mixB: 0.35, atk: 0.0040, dec: 0.130, lvl: 0.8 }),
-  // Selector fork / synchro detent: tiny, bright, almost no decay.
-  click:   Object.freeze({ bus: 'mechanical', fA: 3200, qA: 8.0, fB: 6400, qB: 10,  mixB: 0.6,  atk: 0.0006, dec: 0.016, lvl: 0.35 }),
+  // Selector fork / synchro detent. A small steel detent inside a sealed
+  // aluminium case, heard through that case and then through a bulkhead —
+  // 3.2/6.4 kHz was the sound of the bare detent with none of that in the way,
+  // and it sat right in the band the ear is most sensitive to. Darker, softer
+  // and much quieter: it should be a hint that a lever moved, not an event.
+  click:   Object.freeze({ bus: 'mechanical', fA: 1500, qA: 5.0, fB: 2800, qB: 6.0, mixB: 0.40, atk: 0.0018, dec: 0.020, lvl: 0.16 }),
 });
 
 /**
@@ -1566,7 +1587,10 @@ export class TransientBank {
     // its resonance with 1/length, hence the fractional power on the ratio.
     this.sizeF = Math.pow(6 / cyl, 0.35);
     this.sizeA = Math.pow(cyl / 6, 0.30);
-    this.burstCount = clamp(2 + Math.round(cyl / 2.2), 3, 7);
+    // Reports in a shift-cut burst. Was 2 + cyl/2.2 (six on a V8), which turned
+    // every gear change into a volley. A cut is one brief interruption, so what
+    // comes out of the pipe is one report and at most a secondary or two.
+    this.burstCount = clamp(1 + Math.round(cyl / 5), 1, 3);
   }
 
   /**
@@ -1668,20 +1692,42 @@ export class TransientBank {
     // high-revving four spits a fast irregular string of them.
     const popEv = clamp(fin(p.evPop, 0), 0, 1);
     if (popEv > 0 && budget > 0) {
-      // Roughly one in four lifts comes out as a single hard crack rather than a
-      // string. Both happen in real cars and the unpredictability is most of
-      // what makes them satisfying, so it is a genuine coin flip, not a cycle.
-      const single = rnd() < 0.42;
-      // 2 for a big lazy engine up to ~8 for a small fast one, and a bigger
-      // event throws a longer burst because there is more charge to get through.
-      // Few and distinct. A long string reads as a crackle; two or three
-      // widely spaced reports read as gunshots.
-      const spread = single ? 1 : clamp(Math.round(
-        (1.2 + 9 / Math.max(3, this.cyl)) * (0.55 + 0.8 * rnd()) * (0.5 + 0.8 * popEv)), 1, 4);
+      // THE SHAPE OF THE BURST IS THE CHARACTER, and the shape has to vary
+      // between events or the ear learns the pattern within about four lifts
+      // and everything after that sounds like the same sample retriggering.
+      //
+      // Three genuinely different gestures, drawn per event rather than
+      // interpolated, because they are different physical outcomes:
+      //
+      //   crack   one hard report. All the charge lights at once. Loudest.
+      //   double  a report and one lazy secondary — the most common real one.
+      //   stutter a short irregular string as pockets of charge light in turn.
+      //
+      // Weighting shifts with event size: a small event rarely has enough fuel
+      // to stutter, a big one rarely gets through it all in a single crack.
+      const roll = rnd();
+      const bigness = 0.5 * popEv + 0.5 * rpmNorm;
+      let shape;
+      if (roll < 0.34 - 0.16 * bigness) shape = 'crack';
+      else if (roll < 0.80 - 0.10 * bigness) shape = 'double';
+      else shape = 'stutter';
+
+      const maxRun = clamp(Math.round(
+        (1.0 + 6 / Math.max(3, this.cyl)) * (0.6 + 0.7 * rnd())), 2, 3);
+      const spread = shape === 'crack' ? 1 : shape === 'double' ? 2 : maxRun;
       const count = Math.min(budget, spread);
+
       // A single crack puts the whole event into one report, so it has to be
       // louder than the first of a string or it reads as weaker, not punchier.
-      const punch = single ? 2.6 : 1.9;
+      const punch = shape === 'crack' ? 2.6 : shape === 'double' ? 2.0 : 1.6;
+
+      // Per-EVENT size draw, on top of the per-report jitter. Without this the
+      // only thing separating one lift from another is rpm, so every pop at a
+      // given speed came out the same size. Skewed low (squared) so most are
+      // ordinary and the occasional one is a bang — which is how it actually
+      // goes.
+      const size = 0.42 + 1.05 * rnd() * rnd();
+
       let t = now + this.lookahead + rnd() * 0.006;
       for (let i = 0; i < count; i++) {
         // Not a clean decay: real bursts stutter, and an occasional late one is
@@ -1689,17 +1735,18 @@ export class TransientBank {
         const fall = Math.pow(0.86, i) * (0.6 + 0.8 * rnd());
         // Ceiling 3, not 1: the 2.6x single-crack punch was being clamped away
         // right here, so every "gunshot" arrived as an ordinary pop. Effective
-        // audio level is amp x makeup(9) x bandpass loss(0.114), so amp 3 lands
-        // around 3.1 against an overrun engine at 0.48 — roughly 6x, which is
-        // what reads as a gunshot rather than a crackle. The master limiter,
-        // not this clamp, is what keeps it safe.
-        const amp = clamp(punch * popEv * this.sizeA * fall * (0.5 + 0.65 * rpmNorm), 0.001, 2);
+        // audio level is amp x makeup(9) x bandpass loss(0.114). The master
+        // limiter, not this clamp, is what keeps it safe.
+        const amp = clamp(punch * size * popEv * this.sizeA * fall
+          * (0.5 + 0.65 * rpmNorm), 0.001, 2);
         const type = i === 0 ? 'bang' : (rnd() < 0.5 ? 'bang' : 'crackle');
         // Bigger events sit lower — more gas, longer column, deeper report.
         const fScale = this.sizeF * (0.62 + 0.7 * rnd()) * (1 - 0.22 * popEv);
         this.trigger(type, t, amp, fScale, 0.7 + 0.9 * rnd());
-        // Gaps scale with engine size: big engines pop slower.
-        t += (0.055 + rnd() * 0.16) * (0.6 + 4 / Math.max(3, this.cyl));
+        // Gaps scale with engine size: big engines pop slower. A stutter runs
+        // tighter than a lazy double.
+        const gapScale = shape === 'stutter' ? 0.55 : 1;
+        t += (0.055 + rnd() * 0.16) * (0.6 + 4 / Math.max(3, this.cyl)) * gapScale;
         budget--;
       }
     }
@@ -1731,9 +1778,11 @@ export class TransientBank {
         this._syncClicks = 0;
         this._syncNext = now;
       }
-      // Two clicks: the fork loading the synchro ring, then the dog engaging.
-      if (this._syncClicks < 2 && now >= fin(this._syncNext, now) && budget > 0) {
-        this.trigger('click', now + this.lookahead, 0.35 + 0.25 * rnd(), 0.85 + 0.4 * rnd(), 1);
+      // ONE click, not two. Two detent clicks 35 ms apart on every single gear
+      // change is a mechanism announcing itself; a driver hears the lever land
+      // once, if at all, under everything else that is happening during a shift.
+      if (this._syncClicks < 1 && now >= fin(this._syncNext, now) && budget > 0) {
+        this.trigger('click', now + this.lookahead, 0.30 + 0.22 * rnd(), 0.85 + 0.4 * rnd(), 1);
         this._syncClicks++;
         this._syncNext = now + 0.035 + rnd() * 0.03;
         budget--;
@@ -1758,7 +1807,10 @@ export class TransientBank {
       : overrun * 0.55;
     // Threshold raised from 0.02: a near-zero intensity was still trickling out
     // events forever, which is the "constant crackle that sounds like a bug".
-    const hot = this.overrunCrackle && pop > 0.18 && rpm > this.idleRpm * 1.5 && !p.shifting;
+    // Raised again to 0.30 — at 0.18 the stream ran on almost every overrun, so
+    // the deliberate lift-off bang always landed on a bed of crackle instead of
+    // into silence, and the two together read as "it pops constantly".
+    const hot = this.overrunCrackle && pop > 0.30 && rpm > this.idleRpm * 1.5 && !p.shifting;
     if (!hot) {
       this._nextPop = now;
       return;
@@ -1767,15 +1819,22 @@ export class TransientBank {
 
     const horizon = now + 0.12;
     // Events per second: more cylinders → more charge events, more rpm → faster.
-    const rate = 0.6 + 2.4 * pop * (0.35 + 0.65 * rpmNorm) * (this.cyl / 6);
+    // Halved from 2.4: combined with the lower threshold above, the stream was
+    // dense enough to be continuous rather than intermittent, and a continuous
+    // crackle is a texture, not an event.
+    const rate = 0.35 + 1.2 * pop * (0.35 + 0.65 * rpmNorm) * (this.cyl / 6);
     while (this._nextPop < horizon && budget > 0) {
       const t = Math.max(this._nextPop, now + this.lookahead);
-      // The 'crackle' preset is half the level of 'bang', so a stream made
-      // mostly of crackles sat far under the engine even at full intensity.
-      // Louder, and a genuine mix of the two.
-      const amp = clamp(0.26 * pop * this.sizeA * (0.4 + 0.9 * rnd()) * (0.45 + 0.55 * rpmNorm), 0.001, 1);
-      this.trigger(rnd() < 0.5 ? 'bang' : 'crackle', t, amp, this.sizeF * (0.7 + 0.9 * rnd()), 0.6 + 0.9 * rnd());
-      this._nextPop = t + (0.3 + 1.4 * rnd()) / Math.max(0.5, rate);
+      // Wide amplitude spread, skewed low. A stream of same-sized ticks reads
+      // as a machine; real overrun crackle is mostly faint with the occasional
+      // one that actually cracks.
+      const amp = clamp(0.30 * pop * this.sizeA * (0.25 + 1.5 * rnd() * rnd())
+        * (0.45 + 0.55 * rpmNorm), 0.001, 1);
+      this.trigger(rnd() < 0.4 ? 'bang' : 'crackle', t, amp,
+        this.sizeF * (0.7 + 0.9 * rnd()), 0.6 + 0.9 * rnd());
+      // Gaps drawn from a wider range so the stream is genuinely irregular
+      // rather than a jittered metronome.
+      this._nextPop = t + (0.25 + 2.2 * rnd() * rnd()) / Math.max(0.4, rate);
       budget--;
     }
     // If the budget ran out, make sure we do not re-schedule the past next frame.

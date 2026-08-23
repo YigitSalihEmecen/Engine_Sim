@@ -238,6 +238,173 @@ await suite('physics — driveline', () => {
   }
 });
 
+await suite('public API — what a host project actually needs', async () => {
+  const { EngineSim } = await import('../src/engine-sim.js');
+
+  // Static listings: a host must be able to build a picker without importing
+  // internals or knowing the profile schema.
+  const engines = EngineSim.engines();
+  const vehicles = EngineSim.vehicles();
+  ok(engines.length === Object.keys(ENGINE_PROFILES).length,
+     'engines() lists every profile', `${engines.length}`);
+  ok(engines.every(e => e.id && e.label && e.redlineRpm > 0 && typeof e.turbo === 'boolean'),
+     'engines() entries are UI-ready');
+  ok(vehicles.length === Object.keys(VEHICLE_PRESETS).length,
+     'vehicles() lists every preset', `${vehicles.length}`);
+  ok(vehicles.every(v => v.id && v.label && v.gears > 0 && v.gearbox),
+     'vehicles() entries are UI-ready');
+
+  const reaches = (from, target) => {
+    const seen = new Set(), stack = [from];
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      if (n === target) return true;
+      for (const d of (n._connections || [])) stack.push(d);
+    }
+    return false;
+  };
+
+  // Routing into a host graph. Hard-wiring to ctx.destination forces the engine
+  // to be the last thing in the chain, which no game with its own mixer wants.
+  const mk = createMockContext();
+  installGlobals(mk.ctx);
+  const bus = mk.ctx.createGain();
+  const sim = new EngineSim(mk.ctx, { engine: 'i6', vehicle: 'sports', destination: bus });
+  await sim.start();
+  ok(reaches(sim.output, bus), 'opts.destination routes the output into a host node');
+  ok(!reaches(sim.output, mk.ctx.destination),
+     'and does NOT also wire itself to ctx.destination');
+  sim.connect(mk.ctx.destination);
+  ok(reaches(sim.output, mk.ctx.destination) && !reaches(sim.output, bus),
+     'connect() moves the output rather than fanning out');
+
+  for (let i = 0; i < 40; i++) { sim.setThrottle(1); mk.advance(1 / 60); sim.update(1 / 60); }
+
+  // Telemetry: everything the console needs must be on getState(), not on the
+  // private _lastParams it used to reach into.
+  const st = sim.getState();
+  for (const k of ['rpm', 'speedKmh', 'gear', 'gearRatio', 'load', 'rpmNorm',
+                   'clutchSlip', 'boost', 'shiftPhase', 'redline', 'volume']) {
+    ok(st[k] !== undefined, `getState() exposes ${k}`);
+  }
+  ok(st.gearRatio > 0, 'gearRatio is the real total ratio', st.gearRatio.toFixed(2));
+
+  const ev = sim.getEvents();
+  ok(['lash', 'pop', 'cut', 'engage', 'bov', 'shiftDone'].every(k => k in ev),
+     'getEvents() exposes every one-frame impulse', Object.keys(ev).join(','));
+
+  ok(sim.setPosition(0.5) === 0.5 && sim.getState().perspective === 'interior',
+     'setPosition() gives a continuous exterior↔cabin blend');
+  ok(sim.update(1 / 60) === sim, 'update() is chainable');
+  sim.dispose();
+});
+
+await suite('transients — pops go through the pipe, clunks do not', async () => {
+  // Where a transient is HEARD FROM is physics, not mix. Fuel lighting off
+  // inside the exhaust leaves through the tailpipe and must carry the pipe's
+  // resonance and muffler colour; gear lash happens in a steel box bolted to
+  // the chassis and never goes near the exhaust. Sharing one output and
+  // sending part of it to the pipe got both of those wrong at once.
+  const { EngineSim } = await import('../src/engine-sim.js');
+  const mk = createMockContext();
+  installGlobals(mk.ctx);
+  const sim = new EngineSim(mk.ctx, { engine: 'v8cross', vehicle: 'sports' });
+  await sim.start();
+  const TB = sim.transients;
+
+  const reaches = (from, target) => {
+    const seen = new Set(), stack = [from];
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      if (n === target) return true;
+      for (const d of (n._connections || [])) stack.push(d);
+    }
+    return false;
+  };
+
+  const pipe = sim.exhaust.inputs[0];
+  const dest = mk.ctx.destination;
+  const comb = TB.pools.combustion[0].gain;
+  const mech = TB.pools.mechanical[0].gain;
+
+  ok(TB.pools.combustion.length > 0 && TB.pools.mechanical.length > 0,
+     'the voice pool is split by bus',
+     `${TB.pools.combustion.length} combustion / ${TB.pools.mechanical.length} mechanical`);
+  ok(reaches(comb, pipe), 'a combustion voice reaches the exhaust waveguides');
+  ok(reaches(comb, dest), 'a combustion voice reaches the output');
+  ok(!reaches(mech, pipe), 'a MECHANICAL voice never enters the exhaust');
+  ok(reaches(mech, dest), 'a mechanical voice reaches the output');
+
+  // The presets that fire into the pipe must actually be tagged for it.
+  const { TRANSIENT_PRESETS } = await import('../src/layers.js');
+  ok(TRANSIENT_PRESETS.bang.bus === 'combustion'
+     && TRANSIENT_PRESETS.crackle.bus === 'combustion',
+     'bang and crackle are combustion');
+  ok(TRANSIENT_PRESETS.clunk.bus === 'mechanical'
+     && TRANSIENT_PRESETS.thump.bus === 'mechanical'
+     && TRANSIENT_PRESETS.click.bus === 'mechanical',
+     'clunk, thump and click are mechanical');
+
+  // Tonal placement: a report an octave above the engine reads as a separate
+  // object next to the car. The exhaust centroid is ~200 Hz (see spectrum.mjs),
+  // so the combustion pair has to live in that register.
+  // A pop needs the pipe for BODY and its own top end for DEFINITION. Dropping
+  // both presets an octave to fix detachment threw the definition away with it
+  // — the crackle's energy above 700 Hz fell from 71 % to 3 % and the reports
+  // went faint. Both ends of that are failures, so both are asserted, on the
+  // radiated spectrum rather than on the raw filter frequencies.
+  {
+    const { chainMag, toneStage, biquad } = await import('./spectrum.mjs');
+    const P = ENGINE_PROFILES.v8cross;
+    const H = chainMag(P, 0, 1.0, 0.6), T = toneStage();
+    const radiated = (pre, send, direct) => {
+      const a = biquad('bandpass', pre.fA, pre.qA), b = biquad('bandpass', pre.fB, pre.qB);
+      let tot = 0, hi = 0, harsh = 0;
+      for (let f = 25; f < 12000; f *= Math.pow(2, 1 / 48)) {
+        const src = (a(f) + pre.mixB * b(f)) * pre.lvl * 9;
+        const pipe = src * send * H(f), dry = src * direct * 0.42 * T(f);
+        const p = pipe * pipe + dry * dry;
+        tot += p;
+        if (f >= 700) hi += p;
+        if (f >= 2000 && f <= 6000) harsh += p;
+      }
+      return { hi: 100 * hi / tot, harsh: 100 * harsh / tot };
+    };
+    const c = radiated(TRANSIENT_PRESETS.crackle, 1.05, 0.75);
+    ok(c.hi > 20, 'the crackle keeps enough top end to define a pop',
+       `${c.hi.toFixed(0)}% above 700 Hz`);
+    ok(c.harsh < 3.5, 'the crackle stays mostly out of the ear-sensitive band',
+       `${c.harsh.toFixed(1)}% in 2-6 kHz`);
+  }
+
+  // NOTHING may click. A sub-millisecond attack on a high-Q band above 1 kHz is
+  // a switch closing, not a car — `clunk` was 0.8 ms at 1150/3100 Hz with Q 22
+  // and it was the most out-of-place sound in the mix. Two large steel parts
+  // colliding take milliseconds for the contact patch to develop, and they are
+  // damped by oil and by being bolted to a body shell.
+  for (const [name, pre] of Object.entries(TRANSIENT_PRESETS)) {
+    ok(pre.atk >= 0.0015, `${name}: attack is an impact, not a click`,
+       `${(pre.atk * 1000).toFixed(1)} ms`);
+    ok(pre.qA <= 12 && pre.qB <= 12, `${name}: resonances are damped, not ringing`,
+       `Q ${pre.qA} / ${pre.qB}`);
+  }
+
+  // Weighted band centre of each preset, against an exhaust centroid of ~199 Hz.
+  // Anything mechanical that sits a long way above the engine reads as a
+  // separate object rather than as part of the car.
+  const centre = (p) => (p.fA + p.fB * p.mixB) / (1 + p.mixB);
+  ok(centre(TRANSIENT_PRESETS.clunk) < 900,
+     'the driveline clunk shares a register with the engine',
+     `${Math.round(centre(TRANSIENT_PRESETS.clunk))} Hz`);
+  // The synchro click is the one bright thing left, so it has to be quiet.
+  ok(TRANSIENT_PRESETS.click.lvl <= 0.2, 'the synchro click is a hint, not an event',
+     `lvl ${TRANSIENT_PRESETS.click.lvl}`);
+});
+
 await suite('dynamics — the three-band crossover sums flat', async () => {
   // A band-split compressor is only transparent if the bands add back up to the
   // signal that went in. Web Audio's lowpass/highpass Q is in DECIBELS, so

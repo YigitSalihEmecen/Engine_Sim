@@ -56,17 +56,17 @@ export class EngineSim {
     this.mix = { ...DEFAULT_MIX, ...(opts.mix || {}) };
     this._volume = opts.volume ?? 0.7;
     this.running = false;
+    this._destOpt = opts.destination || null;
 
     // Drivetrain owns its ShiftController — the shift state machine has to run
     // inside the sub-stepped integration, not alongside it.
     //
-    // This used to force launchFlareRpm to 850, which put the WOT launch hold at
-    // idle*1.05 + 850 = 1585 rpm on a V8. The engine sat on that one pitch for
-    // ~0.4 s every standing start — audibly stuck, and nothing like a launch.
-    // It was an over-correction for the launch bounce (ledger #24); what
-    // actually fixed the bounce was handing over at geared > 0.90 x target.
-    // physics.js's own 2400 default holds at ~3140 rpm instead, which is what a
-    // sports car at full throttle actually does.
+    // This used to force launchFlareRpm to 850, which put the WOT launch hold
+    // at 1585 rpm on a V8 and pinned the engine there for most of a second on
+    // every standing start. It was an over-correction for the launch bounce.
+    // physics.js now controls the launch by SLIP rather than by holding an rpm
+    // setpoint at all, so there is nothing here to override — see
+    // Drivetrain._launchClutch().
     this.physics = new Drivetrain(this.profile, this.vehicle, { ...opts });
 
     this._buildGraph();
@@ -165,7 +165,12 @@ export class EngineSim {
     this.stereo.output.connect(this.dynamics.input);
     this.dynamics.output.connect(this.limiter);
     this.limiter.connect(this.master);
-    this.master.connect(ctx.destination);
+    // Routable output. A game usually has its own mixer — a music bus, a master
+    // fader, an analyser for a visualiser — and hard-wiring to ctx.destination
+    // forces the engine to be the last thing in the chain. Pass
+    // `opts.destination`, or call connect() later.
+    this._destination = null;
+    this.connect(this._destOpt || ctx.destination);
 
     // One gain per voice so the balance is user-controllable.
     this.busses = {};
@@ -219,12 +224,21 @@ export class EngineSim {
     this.transients.combustionOutput.connect(this.popSend);
     for (const inp of this.exhaust.inputs) this.popSend.connect(inp);
 
-    // A little direct sound is still needed: a tailpipe is not an anechoic
-    // termination and the initial crack does reach you before the pipe has
-    // finished ringing. Small, though — this is the leading edge, not the body
-    // of the report.
+    // The direct path is NOT a garnish — it is where a pop's definition lives.
+    //
+    // The pipe is a lowpass: for a V8 the muffler packing sits at 1.9 kHz and
+    // the waveguide loop filter at ~400 Hz, so anything routed through it comes
+    // out with the pipe's colour and almost none of its own top. At 0.22 that
+    // left the reports with 8 % of their energy in the direct path against 86 %
+    // before, and the result was correct in placement but faint and dull — the
+    // body of a pop with none of the crack.
+    //
+    // 0.75 is the measured midpoint: the crackle's share of energy above 700 Hz
+    // comes back from 3 % to 38 % (it was 71 %), while its share in the harsh
+    // 2-6 kHz band stays at 2.3 % (it was 4.0 %). Body from the pipe, edge from
+    // the direct path.
     this.popDirect = ctx.createGain();
-    this.popDirect.gain.value = 0.22;
+    this.popDirect.gain.value = 0.75;
     this.transients.combustionOutput.connect(this.popDirect);
     this.popDirect.connect(this.busses.transients);
 
@@ -461,8 +475,20 @@ export class EngineSim {
     return g;
   }
 
-  /** 'exterior' | 'interior', or a 0..1 blend via setPosition. */
+  /** 'exterior' | 'interior'. For a continuous blend use setPosition(). */
   setPerspective(mode) { this.cabin.setPerspective(mode); this._perspective = mode; }
+
+  /**
+   * Continuous listener position: 0 = outside the car, 1 = in the cabin.
+   * Use this instead of setPerspective() when the camera moves smoothly —
+   * a chase camera pulling into a cockpit, for instance.
+   */
+  setPosition(x) {
+    const v = clamp(Number(x) || 0, 0, 1);
+    this.cabin.setPosition(v);
+    this._perspective = v >= 0.5 ? 'interior' : 'exterior';
+    return v;
+  }
 
   update(deltaTime) {
     let dt = Number(deltaTime) || 0;
@@ -473,8 +499,13 @@ export class EngineSim {
     const p = this.physics.step(dt, this.ctx.currentTime);
     this._writeParams(p, false);
     this._lastParams = p;
+    return this;
   }
 
+  /**
+   * Everything a game needs to draw a dashboard and drive its own effects.
+   * Safe to call every frame; allocates one small object.
+   */
   getState() {
     const s = this.physics.getState();
     const p = this._lastParams;
@@ -483,6 +514,14 @@ export class EngineSim {
       shiftPhase: s.phase || '',
       clutchSlip: p ? p.clutchSlip : 0,
       boost: p ? p.boost : 0,
+      // Derived quantities that callers were reaching into `_lastParams` for.
+      // A private field is not an integration surface.
+      gearRatio: p ? p.gearRatio : 0,
+      wheelRpm: p ? p.wheelRpm : 0,
+      load: p ? p.load : 0,
+      overrun: p ? p.overrun : 0,
+      rpmNorm: p ? p.rpmNorm : 0,
+      dRpm: p ? p.dRpm : 0,
       engine: this.engineId,
       engineLabel: this.profile.label,
       vehicle: this.vehicleId,
@@ -490,8 +529,79 @@ export class EngineSim {
       gearbox: this.vehicle.gearbox,
       auto: this.physics.shift ? this.physics.shift.autoShift : true,
       perspective: this._perspective,
+      volume: this._volume,
       mix: { ...this.mix },
     };
+  }
+
+  /**
+   * One-frame impulse flags from the last `update()`, magnitude 0..1, each
+   * non-zero for exactly one frame. Hang camera shake, particles and haptics
+   * off these.
+   *
+   *   lash       driveline backlash impact — the clunk
+   *   pop        exhaust bang / crackle
+   *   cut        ignition cut at the start of a gear change
+   *   engage     clutch bite
+   *   bov        blow-off valve released
+   *   shiftDone  the gear change finished
+   */
+  getEvents() {
+    const p = this._lastParams;
+    if (!p) return { lash: 0, pop: 0, cut: 0, engage: 0, bov: 0, shiftDone: 0 };
+    return {
+      lash: p.evLash || 0,
+      pop: p.evPop || 0,
+      cut: p.evCut || 0,
+      engage: p.evEngage || 0,
+      bov: p.evBov || 0,
+      shiftDone: p.evShiftDone || 0,
+    };
+  }
+
+  /** The node the whole simulator comes out of. */
+  get output() { return this.master; }
+
+  /**
+   * Route the output somewhere other than `ctx.destination`. Replaces any
+   * previous destination, so calling it twice moves the engine rather than
+   * fanning it out to both.
+   * @param {AudioNode} node
+   */
+  connect(node) {
+    if (!node) return this;
+    if (this._destination) {
+      try { this.master.disconnect(this._destination); } catch (e) { /* wasn't connected */ }
+    }
+    this.master.connect(node);
+    this._destination = node;
+    return this;
+  }
+
+  /** Engine profiles as UI-ready metadata. Static — no AudioContext needed. */
+  static engines() {
+    return Object.entries(ENGINE_PROFILES).map(([id, p]) => ({
+      id,
+      label: p.label,
+      cylinders: p.cylinders,
+      turbo: !!p.turbo,
+      idleRpm: p.idleRpm,
+      redlineRpm: p.redlineRpm,
+      peakTorque: p.peakTorque,
+      banks: p.banks.length,
+    }));
+  }
+
+  /** Vehicle presets as UI-ready metadata. Static — no AudioContext needed. */
+  static vehicles() {
+    return Object.entries(VEHICLE_PRESETS).map(([id, v]) => ({
+      id,
+      label: v.label,
+      mass: v.mass,
+      gears: v.gearRatios.length,
+      gearbox: v.gearbox,
+      finalDrive: v.finalDrive,
+    }));
   }
 
   // =========================================================================

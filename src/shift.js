@@ -195,8 +195,30 @@ export class ShiftController {
 
     this.phase = 'cut';
     this.t = 0;
+
+    // A shift cut is an INTERRUPTION, not an explosion.
+    //
+    // This used to fire at near-full magnitude on every single gear change, so
+    // every upshift threw a volley of exhaust bangs. Real cars do not do that:
+    // an ordinary upshift is a brief "pfft" of overrun, and only a hot, fuel-
+    // rich pipe actually lights off. Banging on all of them is the thing that
+    // reads as "it pops constantly".
+    //
+    // So it is gated on the same two physical conditions as a lift-off bang:
+    // a hot enough pipe, and luck. `egt` is the drivetrain's exhaust-gas
+    // temperature state; if it is not there (a bare ShiftController under test)
+    // fall back to the old unconditional behaviour.
+    const egt = typeof d.egt === 'number' ? d.egt : 1;
+    const heat = clamp((egt - 0.45) / 0.35, 0, 1);
     // The bang scales with how much torque we are throwing away.
-    d.fireEvent('cut', clamp(k.cutBang * (0.25 + 0.75 * d.throttle) * k.cutDepth, 0, 1));
+    const mag = k.cutBang * (0.25 + 0.75 * d.throttle) * k.cutDepth * heat;
+    // A dual-clutch box overlaps its clutches and dumps a much bigger slug of
+    // charge, which is why those cars crack on every shift and a manual does
+    // not. That difference is `cutBang`, so the probability follows it.
+    const pFire = clamp((0.12 + 0.55 * heat) * k.cutBang, 0, 0.9);
+    if (mag > 0.04 && Math.random() < pFire) {
+      d.fireEvent('cut', clamp(mag, 0, 1));
+    }
     return true;
   }
 

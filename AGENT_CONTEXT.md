@@ -58,7 +58,7 @@ engine_sim/
 │   └── CONTRACT.md                module interface contract
 └── test/
     ├── mock-audio.mjs             strict Web Audio mock + graph audit
-    ├── run.mjs                    unit + sweep suite (277 checks)
+    ├── run.mjs                    unit + sweep suite (320 checks)
     ├── drive.mjs                  driving-behaviour suite
     └── spectrum.mjs               ANALYTIC spectrum of the exhaust chain
 ```
@@ -77,7 +77,7 @@ Commands:
 ```
 npm start                   # dev server on :8000  (= node tools/serve.mjs)
 npm test                    # run.mjs + drive.mjs
-node test/run.mjs           # 277 checks, exits non-zero on failure
+node test/run.mjs           # 320 checks, exits non-zero on failure
 node test/drive.mjs         # driving behaviour, 80 engine×vehicle combos
 node test/run.mjs orders    # run one suite by substring
 node test/spectrum.mjs      # harshness table, all engines
@@ -174,14 +174,15 @@ Constants: `TABLE_SIZE = 8192` (analysis resolution), `MAX_HARMONICS = 1024`
 ```
 bank wavetable osc ×2 (soft/hard crossfade, per bank) ─→ ExhaustSystem inputs[i]
 ExhaustNoise (broadband flow noise) ──────────────────→ ExhaustSystem inputs[i]
-TransientBank ──(popSend 1.05)───────────────────────→ ExhaustSystem inputs[i]
+TransientBank combustion bus ──(popSend 1.05)────────→ ExhaustSystem inputs[i]
+              combustion bus ──(popDirect 0.22)───────→ bus: transients
    ExhaustSystem = per-bank Waveguide → collector Waveguide → Muffler → Nonlinearity
                                                               ↓ bus: exhaust
 intake wavetable osc ×2 → IntakeResonator (Helmholtz + turbulence)  ↓ bus: intake
 MechanicalLayer   valvetrain @0.5 order, injectors, chain, block modes ↓ mechanical
 TransmissionLayer mesh whine = driveshaft rpm × engaged gear teeth     ↓ transmission
 TurboLayer        lagged spool whine, shaft sidebands, chatter, BOV    ↓ turbo
-TransientBank     direct path (bangs, clunks, thumps)                  ↓ transients
+TransientBank     mechanical bus only (clunks, thumps, clicks)         ↓ transients
 SubLayer          octave-shifted chest-band sine + saturation          ↓ sub
 CharacterModulator → osc.detune (cents) and busses.exhaust.gain (tremolo)
                             ↓
@@ -193,7 +194,7 @@ CharacterModulator → osc.detune (cents) and busses.exhaust.gain (tremolo)
 ```
 
 Default mix: `exhaust 1.0, intake 0.75, mechanical 0.55, transmission 0.45,
-turbo 0.7, transients 0.42, sub 0.9`. Steady state ≈ **291 nodes**, ~29 AudioParam
+turbo 0.7, transients 0.42, sub 0.9`. Steady state ≈ **293 nodes**, ~29 AudioParam
 writes/frame, **zero per-frame allocation**.
 
 ### Module notes
@@ -246,7 +247,13 @@ writes/frame, **zero per-frame allocation**.
   is left to reverse through the wheel; a small or recirculating one leaves
   pressure standing and the compressor stalls. Not a mode switch.
 - `TransientBank` — 16 pre-built voices (noise → 2 bandpasses → gain),
-  retriggered by scheduling envelopes. **Zero allocation per event.**
+  retriggered by scheduling envelopes. **Zero allocation per event.** The pool
+  is **partitioned by bus**: 10 combustion voices hard-wired to `combustionOutput`
+  (fed into the exhaust waveguides — a bang happens IN the pipe and leaves
+  through the tailpipe) and 6 mechanical voices on `output` (gear lash and
+  clutch thump radiate from the casing and never go near the exhaust). Routing
+  by partition rather than per-event gain costs no nodes and no param writes,
+  and a burst of pops can never starve the clunk landing in the middle of it.
 
 **`character.js`** — deliberately sound design, not simulation:
 - `ExhaustNoise` — broadband flow noise injected **into the waveguides** so it
@@ -357,13 +364,50 @@ A measured upshift:
    350  shuffle  3992    0.09784        0     329
 ```
 
-### Launch behaviour
+### Launch behaviour — controlled by SLIP, not by holding an rpm
 
-`launchFlareRpm: 850` (set from `engine-sim.js`). The launch clutch controller
-hands over to a locked clutch only once **road speed has caught up to the rpm the
-engine is being held at** (`geared > 0.90 × target`), so slip is already near
-zero. Disarming on a fixed low threshold instead made revs shoot to ~3600, get
-dragged to ~2000, then climb again — the "launch bounce".
+This has been got wrong three separate times, always the same way: **any
+controller that regulates the engine onto an rpm setpoint holds it at one pitch
+for as long as the clutch slips, and that reads as the engine being stuck.**
+
+The current controller does not have a setpoint. It targets a **slip** that
+decays exponentially from the flare, and the engine speed is then whatever
+physics puts it at:
+
+```
+slip0      = flare − idle                    flare = idle·1.05 + throttle·launchFlareRpm
+targetSlip = slip0 · e^(−t/launchTime)       launchTime = 0.75 s
+want       = gearedRpm + targetSlip          ← a RISING road speed plus a SHRINKING slip
+```
+
+Because the car is accelerating the whole time, `want` rises on its own and
+lockup arrives when the slip term runs out. Nothing is ever pinned.
+
+Two details are load-bearing:
+
+- **The demand ratchets.** Early on `geared` is near zero and rising more slowly
+  than the slip decays, so `want` can briefly fall — and a falling demand is the
+  dip that sounds like the engine being dragged back. `launchPeak` latches the
+  demand upward instantly and bleeds it **down** over 0.45 s, which makes it a
+  rate limit on falling demand rather than a hard floor. A hard latch stopped
+  the dip and then pinned heavy cars for half a second instead — the same
+  plateau in a new place.
+- **Sitting still with the throttle shut is not a launch.** The controller resets
+  while stationary and off-throttle, so flooring it starts from a genuinely open
+  clutch. Without that the integrator winds up during the idle beforehand, the
+  clutch is already half engaged when the throttle arrives, and the engine can
+  never flare.
+
+Measured, WOT from idle, longest stretch in 1st under 250 rpm/s:
+
+| | hold | flat spot |
+| --- | --- | --- |
+| `launchFlareRpm: 850`, fixed target | 1585 rpm | 0.27 s |
+| flare 2400 + a rising "creep" target | ~3200 rpm | ~1 s (user-reported) |
+| **slip control + bleeding ratchet** | — | **0.00–0.18 s** |
+
+`launchTime` (0.75 s) is the slip decay constant — how quickly the driver takes
+the slip out. `launchCreep` no longer exists; do not reintroduce it.
 
 ### Exhaust thermal model (drives popping)
 
@@ -384,8 +428,44 @@ open bangs; easing off does not), times a random "luck" factor.
 the effective throttle. The rev limiter drives effective throttle to zero every
 50 ms, so reading it made every limiter cycle look like a fresh lift-off.
 
-Measured lift-off pops by rpm at cut: 1612 → 1–2 pops @0.07; 6201 → 3–6 pops
-@1.2–3.0 (≈5× the engine). A global 0.30 s refractory prevents machine-gunning.
+### Popping is a PROBABILITY, not a consequence
+
+The single biggest thing separating a car from a sound effect. Firing on every
+lift and throwing a volley on every gear change is physically defensible per
+event and completely wrong in aggregate — the ear learns the pattern in about
+four repetitions.
+
+```
+pFire = clamp((egt − 0.42)/0.34, 0, 1) · (0.18 + 0.82·rpmN^1.7) · (0.45 + 0.55·snap)
+```
+
+Measured over 60 s with ten lifts: **pottering produces zero pops**, pressing on
+1–3 of 10, flat out 4–7 of 10. The shift bang is gated the same way and scaled
+by `cutBang`, which is why a dual-clutch car still cracks on most shifts and a
+manual mostly does not — 1 bang across 4 upshifts, against 4 of 4 before.
+
+Burst shape draws one of three gestures per event (`crack` / `double` /
+`stutter`), weighted by event size, plus a squared per-event size draw. Result:
+**27 dB between the median pop and the peak** instead of everything the same
+size. A 0.45 s refractory prevents machine-gunning.
+
+### Where a pop is heard from
+
+Two properties, and they pull in opposite directions:
+
+- **Body** comes from the pipe. A bang happens inside the exhaust and leaves
+  through the tailpipe, so it must carry the pipe's resonance and muffler
+  colour. `combustionOutput → popSend (1.05) → exhaust waveguides`.
+- **Definition** comes from the direct path. The pipe is a lowpass — for a V8
+  the packing sits at 1.9 kHz and the waveguide loop filter at ~400 Hz — so
+  anything routed through it arrives with almost none of its own top.
+  `combustionOutput → popDirect (0.75) → transients bus`.
+
+Getting this wrong in either direction is a bug, and both have happened:
+routing everything dry left the pops detached (#37), and over-darkening them
+left the reports faint and dull (#42). The current values are the measured
+midpoint — the crackle keeps **38 %** of its energy above 700 Hz (it was 71 %
+detached, then 3 % dull) with **2.3 %** in the harsh 2–6 kHz band.
 
 ---
 
@@ -411,11 +491,22 @@ sim.setThrottle(1); sim.update(dt);   // per frame
 | `setWidth(0..1)` · `setPopDepth(0..2)` | |
 | `setDynamics(0..1)` | 3-band compressor amount; 0 ≈ bypass, 1 = default |
 | `getReduction()` | live `{low, mid, high}` gain reduction in dB |
-| `setPerspective('exterior'\|'interior')` | |
-| `update(dt)` · `start()` · `stop()` · `dispose()` · `getState()` | |
+| `setPerspective('exterior'\|'interior')` · `setPosition(0..1)` | position is continuous |
+| `update(dt)` · `start()` · `stop()` · `dispose()` | `update` is chainable |
+| `getState()` | full telemetry — see below |
+| `getEvents()` | `{lash, pop, cut, engage, bov, shiftDone}` one-frame impulses |
+| `EngineSim.engines()` / `EngineSim.vehicles()` | **static** UI-ready listings |
+| `sim.output` · `sim.connect(node)` · `opts.destination` | route into a host graph |
 
-`sim._lastParams` holds the full per-frame params object (`evLash`, `evPop`,
-`clutchSlip`, `egt`, `boost`, …) — the drive scene reads it for camera impacts.
+**`_lastParams` is private and callers must not read it.** Everything a host
+needs is on `getState()` (which now includes `gearRatio`, `wheelRpm`, `load`,
+`overrun`, `rpmNorm`, `dRpm`, `volume`) and `getEvents()`. `index.html` was
+reaching into it for the gear ratio and no longer does — it is now a consumer of
+the public API only, which is deliberate: it is the proof the API is sufficient.
+
+By default the output goes to `ctx.destination`. `opts.destination` or
+`connect(node)` puts it inside a host mixer instead; `connect()` **moves** the
+output rather than fanning it out.
 
 Profiles (16): `vtwin i3 rotary2 i4 boxer4 i5 i6 i6diesel v6 v6tt flat6 v8cross
 v8tt v8flat v10 v12`.
@@ -458,7 +549,7 @@ every other assertion passed: params were still written, node count was stable,
 the graph looked correct. A source that is never started is invisible to a
 param-level test.
 
-Current: **277 checks** in `run.mjs` + a driving-behaviour suite in `drive.mjs`
+Current: **320 checks** in `run.mjs` + a driving-behaviour suite in `drive.mjs`
 (realistic manoeuvres, shift traces, shuffle, rev-match, 3600-frame input fuzz
 per vehicle — that fuzz caught five real bugs).
 
@@ -567,6 +658,14 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 32 | Turbo whine was 3 fixed sines at 3.4–4.2 kHz | "a single uniform soundwave", and a near-pure tone where the ear peaks | one PeriodicWave blade tone + formant + wander, fundamental capped at 3 kHz |
 | 33 | Surge was a SINE-modulated wide noise band | smooth tremolo = "shoo-shoo-shoo" | sawtooth → WaveShaper pulse curve = a burst train |
 | 34 | Flutter could never fire | BOV vented the whole plenum on every lift and shift, and the vent was hard-coded to 1 | vent scales with `turbo.bov`; relief applied to the *arming*, not the decaying state |
+| 35 | **Launch bogged at 1585 rpm** | `engine-sim.js` forced `launchFlareRpm: 850`, so a WOT hold sat on ONE pitch for 0.27 s every standing start | dropped the override — but the fix at the time (a "creep" term on the hold target) only moved the plateau to 3200 rpm. Properly fixed by #39. |
+| 36 | Popped on **every** lift and every shift | 100 % of lifts fired; every gear change threw a 6-report volley (24 transients across 4 shifts) | stochastic ignition gate on EGT × revs × snap; `burstCount` 6 → 3; shift bang gated on heat and `cutBang` |
+| 37 | Pops sat outside the engine | shared output partly sent to the pipe, so pops kept a big dry component AND clunks were sent down the exhaust | split the voice pool into combustion / mechanical buses |
+| 38 | Crackle was an octave above the engine | `crackle` at 850/1900 Hz against a ~199 Hz centroid after #31 — half of it inside the 2-6 kHz sensitive band | 430/1150 Hz; `bang` 118/780 → 105/520 |
+| 39 | **Launch pinned at ~3200 rpm** | any controller that regulates rpm onto a setpoint holds ONE pitch for the whole slip phase | control **slip**, not rpm; bleeding ratchet on the demand. Flat spot → 0.00-0.18 s |
+| 40 | Launch integrator could never unwind | one-sided anti-bog wound to its -0.5 floor during the initial flare and stayed pinned, capping the clutch at 0.50 forever | let it recover when there is no sag |
+| 41 | **A hard click on tip-in, lift and every shift** | `clunk` was 1150/3100 Hz, Q 22/16, **0.8 ms** attack — a switch closing, not two castings colliding. Stranded alone in the mix after #31 | 330/1250 Hz, Q 7/6, 3.5 ms; `click` 3200/6400 → 1500/2800 and lvl 0.35 → 0.16, one per shift not two |
+| 42 | Pops went faint fixing #38 | dropping both presets an octave took the crackle's energy above 700 Hz from 71 % → **3 %**; `popDirect` 0.22 left only 8 % of the report in the dry path | midpoint by measurement: 112/680 and 700/1850, `popDirect` 0.75 → 38 % above 700 Hz, 2.3 % in 2-6 kHz |
 
 ### #31 in detail — it will come back if the constant moves
 
@@ -650,6 +749,31 @@ Be honest about this with the user; it has been stated throughout.
 16. Anything that looks like a "level problem" in the 2–6 kHz band probably is
     not. Measure with `spectrum.mjs` before reaching for an EQ cut — #31 looked
     like brightness and was a comb-coincidence spike.
+17. **Changing the exhaust's register changes what else fits in it.** Dropping
+    the centroid to ~199 Hz (#31) is what stranded the pop presets an octave
+    above the engine (#38). Anything tuned to sit "just above the engine note"
+    needs re-checking after a change like that.
+18. **An event that fires every time is a sound effect, not a car.** Both #36
+    and the old lash machine-gun (#30) were physically justified per-event and
+    wrong in aggregate. When adding an event, ask what fraction of opportunities
+    should actually produce it — the answer is rarely 100 %.
+19. `TransientBank`'s voice pool is **partitioned by bus**, and a stolen voice
+    must never cross buses — it is hard-wired to one output, so it would come
+    out of the wrong place. Add a preset without a `bus` field and it silently
+    becomes mechanical.
+20. **Never regulate the launch onto an rpm setpoint.** Three separate attempts
+    produced the same complaint each time ("stuck at N rpm") because that is
+    precisely what a setpoint does while the clutch slips. Control slip. See §4.
+21. **A sub-millisecond attack is a click, not an impact.** Anything above
+    ~1 kHz with a fast attack and a high Q will read as a switch closing rather
+    than as part of the car. `run.mjs` asserts every preset is ≥ 1.5 ms and
+    Q ≤ 12.
+22. **Darkening a sound is not the same as blending it.** Fixing #38 by dropping
+    the pop presets an octave removed the detachment *and* the definition, and
+    #42 was the result. A pop takes its BODY from the pipe and its DEFINITION
+    from its own top end and the dry path; killing either one is a bug.
+23. `index.html` uses **only** the public API. Keep it that way — it is the
+    working proof that the API is enough to build against.
 
 ---
 

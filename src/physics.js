@@ -127,10 +127,9 @@ export class Drivetrain {
 
     this.subStep = opts.subStep || SUBSTEP;
     this.launchFlareRpm = opts.launchFlareRpm != null ? opts.launchFlareRpm : 2400;
-    // Fraction of input-shaft rpm folded into the launch hold target, so the
-    // hold climbs with road speed rather than sitting on one pitch. See
-    // _launchClutch().
-    this.launchCreep = opts.launchCreep != null ? opts.launchCreep : 0.55;
+    // Time constant of the launch SLIP decay, seconds — how quickly the driver
+    // takes the slip out. Not an actuator spec. See _launchClutch().
+    this.launchTime = clamp(opts.launchTime != null ? opts.launchTime : 0.75, 0.15, 4);
 
     this.shift = opts.shiftController || new ShiftController({
       type: vehicle.gearbox,
@@ -172,6 +171,8 @@ export class Drivetrain {
     this.lashContactedSince = false;
     this.launchArmed = true;
     this.launchI = 0;
+    this.launchT = 0;      // s since the launch controller took over
+    this.launchPeak = 0;   // highest rpm this launch; the anti-bog ratchet
     this.lockup = 0;             // auto: torque-converter lockup command
     this.bovArm = 0;
     this.boostDump = 0;
@@ -672,7 +673,10 @@ export class Drivetrain {
   _launchClutch(h, inGear) {
     const idle = this.engine.idleRpm;
     const geared = this.gearedRpm(this.gear);
-    if (!inGear || this.gear === 0) { this.launchI = 0; this.launchArmed = true; return 0; }
+    if (!inGear || this.gear === 0) {
+      this.launchI = 0; this.launchT = 0; this.launchPeak = 0;
+      this.launchArmed = true; return 0;
+    }
 
     // The hold rpm CREEPS UP with road speed instead of being a fixed number.
     //
@@ -682,12 +686,9 @@ export class Drivetrain {
     // the clutch progressively, so the revs climb throughout the launch even
     // though the clutch is still slipping; the engine is never static.
     //
-    // `launchCreep` is the fraction of gearbox-input rpm added to the hold
-    // target, so the target rises as the car gains speed and the engine is
-    // always climbing toward lockup rather than waiting for it.
-    const targetRpm = clamp(
-      idle * 1.05 + this.throttle * this.launchFlareRpm + this.launchCreep * geared,
-      idle, this.engine.redlineRpm * 0.9);
+    // The rpm the driver is holding it at while the clutch takes up.
+    const flare = clamp(idle * 1.05 + this.throttle * this.launchFlareRpm,
+                        idle, this.engine.redlineRpm * 0.9);
 
     // Hand over to a locked clutch only once ROAD SPEED has caught up to the rpm
     // the engine is being held at, so slip is already near zero and there is
@@ -695,16 +696,87 @@ export class Drivetrain {
     // idle, i.e. about 8 km/h) slammed the clutch shut while the engine was
     // still flaring ~1500 rpm above the gearing: the revs shot to ~3600, got
     // dragged down to ~2000, then climbed again. That is the launch "bounce".
-    if (this.launchArmed && geared > targetRpm * 0.90) this.launchArmed = false;
-    else if (!this.launchArmed && geared < idle * 0.95) this.launchArmed = true;
+    //
+    // Released once the clutch is essentially home. This is a safety net now,
+    // not the mechanism: the ramp below gets there on its own.
+    if (this.launchArmed && this.clutch > 0.985 && geared > flare * 0.75) {
+      this.launchArmed = false;
+    } else if (!this.launchArmed && geared < idle * 0.95) {
+      this.launchArmed = true;
+    }
 
-    if (!this.launchArmed) { this.launchI = 1; return 1; }
+    if (!this.launchArmed) { this.launchI = 0; this.launchT = 0; this.launchPeak = 0; return 1; }
 
-    // Stiffer than before so the engine settles ON the hold rpm instead of
-    // sailing past it before the clutch catches up.
+    // The clutch closes on a SCHEDULE, and the engine speed is then whatever
+    // physics says it is. This replaced a PI controller that regulated rpm onto
+    // a target, and the difference matters:
+    //
+    // A pure error controller produces nothing at all until the engine has
+    // passed the target, because below it the error is negative. So the clutch
+    // sat FULLY OPEN while the engine free-revved from idle to 3500 in a
+    // quarter of a second, then slammed shut — the revs hit a wall and dipped.
+    // Worse, regulating onto a target means the engine is *held* at one rpm for
+    // as long as the clutch slips, which is precisely the sound of being stuck.
+    //
+    // A driver does not do that. The foot comes up on its own schedule, quickly
+    // to the bite point and then progressively home, and the revs go wherever
+    // the resulting torque puts them. Doing the same thing here gives the whole
+    // launch for free: the engine flares, the clutch bites and pulls it back
+    // toward the geared speed, and from then on the revs rise BECAUSE THE CAR
+    // IS ACCELERATING rather than because a setpoint moved. Nothing is held.
+    // Sitting still with the throttle shut is not a launch. Hold the controller
+    // reset so that flooring it starts from a genuinely open clutch — otherwise
+    // the integrator winds up during the idle beforehand, the clutch is already
+    // half engaged when the throttle arrives, and the engine can never flare.
+    // `launchT` therefore measures time since the driver asked to GO, which is
+    // what the slip decay should be referenced to.
+    if (this.throttle < 0.05 && geared < idle * 0.5) {
+      this.launchT = 0;
+      this.launchPeak = 0;
+      this.launchI = Math.max(0, this.launchI - h / 0.20);
+      // A real car in gear at idle creeps rather than sitting inert.
+      return clamp(this.launchI, 0, 0.22);
+    }
+
+    this.launchT = Math.min(4, (this.launchT || 0) + h);
+
+    // Control SLIP, not engine speed. Slip is the thing a clutch actually sets,
+    // and expressing the launch in terms of it removes the whole class of
+    // problems the previous attempts had.
+    //
+    // The driver's intent is "start with a lot of slip, take it out smoothly",
+    // so target slip decays exponentially from the flare toward zero. The
+    // engine speed that implies is `geared + targetSlip` — and because the car
+    // is accelerating, `geared` is rising the whole time. So the demanded rpm
+    // is a rising road speed plus a shrinking slip, and lockup arrives when the
+    // second runs out. Nothing is ever pinned to a fixed number, which is what
+    // "stuck at 3200" was.
+    const slip0 = Math.max(300, flare - idle);
+    const targetSlip = slip0 * Math.exp(-this.launchT / this.launchTime);
+    const want = geared + targetSlip;
+
+    // RATCHET. Early on, `geared` is still near zero and rising more slowly
+    // than the slip term decays, so `want` can briefly fall — and a falling
+    // demand is exactly the dip that reads as the engine being dragged back.
+    // Latching the demand at its own maximum makes the launch monotonic BY
+    // CONSTRUCTION: the revs can only ever be asked to go up. Capped at the
+    // flare so the latch cannot run away with a bogged engine.
+    // Latches upward instantly, BLEEDS downward over ~0.45 s. A hard latch
+    // stops dips but then pins the engine: a heavy car's road speed climbs too
+    // slowly for `want` to catch the latched value, so the revs sat on it for
+    // half a second — the same plateau, in a new place. Bleeding turns the
+    // latch into a rate limit on falling demand, which is all it needs to be.
+    const cap = Math.min(want, flare);
+    let peak = this.launchPeak || 0;
+    if (cap > peak) peak = cap;
+    else peak += (cap - peak) * Math.min(1, h / 0.45);
+    this.launchPeak = peak;
+    const targetRpm = Math.max(want, peak);
+
+    // Positive error = spinning faster than demanded = close the clutch.
     const e = (this.rpm - targetRpm) / targetRpm;
-    this.launchI = clamp(this.launchI + 45 * e * h, 0, 1);
-    return clamp(this.launchI + 5.5 * e, 0, 1);
+    this.launchI = clamp(this.launchI + 30 * e * h, 0, 1);
+    return clamp(this.launchI + 3.0 * e, 0, 1);
   }
 
   /**
@@ -859,8 +931,21 @@ export class Drivetrain {
         const luck = 0.55 + Math.random() * 0.95;
         this.popCharge = clamp(
           this.popCharge + (0.5 + 2.1 * rev) * (0.4 + 0.6 * snap) * luck, 0, 3.4);
-        if (this.egt > 0.4 && this.popRefractory <= 0) {
-          this.popRefractory = 0.30;
+
+        // NOT EVERY LIFT POPS, and this is the single biggest thing separating
+        // a car from a sound effect. Whether the slug of raw fuel finds a hot
+        // enough spot to light off is genuinely stochastic — it depends on
+        // where the charge happens to be in the pipe, how much of it there is,
+        // and how hot that particular stretch of pipe is right now. Firing on
+        // every single lift, which is what it used to do, is the giveaway.
+        //
+        // Probability rises with heat and revs: a barely warm pipe at 2000 rpm
+        // almost never lights, a glowing one at redline almost always does.
+        const pFire = clamp((this.egt - 0.42) / 0.34, 0, 1)
+                    * (0.18 + 0.82 * rev)
+                    * (0.45 + 0.55 * snap);
+        if (this.egt > 0.42 && this.popRefractory <= 0 && Math.random() < pFire) {
+          this.popRefractory = 0.45;
           this.fireEvent('pop', clamp(
             (this.egt - 0.35) * 1.25 * (0.10 + 1.30 * rev) * (0.35 + 0.65 * snap) * luck,
             0, 1));
@@ -878,8 +963,11 @@ export class Drivetrain {
     const ov = this.throttleOverride;
     if (this.prevOverride > 0.3 && !(ov > 0.3)) {
       this.popCharge = clamp(this.popCharge + 1.1 + 0.5 * rpmN, 0, 2.6);
-      if (this.egt > 0.3 && this.popRefractory <= 0) {
-        this.popRefractory = 0.30;
+      // Same stochastic gate as the lift-off bang, but a blip sprays a bigger,
+      // better-mixed slug of fuel, so it lights more readily than a lift does.
+      const pFire = clamp((this.egt - 0.32) / 0.30, 0, 1) * (0.35 + 0.65 * rpmN);
+      if (this.egt > 0.32 && this.popRefractory <= 0 && Math.random() < pFire) {
+        this.popRefractory = 0.45;
         this.fireEvent('pop', clamp((this.egt - 0.25) * 1.45 * (0.5 + 0.5 * rpmN), 0, 1));
       }
     }
