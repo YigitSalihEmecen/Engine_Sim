@@ -676,6 +676,18 @@
       font: 600 10.5px var(--mono);
       color: var(--ink2);
       font-variant-numeric: tabular-nums;
+      /* Tabular numerals only line up if the readout stays on ONE line. At
+         42px "540 N·m" wrapped and the row grew, which broke the rhythm of a
+         whole column of controls. The unit lives in the label instead. */
+      white-space: nowrap;
+    }
+
+    /* Unit suffix on a generated control's label. */
+    .ctl .lbl u {
+      font-style: normal;
+      text-decoration: none;
+      color: var(--ink4);
+      margin-left: 4px;
     }
 
     select {
@@ -1515,9 +1527,11 @@
 
     <div class="tabs" id="tabs">
       <button data-p="machine" class="on"><span class="idx">A</span>Machine</button>
-      <button data-p="mix"><span class="idx">B</span>Voice mix</button>
-      <button data-p="tone"><span class="idx">C</span>Tone</button>
-      <button data-p="fx"><span class="idx">D</span>EQ &amp; FX</button>
+      <button data-p="tune"><span class="idx">B</span>Tune</button>
+      <button data-p="mix"><span class="idx">C</span>Voice mix</button>
+      <button data-p="tone"><span class="idx">D</span>Tone</button>
+      <button data-p="fx"><span class="idx">E</span>EQ &amp; space</button>
+      <button data-p="preset"><span class="idx">F</span>Preset</button>
     </div>
 
     <div class="panel" style="border-top:0">
@@ -1526,11 +1540,15 @@
         <div class="pane on" data-p="machine">
           <div class="g2">
             <div>
-              <div class="ctl"><span class="lbl">Engine</span><select id="engine"></select></div>
+              <div class="ctl"><span class="lbl">Preset</span><select id="engine"></select></div>
               <div class="ctl"><span class="lbl">Chassis</span><select id="vehicle"></select></div>
-              <div class="note">Firing geometry drives everything. A bank that fires at uneven
-                intervals produces <b>half-orders</b> — that is the burble. Compare
+              <div class="note">A preset is one whole sound: the machine, the mix, the tone and the
+                effects. Loading one brings all of it. Firing geometry drives the rest — a bank that
+                fires at uneven intervals produces <b>half-orders</b>, which is the burble. Compare
                 <b>V8 cross-plane</b> against <b>V8 flat-plane</b>.
+              </div>
+              <div class="ctl" style="margin-top:10px"><span class="lbl">Editing</span>
+                <span class="val" id="presetName" style="font:10px var(--mono);color:var(--ink4)"></span>
               </div>
             </div>
             <div>
@@ -1544,6 +1562,13 @@
           </div>
         </div>
 
+        <div class="pane" data-p="tune">
+          <div class="g2" id="tune"></div>
+          <div class="note">Every one of these is part of the preset and is written out with it.
+            Geometry changes — pipe lengths, pulse shape, plenum — rebuild the wavetables and the
+            waveguides, so they settle a moment after you let go of the control.</div>
+        </div>
+
         <div class="pane" data-p="mix">
           <div class="g2" id="mix"></div>
           <div class="note">Balance between synthesis voices. Transients route mostly through the
@@ -1551,30 +1576,9 @@
         </div>
 
         <div class="pane" data-p="tone">
-          <div class="g2">
-            <div>
-              <div class="ctl"><span class="lbl">Rumble</span>
-                <input id="rum" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="rumN"></span>
-              </div>
-              <div class="ctl"><span class="lbl">Brightness</span>
-                <input id="bri" type="range" min="0" max="2" step="0.02" value="1"><span class="val" id="briN"></span>
-              </div>
-            </div>
-            <div>
-              <div class="ctl"><span class="lbl">Pop depth</span>
-                <input id="popD" type="range" min="0" max="2" step="0.01" value="1.05"><span class="val"
-                  id="popDN"></span>
-              </div>
-              <div class="ctl"><span class="lbl">Dynamics</span>
-                <input id="dyn" type="range" min="0" max="1" step="0.01" value="1"><span class="val" id="dynN"></span>
-              </div>
-              <div class="ctl"><span class="lbl">Master</span>
-                <input id="vol" type="range" min="0" max="1" step="0.01" value="0.7"><span class="val" id="volN"></span>
-              </div>
-            </div>
-          </div>
+          <div class="g2" id="tonePane"></div>
           <div class="note">Rumble lifts the 145 Hz shelf and the 78 Hz body bump. Pop depth sets how
-            much transient energy is fed back through the exhaust waveguides. Dynamics drives a
+            much transient energy is fed back through the exhaust waveguides. Compression drives a
             three-band compressor split at 240 Hz and 2 kHz — the low band glues, the high band
             holds down anything that would sting.</div>
           <div class="ctl" style="margin-top:10px"><span class="lbl">Reduction</span>
@@ -1597,28 +1601,49 @@
             </div>
             <div>
               <div class="lbl" style="display:block;margin-bottom:9px">Space</div>
-              <div class="ctl"><span class="lbl">Reverb</span>
-                <input id="rvMix" class="b" type="range" min="0" max="1" step="0.01" value="0.14"><span class="val"
-                  id="rvMixN"></span>
-              </div>
-              <div class="ctl"><span class="lbl">Size</span>
-                <input id="rvSize" class="b" type="range" min="0.05" max="1" step="0.01" value="0.32"><span class="val"
-                  id="rvSizeN"></span>
-              </div>
-              <div class="ctl"><span class="lbl">Damping</span>
-                <input id="rvDamp" class="b" type="range" min="800" max="14000" step="100" value="4200"><span
-                  class="val" id="rvDampN"></span>
-              </div>
-              <div class="ctl"><span class="lbl">Width</span>
-                <input id="width" class="b" type="range" min="0" max="1" step="0.01" value="0.35"><span class="val"
-                  id="widthN"></span>
-              </div>
+              <div id="fxPane"></div>
               <div class="note">Width is mono-sum safe — the delayed copies carry opposite polarity and
-                cancel exactly when summed.</div>
+                cancel exactly when summed. Listener position is continuous: 0 is standing outside the
+                car, 1 is sitting in it.</div>
             </div>
           </div>
         </div>
 
+        <div class="pane" data-p="preset">
+          <div class="g2">
+            <div>
+              <div class="ctl"><span class="lbl">Name</span>
+                <input id="pName" type="text" spellcheck="false"
+                  style="flex:1;min-width:0;background:var(--paper2);border:1px solid var(--rule);
+                         color:var(--ink);font:11px var(--mono);padding:5px 7px">
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+                <button class="btn" id="pSave">Save</button>
+                <button class="btn" id="pDelete">Delete</button>
+                <button class="btn" id="pRevert">Revert to stock</button>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                <button class="btn" id="pDownload">Download .json</button>
+                <button class="btn" id="pCopy">Copy</button>
+                <button class="btn" id="pImport">Import file</button>
+                <input id="pFile" type="file" accept="application/json,.json" hidden>
+              </div>
+              <div class="note" id="pStatus">Saved presets live in this browser. Download writes the
+                same object to a file — it is the whole sound, so it will reproduce exactly
+                anywhere this simulator runs.</div>
+            </div>
+            <div>
+              <div class="lbl" style="display:block;margin-bottom:9px">Preset source</div>
+              <textarea id="pJSON" spellcheck="false" rows="16"
+                style="width:100%;box-sizing:border-box;background:var(--paper2);border:1px solid var(--rule);
+                       color:var(--ink);font:10px/1.45 var(--mono);padding:8px;resize:vertical"></textarea>
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <button class="btn" id="pApply">Apply edits</button>
+                <button class="btn" id="pRefresh">Refresh</button>
+              </div>
+            </div>
+          </div>
+        </div>
 
       </div>
 
@@ -1692,7 +1717,8 @@
   </div>
 
   <script type="module">
-    import { EngineSim, ENGINE_PROFILES, VEHICLE_PRESETS } from './src/engine-sim.js';
+    import { EngineSim, PRESET_SCHEMA, PRESET_GROUPS, builtinPreset, presetToJSON,
+             presetFromJSON } from './src/engine-sim.js';
     import { orderSpectrum } from './src/pulse.js';
     import { bankAngles } from './src/profiles.js';
     import { EQ } from './src/fx.js';
@@ -1714,17 +1740,66 @@
     // Built from the public listings rather than the profile tables, so this is
     // also a check that a host project can populate a picker without importing
     // anything internal.
-    for (const e of EngineSim.engines()) $('engine').add(new Option(e.label, e.id, false, e.id === 'v8cross'));
     for (const v of EngineSim.vehicles()) $('vehicle').add(new Option(v.label, v.id, false, v.id === 'sports'));
-    $('engine').onchange = e => { sim.setEngineType(e.target.value); drawOrders(); sync(); };
     // Gear COUNT changes with the chassis (5, 6 or 7 here), so the gate has to
     // be rebuilt or the lever would offer gears the gearbox does not have.
     $('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); buildGateUI(); };
 
+    /* ---- presets -------------------------------------------------------
+       The picker lists the sixteen built-ins plus anything saved in this
+       browser, and selecting one loads the WHOLE sound — engine, mix, tone,
+       EQ, space. That is the point of the format: a preset is not "an engine",
+       it is everything you would have had to dial in by hand. */
+    const STORE = 'engine-sim/presets/v2';
+    const readStore = () => {
+      try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; }
+      catch (e) { return {}; }
+    };
+    const writeStore = (o) => {
+      try { localStorage.setItem(STORE, JSON.stringify(o)); return true; }
+      catch (e) { return false; }
+    };
+
+    function refreshPresetList(selectId) {
+      const sel = $('engine');
+      const want = selectId || sel.value;
+      sel.innerHTML = '';
+      const stock = document.createElement('optgroup');
+      stock.label = 'Stock';
+      for (const e of EngineSim.engines()) stock.appendChild(new Option(e.label, e.id));
+      sel.appendChild(stock);
+      const saved = readStore();
+      const ids = Object.keys(saved).sort();
+      if (ids.length) {
+        const mine = document.createElement('optgroup');
+        mine.label = 'Saved here';
+        for (const id of ids) mine.appendChild(new Option(saved[id].label || id, 'user:' + id));
+        sel.appendChild(mine);
+      }
+      sel.value = want;
+      if (!sel.value) sel.value = 'v8cross';
+    }
+
+    function loadPresetById(key) {
+      if (key && key.startsWith('user:')) {
+        const rec = readStore()[key.slice(5)];
+        if (rec) sim.loadPreset(rec);
+      } else {
+        sim.loadPreset(key);
+      }
+      afterPresetChange();
+    }
+
+    refreshPresetList('v8cross');
+    $('engine').onchange = e => loadPresetById(e.target.value);
+
     const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
     function sync() {
-      const p = ENGINE_PROFILES[sim.engineId], st = sim.getState();
+      // The LIVE engine section, not the stock profile — the Tune pane edits
+      // these numbers, and a spec sheet that still showed the factory figures
+      // would be lying about the sound you are listening to.
+      const p = sim.getPreset().engine, st = sim.getState();
       $('boostRow').style.display = p.turbo ? '' : 'none';
       $('hEngine').textContent = p.cylinders + ' CYL · ' + (p.turbo ? 'TURBO' : 'NA');
       $('hChassis').textContent = st.gearbox.toUpperCase() + ' · ' + st.gearCount + 'SP';
@@ -1740,69 +1815,260 @@
         row('Intake helm.', p.intake.helmholtz + ' Hz');
     }
 
-    /* equaliser */
+    /* ---- every control is generated from PRESET_SCHEMA --------------------
+       Not a style choice. The page used to hand-write one <input> and one
+       binding per parameter, which is how two profile fields ended up with no
+       control at all and no way to notice. Walking the schema means a parameter
+       added in presets.js appears here without this file being touched, and the
+       test suite fails if one ever exists that nothing reads.
+
+       Two behaviours the schema decides for us:
+         - `rebuild: true` rows tear down and re-create the wavetables and the
+           waveguide delay lines, so they are DEBOUNCED. The readout still moves
+           with the finger; only the sound waits for you to settle.
+         - `needs: 'turbo'` rows are hidden on a naturally aspirated engine
+           rather than shown doing nothing. */
+    const controls = new Map();      // path -> { input, out, row }
+
+    /* `unit` is the display convention, not decoration — see presets.js.
+       '%' means the value is a proportion and reads x100; a real unit is a
+       suffix and the number is formatted by the row's own step; '' is a bare
+       number. Getting this from the schema rather than per-control is what
+       stops a pipe length reading "175" and a fader reading "0.75". */
+    const fmtValue = (row, v) => {
+      if (row.unit === 'dB') return (v > 0 ? '+' : '') + v.toFixed(1).replace(/\.0$/, '');
+      if (row.unit === '%') return String(Math.round(v * 100));
+      return row.step >= 1 ? String(Math.round(v)) : v.toFixed(row.step >= 0.1 ? 1 : 2);
+    };
+    /** The unit belongs to the label, not to every readout. */
+    const unitOf = (row) => (row.unit && row.unit !== '%' && row.unit !== 'dB') ? row.unit : '';
+
+    function makeControl(row, parent) {
+      const el = document.createElement('div');
+      el.className = 'ctl';
+      el.innerHTML = '<span class="lbl"></span>' +
+        `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}">` +
+        '<span class="val"></span>';
+      const lbl = el.querySelector('.lbl');
+      lbl.textContent = row.label;
+      const u = unitOf(row);
+      if (u) {
+        const tag = document.createElement('u');
+        tag.textContent = u;
+        lbl.appendChild(tag);
+      }
+      const inp = el.querySelector('input'), out = el.querySelector('.val');
+      el.title = row.label + (u ? ' (' + u + ')' : '') + ' — ' + row.path;
+
+      let timer = 0;
+      const push = () => sim.setParam(row.path, +inp.value);
+      inp.oninput = () => {
+        out.textContent = fmtValue(row, +inp.value);
+        if (!row.rebuild) { push(); return; }
+        clearTimeout(timer);
+        timer = setTimeout(push, 130);
+      };
+      parent.appendChild(el);
+      controls.set(row.path, { input: inp, out, row, el });
+    }
+
+    /** Build the controls for one group into a container, two columns. */
+    function buildGroup(groupId, container, { note = true } = {}) {
+      const rows = PRESET_SCHEMA.filter(r => r.group === groupId);
+      if (!rows.length) return;
+      const g = PRESET_GROUPS.find(x => x.id === groupId);
+      const box = document.createElement('div');
+      box.dataset.group = groupId;
+      if (g && note) {
+        const h = document.createElement('div');
+        h.className = 'lbl';
+        h.style.cssText = 'display:block;margin:0 0 9px';
+        if (container.children.length) h.style.marginTop = '18px';
+        h.textContent = g.label;
+        box.appendChild(h);
+      }
+      for (const r of rows) makeControl(r, box);
+      if (g && g.note && note) {
+        const n = document.createElement('div');
+        n.className = 'note';
+        n.textContent = g.note;
+        box.appendChild(n);
+      }
+      container.appendChild(box);
+    }
+
+    // Tune: the machine. Two columns, split so neither runs long.
+    {
+      const left = document.createElement('div'), right = document.createElement('div');
+      $('tune').append(left, right);
+      buildGroup('engine', left);
+      buildGroup('pulse', left);
+      buildGroup('exhaust', right);
+      buildGroup('intake', right);
+      buildGroup('turbo', right);
+    }
+    // Voice mix.
+    {
+      const left = document.createElement('div'), right = document.createElement('div');
+      $('mix').append(left, right);
+      const rows = PRESET_SCHEMA.filter(r => r.group === 'mix');
+      rows.forEach((r, i) => makeControl(r, i % 2 ? right : left));
+    }
+    // Tone, and the space controls on the FX pane.
+    {
+      const left = document.createElement('div'), right = document.createElement('div');
+      $('tonePane').append(left, right);
+      const rows = PRESET_SCHEMA.filter(r => r.group === 'tone');
+      rows.forEach((r, i) => makeControl(r, i < 2 ? left : right));
+      buildGroup('fx', $('fxPane'), { note: false });
+    }
+
+    /* equaliser — vertical faders, but the same schema rows as everything else,
+       so a band added in presets.js appears here too. */
     EQ.BANDS.forEach((b, i) => {
+      const row = PRESET_SCHEMA.find(r => r.path === 'eq.' + i);
+      if (!row) return;
       const d = document.createElement('div');
       d.className = 'eqb';
-      d.innerHTML = `<span class="n">0</span>
-    <input type="range" min="-18" max="18" step="0.5" value="0">
-    <span class="f">${b.f >= 1000 ? (b.f / 1000) + 'k' : b.f}</span><span class="t">${b.label}</span>`;
+      d.innerHTML = '<span class="n">0</span>' +
+        `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}" value="0">` +
+        `<span class="f">${b.f >= 1000 ? (b.f / 1000) + 'k' : b.f}</span><span class="t">${b.label}</span>`;
       const inp = d.querySelector('input'), num = d.querySelector('.n');
       inp.oninput = () => {
-        sim.setEQBand(i, +inp.value);
+        sim.setParam(row.path, +inp.value);
         num.textContent = (+inp.value).toFixed(1).replace(/\.0$/, '');
       };
       $('eq').appendChild(d);
+      controls.set(row.path, { input: inp, out: num, row: row, el: d, eq: true });
     });
-    $('eqFlat').onclick = () => {
-      sim.resetEQ();
-      $('eq').querySelectorAll('input').forEach(i => i.value = 0);
-      $('eq').querySelectorAll('.n').forEach(n => n.textContent = '0');
-    };
+    $('eqFlat').onclick = () => { for (let i = 0; i < 5; i++) sim.setParam('eq.' + i, 0); syncControls(); };
     $('fxOff').onclick = () => {
-      $('rvMix').value = 0; $('width').value = 0;
-      $('rvMix').dispatchEvent(new Event('input'));
-      $('width').dispatchEvent(new Event('input'));
+      sim.setParam('fx.reverbMix', 0);
+      sim.setParam('fx.width', 0);
+      syncControls();
     };
 
-    /* bindings */
-    const bind = (id, fn, fmt = v => Math.round(v * 100), opts = {}) => {
-      const el = $(id), out = $(id + 'N');
-      const show = () => { if (out) out.textContent = fmt(+el.value); };
-      if (opts.debounce) {
-        let t = 0;
-        el.oninput = () => { show(); clearTimeout(t); t = setTimeout(() => fn(+el.value), opts.debounce); };
-      } else el.oninput = () => { fn(+el.value); show(); };
-      fn(+el.value); show();
-    };
-    bind('vol', v => sim.setVolume(v));
-    bind('rum', v => sim.setTone({ rumble: v }));
-    bind('bri', v => sim.setTone({ brightness: v }));
-    bind('popD', v => sim.setPopDepth(v));
-    bind('dyn', v => sim.setDynamics(v));
-    bind('rvMix', v => sim.setReverb({ mix: v }));
-    // Reverb size rebuilds an impulse response (~6 ms) — debounce so dragging stays smooth.
-    bind('rvSize', v => sim.setReverb({ size: v }), v => (0.15 + 2.05 * v).toFixed(1) + 's', { debounce: 140 });
-    bind('rvDamp', v => sim.setReverb({ damping: v }), v => (v / 1000).toFixed(1) + 'k');
-    bind('width', v => sim.setWidth(v));
+    /** Pull every control back from the sim. Called after anything that can
+        change more than one parameter at once — loading a preset, mostly. */
+    function syncControls() {
+      const preset = sim.getPreset();
+      const hasTurbo = !!preset.engine.turbo;
+      for (const [path, c] of controls) {
+        if (c.row.needs === 'turbo') {
+          c.el.style.display = hasTurbo ? '' : 'none';
+          if (!hasTurbo) continue;
+        }
+        const v = sim.getParam(path);
+        if (v == null) continue;
+        c.input.value = v;
+        c.out.textContent = c.eq ? v.toFixed(1).replace(/\.0$/, '') : fmtValue(c.row, v);
+      }
+      // The whole turbo group heading goes with its controls.
+      for (const box of document.querySelectorAll('[data-group="turbo"]')) {
+        box.style.display = hasTurbo ? '' : 'none';
+      }
+      $('presetName').textContent = preset.label + '  ·  ' + preset.id;
+      $('pName').value = preset.label;
+    }
 
-    /* voice mix */
-    const MIX = {
-      exhaust: 'Exhaust', intake: 'Intake', mechanical: 'Mechanical',
-      transmission: 'Gearbox', turbo: 'Turbo', transients: 'Pops', sub: 'Sub'
+    /** Everything that has to happen when the loaded sound changes. */
+    function afterPresetChange() {
+      syncControls();
+      drawOrders();
+      sync();
+      $('pJSON').value = sim.exportPreset();
+    }
+
+    /* ---- preset pane ---------------------------------------------------- */
+    const slug = (t) => String(t).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '').slice(0, 48) || 'preset';
+    const status = (msg) => { $('pStatus').textContent = msg; };
+
+    $('pName').oninput = () => {
+      sim.presetLabel = $('pName').value || sim.presetLabel;
+      $('presetName').textContent = sim.presetLabel + '  ·  ' + sim.presetId;
     };
-    const colA = document.createElement('div'), colB = document.createElement('div');
-    $('mix').append(colA, colB);
-    Object.entries(MIX).forEach(([k, label], i) => {
-      const row = document.createElement('div');
-      row.className = 'ctl';
-      row.innerHTML = `<span class="lbl">${label}</span>
-    <input type="range" min="0" max="1.6" step="0.01" value="${sim.mix[k]}"><span class="val"></span>`;
-      const inp = row.querySelector('input'), num = row.querySelector('.val');
-      num.textContent = Math.round(sim.mix[k] * 100);
-      inp.oninput = () => { sim.setMix({ [k]: +inp.value }); num.textContent = Math.round(inp.value * 100); };
-      (i % 2 ? colB : colA).appendChild(row);
-    });
+
+    $('pSave').onclick = () => {
+      const label = ($('pName').value || '').trim() || 'Untitled';
+      const id = slug(label);
+      const preset = sim.getPreset();
+      preset.id = id; preset.label = label;
+      const store = readStore();
+      store[id] = preset;
+      if (!writeStore(store)) return status('Could not save — this browser refused local storage.');
+      sim.loadPreset(preset);
+      refreshPresetList('user:' + id);
+      afterPresetChange();
+      status('Saved as "' + label + '". It is in the picker under "Saved here".');
+    };
+
+    $('pDelete').onclick = () => {
+      const key = $('engine').value;
+      if (!key.startsWith('user:')) return status('That is a stock preset — nothing to delete.');
+      const id = key.slice(5);
+      const store = readStore();
+      delete store[id];
+      writeStore(store);
+      refreshPresetList('v8cross');
+      loadPresetById('v8cross');
+      status('Deleted "' + id + '".');
+    };
+
+    $('pRevert').onclick = () => {
+      const id = sim.engineId;
+      sim.loadPreset(builtinPreset(id));
+      refreshPresetList(id);
+      afterPresetChange();
+      status('Reverted to the stock ' + id + ' preset.');
+    };
+
+    $('pDownload').onclick = () => {
+      const preset = sim.getPreset();
+      const blob = new Blob([presetToJSON(preset)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = slug(preset.label) + '.enginesim.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      status('Downloaded ' + a.download + '.');
+    };
+
+    $('pCopy').onclick = async () => {
+      const text = sim.exportPreset();
+      try {
+        await navigator.clipboard.writeText(text);
+        status('Preset copied to the clipboard.');
+      } catch (e) {
+        // Clipboard access is refused on an insecure origin, which is exactly
+        // where this gets developed. Fall back to selecting it.
+        $('pJSON').value = text;
+        $('pJSON').select();
+        status('Clipboard refused — the text is selected, copy it by hand.');
+      }
+    };
+
+    $('pImport').onclick = () => $('pFile').click();
+    $('pFile').onchange = async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      const { preset, error } = presetFromJSON(await file.text());
+      ev.target.value = '';
+      if (error) return status('Could not read that file — ' + error);
+      sim.loadPreset(preset);
+      refreshPresetList($('engine').value);
+      afterPresetChange();
+      status('Loaded "' + preset.label + '" from ' + file.name + '.');
+    };
+
+    $('pApply').onclick = () => {
+      const { preset, error } = presetFromJSON($('pJSON').value);
+      if (error) return status('Could not apply — ' + error);
+      sim.loadPreset(preset);
+      afterPresetChange();
+      status('Applied. Anything out of range was clamped, so the text may have changed.');
+    };
+    $('pRefresh').onclick = () => { $('pJSON').value = sim.exportPreset(); status('Refreshed from the live sound.'); };
 
     /* transport */
     const keys = new Set();
@@ -2073,8 +2339,7 @@
       $('dvRpmCell').classList.toggle('hot', s.rpm > s.redline * 0.92);
       $('dvKmh').textContent = Math.round(s.speedKmh);
       $('dvGear').textContent = s.shiftPhase ? '–' : (s.gear === 0 ? 'N' : s.gear);
-      $('dvBoost').textContent = ENGINE_PROFILES[s.engine].turbo
-        ? Math.round((s.boost || 0) * 100) : '—';
+      $('dvBoost').textContent = s.turbo ? Math.round((s.boost || 0) * 100) : '—';
       const frac = s.redline ? s.rpm / s.redline : 0;
       const lit = Math.round(frac * ledEls.length);
       for (let i = 0; i < ledEls.length; i++) {
@@ -2232,7 +2497,7 @@
     const oc = $('orders').getContext('2d');
     $('orders').width = 620 * DPR; $('orders').height = 132 * DPR; oc.scale(DPR, DPR);
     function drawOrders() {
-      const p = ENGINE_PROFILES[sim.engineId];
+      const p = sim.getPreset().engine;
       const spec = orderSpectrum(p, bankAngles(p, 0), 0.6, 14);
       const W = 620, H = 132, padL = 8, padR = 8, base = H - 18;
       oc.clearRect(0, 0, W, H);
@@ -2268,7 +2533,10 @@
         bankAngles(p, 0).map(a => a.toFixed(0) + '°').join(' / ') + '  ·  HALF-ORDER ' +
         (100 * half / tot).toFixed(0) + '%';
     }
-    drawOrders();
+    // Pull every generated control up to the loaded preset, draw the spectrum,
+    // and fill the JSON view. Everything the page shows comes from the sim, so
+    // there is exactly one place initial values are set.
+    afterPresetChange();
 
     // Everything above evaluated without throwing, so the boot guard can stand down.
     window.__ENGINE_BOOTED = true;

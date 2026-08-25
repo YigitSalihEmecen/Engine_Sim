@@ -95,8 +95,17 @@ export function buildCycle(profile, angles, hard, phaseShift = 0) {
   const P = profile.pulse;
   // Under load the charge is denser and the blowdown more violent: faster
   // rise, and the pulse carries further before it decays.
-  const a = P.attack * (0.55 + 0.85 * hard);
-  const b = P.decay * (1.25 - 0.35 * hard);
+  //
+  // HOW MUCH it sharpens is `pulse.hardness`, normalised so that the middle of
+  // the range profiles actually use (0.65) reproduces the fixed coefficients
+  // this had before. A diesel at 0.88 gets a pulse that steepens half again as
+  // much between idle and full load as a smooth six at 0.58, which is most of
+  // what "it hardens up under load" means. Like `voice`, this field was in
+  // every profile and read by nothing until the preset schema found it.
+  const h = Math.max(0, Math.min(1.5, (typeof P.hardness === 'number' && isFinite(P.hardness))
+    ? P.hardness : 0.65)) / 0.65;
+  const a = P.attack * (0.55 + 0.85 * h * hard);
+  const b = P.decay * (1.25 - 0.35 * h * hard);
 
   const cycle = new Float64Array(TABLE_SIZE);
   const rnd = seeded(profile.cylinders * 2654435761 + Math.round(P.attack * 97));

@@ -46,7 +46,6 @@ export const ENGINE_PROFILES = {
     // have the same run to the collector.
     exhaust: { bank: 0.95, bankB: 1.10, collector: 0.55, reflection: 0.50, damping: 0.34, muffler: [0.16, 0.11, 0.075] },
     intake: { helmholtz: 165, q: 6.0, level: 0.40 },
-    mechanical: { valvetrain: 0.42, injector: 0.24, chain: 0.20 },
     turbo: null,
     voice: 0.92,
   },
@@ -59,7 +58,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 34, decay: 5.5, hardness: 0.62, jitter: 1.6 },
     exhaust: { bank: 1.45, collector: 1.10, reflection: 0.55, damping: 0.42, muffler: [0.32, 0.21, 0.14] },
     intake: { helmholtz: 105, q: 5.5, level: 0.34 },
-    mechanical: { valvetrain: 0.30, injector: 0.26, chain: 0.16 },
     turbo: { inertia: 0.34, maxBoost: 1.2, whineOrder: 62, bov: 0.30, surge: 1.0 },
     voice: 1.00,
   },
@@ -82,10 +80,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 18, decay: 3.0, hardness: 0.70, jitter: 1.2 },
     exhaust: { bank: 1.05, collector: 0.80, reflection: 0.52, damping: 0.30, muffler: [0.20, 0.13, 0.09] },
     intake: { helmholtz: 145, q: 6.6, level: 0.46 },
-    // No valvetrain and no timing chain \u2014 the rotor is port-timed and the
-    // eccentric shaft is gear-driven. Silencing those two layers is a real and
-    // audible difference, not a cosmetic one.
-    mechanical: { valvetrain: 0.04, injector: 0.30, chain: 0.05 },
     turbo: null,
     voice: 0.94,
   },
@@ -98,7 +92,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 38, decay: 6.2, hardness: 0.66, jitter: 1.1 },
     exhaust: { bank: 1.30, collector: 1.05, reflection: 0.52, damping: 0.44, muffler: [0.30, 0.19, 0.12] },
     intake: { helmholtz: 118, q: 6.0, level: 0.32 },
-    mechanical: { valvetrain: 0.34, injector: 0.24, chain: 0.14 },
     turbo: null,
     voice: 0.96,
   },
@@ -113,7 +106,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 32, decay: 5.4, hardness: 0.60, jitter: 2.2 },
     exhaust: { bank: 1.62, bankB: 0.98, collector: 1.15, reflection: 0.58, damping: 0.40, muffler: [0.34, 0.22, 0.15] },
     intake: { helmholtz: 100, q: 5.2, level: 0.36 },
-    mechanical: { valvetrain: 0.32, injector: 0.22, chain: 0.18 },
     turbo: { inertia: 0.40, maxBoost: 1.0, whineOrder: 58, bov: 0.80, surge: 1.0 },
     voice: 1.00,
   },
@@ -126,7 +118,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 33, decay: 5.6, hardness: 0.64, jitter: 1.5 },
     exhaust: { bank: 1.38, collector: 1.08, reflection: 0.56, damping: 0.41, muffler: [0.31, 0.20, 0.13] },
     intake: { helmholtz: 108, q: 5.6, level: 0.34 },
-    mechanical: { valvetrain: 0.33, injector: 0.24, chain: 0.16 },
     turbo: { inertia: 0.46, maxBoost: 1.1, whineOrder: 54, bov: 0.35, surge: 1.0 },
     voice: 1.00,
   },
@@ -139,7 +130,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 30, decay: 5.0, hardness: 0.58, jitter: 0.7 },   // inherently balanced
     exhaust: { bank: 1.55, collector: 1.20, reflection: 0.54, damping: 0.38, muffler: [0.33, 0.21, 0.14] },
     intake: { helmholtz: 95, q: 6.4, level: 0.33 },
-    mechanical: { valvetrain: 0.30, injector: 0.22, chain: 0.13 },
     turbo: { inertia: 0.52, maxBoost: 1.0, whineOrder: 48, bov: 0.25, surge: 1.1 },
     voice: 0.98,
   },
@@ -158,9 +148,6 @@ export const ENGINE_PROFILES = {
     exhaust: { bank: 1.35, collector: 1.65, reflection: 0.52, damping: 0.60, muffler: [0.46, 0.30, 0.20] },
     // No throttle plate, so there is very little induction noise to hear.
     intake: { helmholtz: 88, q: 4.6, level: 0.24 },
-    // The clatter IS the engine: heavy valve gear and, above all, common-rail
-    // injectors firing at 2000 bar. That tick is what makes a diesel a diesel.
-    mechanical: { valvetrain: 0.52, injector: 0.62, chain: 0.24 },
     // A big variable-geometry turbo: very laggy, high boost, and no atmospheric
     // blow-off valve at all, so what you hear on a lift is the chatter.
     turbo: { inertia: 0.95, maxBoost: 1.5, whineOrder: 38, bov: 0.15, surge: 0.55 },
@@ -175,7 +162,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 31, decay: 5.2, hardness: 0.61, jitter: 1.3 },
     exhaust: { bank: 1.20, collector: 1.05, reflection: 0.56, damping: 0.40, muffler: [0.30, 0.20, 0.13] },
     intake: { helmholtz: 102, q: 5.8, level: 0.33 },
-    mechanical: { valvetrain: 0.31, injector: 0.23, chain: 0.15 },
     turbo: null,
     voice: 0.98,
   },
@@ -194,7 +180,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 29, decay: 5.0, hardness: 0.60, jitter: 1.2 },
     exhaust: { bank: 0.95, collector: 1.30, reflection: 0.50, damping: 0.52, muffler: [0.34, 0.23, 0.15] },
     intake: { helmholtz: 112, q: 5.4, level: 0.30 },
-    mechanical: { valvetrain: 0.30, injector: 0.26, chain: 0.14 },
     // Two small turbos, one per bank: low inertia, so they spool fast and the
     // whistle tracks the engine closely.
     turbo: { inertia: 0.30, maxBoost: 1.15, whineOrder: 56, bov: 0.55, surge: 1.0 },
@@ -209,7 +194,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 44, decay: 7.0, hardness: 0.74, jitter: 0.9 },
     exhaust: { bank: 0.85, collector: 0.72, reflection: 0.48, damping: 0.30, muffler: [0.22, 0.15, 0.10] },
     intake: { helmholtz: 138, q: 7.2, level: 0.42 },   // that induction howl
-    mechanical: { valvetrain: 0.40, injector: 0.26, chain: 0.12 },
     turbo: null,
     voice: 1.00,
   },
@@ -226,7 +210,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 26, decay: 4.4, hardness: 0.55, jitter: 2.6 },
     exhaust: { bank: 1.75, collector: 1.35, reflection: 0.63, damping: 0.34, muffler: [0.40, 0.26, 0.17] },
     intake: { helmholtz: 78, q: 5.0, level: 0.30 },
-    mechanical: { valvetrain: 0.28, injector: 0.20, chain: 0.15 },
     turbo: null,
     voice: 1.06,
   },
@@ -244,7 +227,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 24, decay: 4.2, hardness: 0.54, jitter: 2.4 },
     exhaust: { bank: 1.10, collector: 1.55, reflection: 0.58, damping: 0.55, muffler: [0.42, 0.28, 0.18] },
     intake: { helmholtz: 74, q: 4.8, level: 0.28 },
-    mechanical: { valvetrain: 0.26, injector: 0.22, chain: 0.15 },
     turbo: { inertia: 0.44, maxBoost: 1.10, whineOrder: 44, bov: 0.45, surge: 1.0 },
     voice: 1.05,
   },
@@ -260,7 +242,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 52, decay: 8.4, hardness: 0.82, jitter: 0.6 },
     exhaust: { bank: 0.78, collector: 0.62, reflection: 0.44, damping: 0.26, muffler: [0.18, 0.12, 0.08] },
     intake: { helmholtz: 155, q: 7.8, level: 0.44 },
-    mechanical: { valvetrain: 0.44, injector: 0.28, chain: 0.10 },
     turbo: null,
     voice: 1.00,
   },
@@ -274,7 +255,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 48, decay: 7.8, hardness: 0.80, jitter: 0.8 },
     exhaust: { bank: 0.82, collector: 0.66, reflection: 0.46, damping: 0.27, muffler: [0.19, 0.13, 0.09] },
     intake: { helmholtz: 148, q: 7.4, level: 0.45 },
-    mechanical: { valvetrain: 0.42, injector: 0.28, chain: 0.11 },
     turbo: null,
     voice: 1.02,
   },
@@ -288,7 +268,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 46, decay: 7.4, hardness: 0.78, jitter: 0.5 },
     exhaust: { bank: 0.90, collector: 0.70, reflection: 0.47, damping: 0.28, muffler: [0.20, 0.14, 0.09] },
     intake: { helmholtz: 142, q: 7.0, level: 0.44 },
-    mechanical: { valvetrain: 0.40, injector: 0.30, chain: 0.12 },
     turbo: null,
     voice: 1.04,
   },

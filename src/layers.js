@@ -2,19 +2,22 @@
  * layers.js — everything an engine emits that is NOT the combustion pulse.
  *
  * The combustion voice (pulse.js + resonators.js) is only part of what you hear
- * standing next to a running car. The rest is machinery: valve gear hammering
- * away at half crank speed, injectors ticking, a chain whirring, the block
- * ringing every time a cylinder fires, a gearbox whining at its own pitch in
- * every gear, a turbo spinning up on its own inertia, and a stream of impacts —
- * bangs, clunks, clicks — that no steady-state synthesis can produce.
+ * standing next to a running car. The rest is machinery: a gearbox whining at
+ * its own pitch in every gear, a turbo spinning up on its own inertia, and a
+ * stream of impacts — bangs, clunks, clicks — that no steady-state synthesis
+ * can produce.
  *
- * Four modules, all following the CONTRACT.md module shape. Every one of them
+ * Three modules, all following the CONTRACT.md module shape. Every one of them
  * generates its own signal, so `input` is always `null`.
  *
- *   MechanicalLayer    valvetrain, injectors, chain/belt, piston slap + block
  *   TransmissionLayer  gear mesh whine (per-gear pitch) and lash rattle
  *   TurboLayer         spool whine with real inertia, BOV, wastegate flutter
  *   TransientBank      shared zero-allocation one-shot player for all impacts
+ *
+ * A `MechanicalLayer` (valvetrain clatter at engine order 0.5, injector ticks,
+ * timing-chain whirr, piston slap into fixed block modes) used to live here and
+ * was removed at the user's request. Do not resurrect it from an older context
+ * dump; it is in git history if the reasoning is ever wanted.
  *
  * Design rules obeyed throughout (see CONTRACT.md):
  *   - every node is built in the constructor; update() only writes AudioParams
@@ -25,16 +28,40 @@
  *     closures created inside update())
  *
  * A note on the 10 Hz frequency floor. Several things here are genuinely
- * sub-audio rates: the camshaft turns at f0 = rpm/120 (6.7 Hz at idle) and the
- * driveshaft can turn at 1 Hz. Since the contract forbids writing a frequency
- * below 10 Hz, no oscillator is ever asked to run at the raw shaft rate.
- * Where a low-order signature is needed it is produced as an intermodulation
- * product of two legal rates instead — see MechanicalLayer's valvetrain.
+ * sub-audio rates: f0 = rpm/120 is 6.7 Hz at idle and the driveshaft can turn
+ * at 1 Hz. Since the contract forbids writing a frequency below 10 Hz, no
+ * oscillator is ever asked to run at the raw shaft rate; where a low-order
+ * signature is needed it is produced as an intermodulation product of two legal
+ * rates instead.
  */
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Turbo tone stage. The turbo is the brightest voice here and it lives in the
+ * 2-5 kHz band where hearing peaks, so it carries its own air cut instead of
+ * leaving the master EQ to clean up after it.
+ *
+ * 4.6 kHz keeps the blade tone's first few harmonics and the stall click's
+ * attack while removing the hiss above them; the shelf then tilts what is left
+ * so the whistle reads as bright without being sharp.
+ */
+const TURBO_AIR_HZ = 4600;
+const TURBO_AIR_DB = -5.5;
+
+/**
+ * Ceiling on the blade-tone FUNDAMENTAL, Hz.
+ *
+ * 12 kHz let profiles put a near-pure tone at 4.2 kHz — the most piercing thing
+ * this synth could produce. 3 kHz fixed that but five of the seven turbo
+ * profiles then sat pinned AT the cap, so they all whistled at the same pitch
+ * and it was still the sharpest thing in the mix. 2200 keeps the fundamental
+ * under the ear's peak and lets the wavetable's harmonics (rolled off by the
+ * tone stage) carry the brightness.
+ */
+const TURBO_WHINE_MAX_HZ = 2200;
 
 const TC = 0.02;              // default smoothing time constant, seconds
 const FMIN = 10;              // contract frequency clamp
@@ -76,9 +103,9 @@ function seeded(seed) {
  * four modules to each hold their own copy.
  *
  * White is right for impacts and hiss (a real impact excites everything at
- * once). Pink is right for the broadband beds — mechanical noise radiated
- * through a block/casing rolls off roughly 3 dB/octave, so a pink source needs
- * far less filtering to sit correctly.
+ * once). Pink is right for the broadband beds — noise radiated through a
+ * block/casing rolls off roughly 3 dB/octave, so a pink source needs far less
+ * filtering to sit correctly.
  */
 const NOISE_CACHE = new WeakMap();
 
@@ -173,294 +200,7 @@ function disconnectAll(list) {
 }
 
 // ===========================================================================
-// 1. MechanicalLayer
-// ===========================================================================
-
-/**
- * Everything the engine's moving parts radiate through the block and covers,
- * as opposed to what leaves the pipes.
- *
- * Four paths, each with its own physics:
- *
- *  A. Valvetrain clatter. The camshaft turns at HALF crank speed, so valve
- *     events land on engine orders 0.5, 1, 1.5 … — the diesel-ish tick you hear
- *     standing over an idling engine. Each cylinder opens and closes two valves
- *     per 720° cycle, so there are 2·N impacts per cam revolution. Radiated
- *     through the cam cover the energy sits at 1.5–4 kHz.
- *
- *     Implementation: broadband noise amplitude-modulated twice, at 2·N·f0
- *     (the valve-event rate) and at 3·f0 (order 1.5). Both rates are integer
- *     multiples of f0, so their product is periodic with the CAM revolution,
- *     and their intermodulation products land on every multiple of f0 — i.e.
- *     on every half order, which is the whole point. Using 3·f0 rather than f0
- *     itself keeps every oscillator above the contract's 10 Hz floor even at a
- *     700 rpm idle (3·f0 = 17.5 Hz there).
- *
- *     Level: loudest at idle, buried under load — valve impact energy barely
- *     changes with load while everything else gets much louder, so the audible
- *     result is a ~6 dB duck with load, and a mild roll-off with rpm as the
- *     individual impacts smear into each other.
- *
- *  B. Injector ticks. One solenoid opening per cylinder per cycle (rate N·f0),
- *     a very short click whose energy is almost all above 4 kHz. Quiet, sharp,
- *     essentially load-independent (the pintle lift is the same; only the
- *     duration changes).
- *
- *  C. Timing chain / accessory belt. A chain running over a ~20-tooth crank
- *     sprocket produces chordal excitation at rpm/60 · teeth (1 kHz at 3000
- *     rpm) plus its second harmonic, over a broadband whirr. Tracks rpm, not
- *     load.
- *
- *  D. Piston slap / block resonance. The piston crossing over TDC slaps the
- *     bore and rings the block. The block's modes are STRUCTURAL — they do not
- *     move with rpm — so these are two fixed band-pass resonators, excited by
- *     an impulse train at the firing rate with an amplitude proportional to
- *     load (a harder combustion event pushes the piston across the clearance
- *     harder). First bending mode of a cast block is 500–900 Hz and scales as
- *     1/L², so it is derived from the block's effective length (cylinders per
- *     bank) rather than picked by feel.
- *
- * Nothing here is multiplied by the combustion voice's envelope: a real engine
- * clatters at idle, and that independence is exactly what stops the mix
- * sounding like one synthesised object.
- */
-export class MechanicalLayer {
-  /**
-   * @param {BaseAudioContext} ctx
-   * @param {object} profile ENGINE_PROFILES entry
-   * @param {object} [opts]
-   *   level        overall trim, default 1
-   *   chainTeeth   crank sprocket tooth count, default 20 (typical chain drive)
-   *   blockLevel   piston-slap/block trim, default 0.5 (taste)
-   *   loadDuck     how much the clatter ducks under load, 0..1, default 0.5
-   */
-  constructor(ctx, profile, opts) {
-    this.ctx = ctx;
-    this.profile = profile;
-    const o = opts || {};
-    this.level = fin(o.level, 1);
-    this.chainTeeth = clamp(fin(o.chainTeeth, 20), 6, 80);
-    this.blockLevel = fin(o.blockLevel, 0.32);
-    this.loadDuck = clamp(fin(o.loadDuck, 0.5), 0, 1);
-
-    this._srcs = [];
-    this._nodes = [];
-    const keep = (n) => { this._nodes.push(n); return n; };
-
-    this.out = keep(ctx.createGain());
-    this.out.gain.value = this.level;
-
-    // --- shared sources -----------------------------------------------------
-    // White for the impact-like paths, pink for the broadband beds. Offsets
-    // decorrelate the two taps of the same buffer.
-    const white = noiseSource(ctx, 'white', 0.11);
-    const pink = noiseSource(ctx, 'pink', 0.53);
-    this._srcs.push(white, pink);
-
-    // --- A: valvetrain ------------------------------------------------------
-    this.vHP = keep(ctx.createBiquadFilter());
-    this.vHP.type = 'highpass';
-    this.vHP.frequency.value = 1200;          // cam-cover radiation starts here
-    this.vHP.Q.value = 0.7;
-
-    this.vBP = keep(ctx.createBiquadFilter());
-    this.vBP.type = 'bandpass';
-    this.vBP.frequency.value = 2600;          // centre of the tappet band
-    this.vBP.Q.value = 0.8;                   // wide: impacts are broadband
-
-    this.vAM1 = keep(ctx.createGain());       // valve-event rate, 2·N·f0
-    this.vAM1.gain.value = 0.5;
-    this.vAM2 = keep(ctx.createGain());       // order 1.5 (3·f0)
-    this.vAM2.gain.value = 0.6;
-    this.vGain = keep(ctx.createGain());
-    this.vGain.gain.value = 0;
-
-    this.valveOsc = ctx.createOscillator();
-    this.valveOsc.type = 'sawtooth';          // impulse-ish: all harmonics
-    this.valveOsc.frequency.value = 100;
-    this.camOsc = ctx.createOscillator();
-    this.camOsc.type = 'sawtooth';
-    this.camOsc.frequency.value = 20;
-    this._srcs.push(this.valveOsc, this.camOsc);
-
-    keep(amDrive(ctx, this.valveOsc, 0.5, this.vAM1.gain));
-    keep(amDrive(ctx, this.camOsc, 0.4, this.vAM2.gain));
-
-    white.connect(this.vHP);
-    this.vHP.connect(this.vBP);
-    this.vBP.connect(this.vAM1);
-    this.vAM1.connect(this.vAM2);
-    this.vAM2.connect(this.vGain);
-    this.vGain.connect(this.out);
-
-    // --- B: injectors -------------------------------------------------------
-    this.iHP = keep(ctx.createBiquadFilter());
-    this.iHP.type = 'highpass';
-    this.iHP.frequency.value = 4200;          // solenoid click, 4–8 kHz
-    this.iHP.Q.value = 0.7;
-    this.iAM = keep(ctx.createGain());
-    this.iAM.gain.value = 0.32;               // low DC + deep AM = spiky
-    this.iGain = keep(ctx.createGain());
-    this.iGain.gain.value = 0;
-
-    this.injOsc = ctx.createOscillator();
-    this.injOsc.type = 'sawtooth';
-    this.injOsc.frequency.value = 60;
-    this._srcs.push(this.injOsc);
-    keep(amDrive(ctx, this.injOsc, 0.68, this.iAM.gain));
-
-    white.connect(this.iHP);
-    this.iHP.connect(this.iAM);
-    this.iAM.connect(this.iGain);
-    this.iGain.connect(this.out);
-
-    // --- C: chain / belt ----------------------------------------------------
-    this.chainBP1 = keep(ctx.createBiquadFilter());
-    this.chainBP1.type = 'bandpass';
-    this.chainBP1.frequency.value = 1000;
-    this.chainBP1.Q.value = 2.2;
-    this.chainBP2 = keep(ctx.createBiquadFilter());
-    this.chainBP2.type = 'bandpass';
-    this.chainBP2.frequency.value = 2000;
-    this.chainBP2.Q.value = 3.0;
-    this.chainH2 = keep(ctx.createGain());
-    this.chainH2.gain.value = 0.45;           // 2nd chordal harmonic, fixed
-    this.chainGain = keep(ctx.createGain());
-    this.chainGain.gain.value = 0;
-
-    pink.connect(this.chainBP1);
-    pink.connect(this.chainBP2);
-    this.chainBP1.connect(this.chainGain);
-    this.chainBP2.connect(this.chainH2);
-    this.chainH2.connect(this.chainGain);
-    this.chainGain.connect(this.out);
-
-    // --- D: piston slap / block resonance -----------------------------------
-    // Q 6 and 8 were far too resonant. A cast block full of oil, bolted into a
-    // car, is heavily damped — its modes have Q around 2-4, not 8. At Q 8 the
-    // 1820 Hz mode was a narrow ringing tone sitting exactly where human
-    // hearing peaks, amplitude-modulated at the firing rate, and it screamed
-    // whenever an engine order swept through it.
-    this.blockBP1 = keep(ctx.createBiquadFilter());
-    this.blockBP1.type = 'bandpass';
-    this.blockBP1.Q.value = 2.2;
-    this.blockBP2 = keep(ctx.createBiquadFilter());
-    this.blockBP2.type = 'bandpass';
-    this.blockBP2.Q.value = 2.6;
-    this.blockH2 = keep(ctx.createGain());
-    this.blockH2.gain.value = 0.55;
-    this.blockAM = keep(ctx.createGain());
-    this.blockAM.gain.value = 0.35;
-    this.blockGain = keep(ctx.createGain());
-    this.blockGain.gain.value = 0;
-
-    this.fireOsc = ctx.createOscillator();
-    this.fireOsc.type = 'sawtooth';
-    this.fireOsc.frequency.value = 60;
-    this._srcs.push(this.fireOsc);
-    keep(amDrive(ctx, this.fireOsc, 0.65, this.blockAM.gain));
-
-    pink.connect(this.blockBP1);
-    pink.connect(this.blockBP2);
-    this.blockBP1.connect(this.blockAM);
-    this.blockBP2.connect(this.blockH2);
-    this.blockH2.connect(this.blockAM);
-    this.blockAM.connect(this.blockGain);
-    this.blockGain.connect(this.out);
-
-    this.setProfile(profile);
-  }
-
-  get input() { return null; }
-  get output() { return this.out; }
-
-  /**
-   * Re-derive the per-engine constants. Allocation-free, so the orchestrator
-   * can hot-swap engine types without rebuilding the graph.
-   */
-  setProfile(profile) {
-    this.profile = profile;
-    const m = (profile && profile.mechanical) || {};
-    this.lvValve = fin(m.valvetrain, 0.3);
-    this.lvInj = fin(m.injector, 0.24);
-    this.lvChain = fin(m.chain, 0.15);
-    this.cyl = clamp(fin(profile && profile.cylinders, 4), 1, 16);
-    this.idleRpm = fin(profile && profile.idleRpm, 800);
-
-    // Block bending mode. f ∝ sqrt(EI/ρA)/L², and for a given architecture the
-    // block length goes with the number of cylinders per bank. Reference: a
-    // 4-in-line iron block rings at ~700 Hz in its first bending mode.
-    const perBank = this.cyl / Math.max(1, (profile && profile.banks) ? profile.banks.length : 1);
-    const f1 = 700 * Math.pow(4 / Math.max(1, perBank), 0.7);
-    const now = fin(this.ctx.currentTime, 0);
-    setF(this.blockBP1.frequency, f1, now, 0.05, 700);
-    // Second radiating mode of a block sits near 2.6× the first (measured on
-    // typical inline blocks: ~700 Hz / ~1.8 kHz).
-    setF(this.blockBP2.frequency, f1 * 2.6, now, 0.05, 1800);
-  }
-
-  update(p) {
-    const now = fin(p.now, 0);
-    const rpm = Math.max(0, fin(p.rpm, 0));
-    const f0 = fin(p.f0, rpm / 120);
-    const load = clamp(fin(p.load, 0), 0, 1);
-    const rpmNorm = clamp(fin(p.rpmNorm, 0), 0, 1);
-    const n = this.cyl;
-
-    // Below ~60% of idle the engine is cranking or stopped: fade everything.
-    const gate = clamp(rpm / Math.max(1, this.idleRpm * 0.6), 0, 1);
-
-    // ---- rates ----
-    // valve events: 2 per cylinder per 720° cycle
-    setF(this.valveOsc.frequency, 2 * n * f0, now, TC, FMIN);
-    // order 1.5 — see the class comment for why not f0 itself
-    setF(this.camOsc.frequency, 3 * f0, now, TC, FMIN);
-    // one injection per cylinder per cycle
-    setF(this.injOsc.frequency, n * f0, now, TC, FMIN);
-    // one firing event per cylinder per cycle (same rate, separate node so the
-    // two AM chains stay independent)
-    setF(this.fireOsc.frequency, n * f0, now, TC, FMIN);
-    // chain chordal action on the crank sprocket: crank rev/s × teeth
-    const chainF = (rpm / 60) * this.chainTeeth;
-    setF(this.chainBP1.frequency, chainF, now, TC, 1000);
-    setF(this.chainBP2.frequency, chainF * 2, now, TC, 2000);
-
-    // ---- levels ----
-    // Valve clatter: impact energy is nearly load-independent, so the audible
-    // change with load is masking, modelled as a duck of `loadDuck`. Individual
-    // impacts smear together with rpm, so it also rolls off slightly.
-    const valveLv = this.lvValve * 0.55 * gate
-      * (1 - this.loadDuck * load)
-      * (1 - 0.3 * rpmNorm);
-    setT(this.vGain.gain, valveLv, now, TC);
-
-    // Injector click: pintle lift is fixed; only the pulse width grows with
-    // load, worth a few dB at most.
-    setT(this.iGain.gain, this.lvInj * 0.30 * gate * (0.85 + 0.25 * load), now, TC);
-
-    // Chain whirr: tension (and therefore radiated level) grows with rpm and a
-    // little with load through the accessory drive.
-    setT(this.chainGain.gain, this.lvChain * 0.5 * gate * (0.45 + 0.75 * rpmNorm) * (0.85 + 0.2 * load), now, TC);
-
-    // Piston slap: excited proportionally to load, with a floor so a cold idle
-    // still knocks. Piston side-thrust also grows with rpm².
-    const slap = (0.22 + 0.9 * load) * (0.5 + 0.5 * rpmNorm * rpmNorm);
-    setT(this.blockGain.gain, this.blockLevel * 0.5 * gate * slap, now, TC);
-  }
-
-  /** Start this layer's oscillators. Noise sources are already running. */
-  start(t) { startAll(this._srcs, t); }
-
-  dispose() {
-    const now = fin(this.ctx.currentTime, 0);
-    stopAll(this._srcs, now);
-    disconnectAll(this._nodes);
-    this._srcs.length = 0;
-  }
-}
-
-// ===========================================================================
-// 2. TransmissionLayer
+// 1. TransmissionLayer
 // ===========================================================================
 
 /**
@@ -756,7 +496,7 @@ export class TransmissionLayer {
 }
 
 // ===========================================================================
-// 3. TurboLayer
+// 2. TurboLayer
 // ===========================================================================
 
 /**
@@ -899,6 +639,25 @@ export class TurboLayer {
     this.setProfile(profile);
     if (!TurboLayer.supports(profile)) return;
 
+    // Everything internal sums into `bus`, and `bus` reaches `out` through a
+    // TONE STAGE. A turbo is the brightest thing in this synth and it is the
+    // one voice that sits in the band the ear is most sensitive to, so it gets
+    // its own air cut rather than relying on the master EQ to clean up after
+    // it: a fixed lowpass to take the very top off the blade harmonics and the
+    // stall click, and a high shelf to tilt what is left.
+    this.bus = keep(ctx.createGain());
+    this.airLP = keep(ctx.createBiquadFilter());
+    this.airLP.type = 'lowpass';
+    this.airLP.frequency.value = TURBO_AIR_HZ;
+    this.airLP.Q.value = -3.01;              // Butterworth: Web Audio Q is dB here
+    this.airShelf = keep(ctx.createBiquadFilter());
+    this.airShelf.type = 'highshelf';
+    this.airShelf.frequency.value = 2600;
+    this.airShelf.gain.value = TURBO_AIR_DB;
+    this.bus.connect(this.airLP);
+    this.airLP.connect(this.airShelf);
+    this.airShelf.connect(this.out);
+
     const white = noiseSource(ctx, 'white', 1.07);
     this._srcs.push(white);
 
@@ -920,9 +679,47 @@ export class TurboLayer {
     this.whineGain = keep(ctx.createGain());
     this.whineGain.gain.value = 0;
 
-    this.whineOsc.connect(this.whineBP);
+    // GRAIN. A blade tone straight out of a PeriodicWave is periodic to the
+    // sample, and the ear reads anything that clean as a synthesiser rather
+    // than as a machine. A real compressor is running in turbulent flow: the
+    // wheel sees a different pressure every revolution, the tone breaks up, and
+    // that roughness is most of what makes it sound like moving air rather than
+    // an oscillator.
+    //
+    // Two mechanisms, because they do different jobs:
+    //
+    //   * a soft ASYMMETRIC saturator. Symmetric clipping only adds odd
+    //     harmonics, which is the same brittle character an octave up;
+    //     asymmetry adds the even ones, and evens are what read as body. It
+    //     goes BEFORE the formant so the filter shapes the harmonics it makes
+    //     rather than the other way round.
+    //   * noise AM. Band-limited noise on the gain, so the level is never
+    //     steady. This is the part that turns a tone into a rush.
+    this.whineDrive = keep(ctx.createGain());
+    this.whineDrive.gain.value = 1;
+    this.whineShaper = keep(ctx.createWaveShaper());
+    this.whineShaper.curve = grainCurve(1024, 0.55);
+    this.whineShaper.oversample = '4x';      // it is a 1-3 kHz tone; do it properly
+
+    this.whineOsc.connect(this.whineDrive);
+    this.whineDrive.connect(this.whineShaper);
+    this.whineShaper.connect(this.whineBP);
     this.whineBP.connect(this.whineGain);
-    this.whineGain.connect(this.out);
+    this.whineGain.connect(this.bus);
+
+    // Flow roughness. Pink through a wide bandpass in the tens-of-Hz range is
+    // the rate that reads as texture; faster becomes a buzz, slower a wobble.
+    const grainNoise = noiseSource(ctx, 'pink', 0.29);
+    this._srcs.push(grainNoise);
+    this.grainBP = keep(ctx.createBiquadFilter());
+    this.grainBP.type = 'bandpass';
+    this.grainBP.frequency.value = 55;
+    this.grainBP.Q.value = 0.6;
+    this.grainDepth = keep(ctx.createGain());
+    this.grainDepth.gain.value = 0;
+    grainNoise.connect(this.grainBP);
+    this.grainBP.connect(this.grainDepth);
+    this.grainDepth.connect(this.whineGain.gain);
 
     // Bearing wander: two mutually irrational rates so the pattern never
     // repeats audibly. Depth is written per frame.
@@ -955,7 +752,7 @@ export class TurboLayer {
     this.hissGain.gain.value = 0;
     white.connect(this.hissBP);
     this.hissBP.connect(this.hissGain);
-    this.hissGain.connect(this.out);
+    this.hissGain.connect(this.bus);
 
     // --- blow-off valve -----------------------------------------------------
     // One shared filter+gain pair, retriggered by scheduling — no allocation.
@@ -970,7 +767,7 @@ export class TurboLayer {
     this.bovGain.gain.value = 0;
     white.connect(this.bovBP);
     this.bovBP.connect(this.bovGain);
-    this.bovGain.connect(this.out);
+    this.bovGain.connect(this.bus);
 
     // --- wastegate chatter --------------------------------------------------
     // Once boost reaches the wastegate spring pressure the valve hunts, opening
@@ -992,7 +789,7 @@ export class TurboLayer {
     white.connect(this.wgBP);
     this.wgBP.connect(this.wgAM);
     this.wgAM.connect(this.wgLevel);
-    this.wgLevel.connect(this.out);
+    this.wgLevel.connect(this.bus);
     keep(amDrive(ctx, this.wgOsc, 0.85, this.wgAM.gain));
 
     // --- compressor surge: the "stu-stu-stu" --------------------------------
@@ -1022,7 +819,7 @@ export class TurboLayer {
     white.connect(this.surgeBody);
     this.surgeBody.connect(this.surgeBodyAM);
     this.surgeBodyAM.connect(this.surgeBodyLvl);
-    this.surgeBodyLvl.connect(this.out);
+    this.surgeBodyLvl.connect(this.bus);
     this.surgeBodyDepth = keep(ctx.createGain());
     this.surgeBodyDepth.gain.value = 1;
     this.surgeShaper.connect(this.surgeBodyDepth);
@@ -1041,7 +838,7 @@ export class TurboLayer {
     white.connect(this.surgeEdge);
     this.surgeEdge.connect(this.surgeEdgeAM);
     this.surgeEdgeAM.connect(this.surgeEdgeLvl);
-    this.surgeEdgeLvl.connect(this.out);
+    this.surgeEdgeLvl.connect(this.bus);
     this.surgeEdgeDepth = keep(ctx.createGain());
     this.surgeEdgeDepth.gain.value = 1;
     this.surgeShaper.connect(this.surgeEdgeDepth);
@@ -1076,15 +873,8 @@ export class TurboLayer {
     this.surgeTrim = clamp(fin(t && t.surge, 1), 0, 3);
     const redline = fin(profile && profile.redlineRpm, 7000);
     const order = fin(t && t.whineOrder, 70);
-    // Whine of a fully spooled turbo at redline, Hz.
-    //
-    // The ceiling used to be 12 kHz, which let profiles put a near-pure tone at
-    // 4.2 kHz — the single most piercing thing this synth could produce, and
-    // right where the ear peaks. It is now capped at 3 kHz for the FUNDAMENTAL;
-    // the wavetable's harmonics carry the brightness above that, rolled off, so
-    // the whistle still reads as high without a bare tone sitting in the
-    // sensitive band.
-    this.whineRef = clamp((redline / 120) * order, 200, 3000);
+    // Whine of a fully spooled turbo at redline, Hz. See TURBO_WHINE_MAX_HZ.
+    this.whineRef = clamp((redline / 120) * order, 200, TURBO_WHINE_MAX_HZ);
   }
 
   update(p) {
@@ -1157,6 +947,21 @@ export class TurboLayer {
     setT(this.wanderDepth1.gain, wander, now, 0.08);
     setT(this.wanderDepth2.gain, wander * 0.4, now, 0.08);
 
+    // Grain. Flow roughness is worst where the compressor is furthest from its
+    // efficiency island — off-boost and at low flow — and cleans up as the
+    // wheel comes on song, so the noise AM is deepest early in the spool and
+    // the saturator is driven hardest there too. Both are expressed relative to
+    // the whine's own level so the texture rides with it instead of appearing
+    // as a separate hiss when the whistle is quiet.
+    const rough = 0.55 - 0.30 * this.spool;
+    setT(this.grainDepth.gain, whineLvl * rough, now, 0.05);
+    // Drive into the saturator. Above 1 it clips harder and lower harmonics
+    // grow; the tone stage catches the top of what that makes.
+    setT(this.whineDrive.gain, 0.8 + 0.9 * this.spool, now, TC);
+    // The roughness also lives in the noise band's rate: a slow shaft breaks
+    // up in long lumps, a fast one in a fine rush.
+    setF(this.grainBP.frequency, 28 + 120 * this.spool, now, TC, 55);
+
     // Shaft-rate sidebands. A turbo wheel has roughly a dozen blades, so the
     // shaft turns at about BPF/11 — tens of Hz, well below the tone, which is
     // exactly the range that reads as texture rather than as a second pitch.
@@ -1201,33 +1006,54 @@ export class TurboLayer {
 
     const closed = throttle < 0.10;
     const justClosed = closed && this._prevThrottle >= 0.25;
+    // A PARTIAL lift stalls a compressor too. Requiring the pedal to reach
+    // 10 % before anything can arm meant the flutter only ever existed at the
+    // two extremes of the pedal, and it is the reason it was so hard to
+    // provoke: measured over eight lifts per engine, a 0.6-throttle drive
+    // produced it on 0 of 8 for every one of the seven turbo profiles. What
+    // stalls the wheel is the flow COLLAPSING, not the pedal reaching a
+    // particular number, so a fast large closure arms it wherever it lands.
+    const dropped = (this._prevThrottle - throttle) > 0.28 && throttle < 0.42;
     const shiftCut = shifting && !this._prevShifting;
     const allow = this.flutterMode === false ? 0 : 1;
 
-    // Pressure available to reverse through the wheel. Below ~0.12 there is not
-    // enough to stall the compressor and nothing happens at all — which is
-    // correct: an off-boost lift is silent.
+    // Pressure available to reverse through the wheel, taken from SHAFT SPEED
+    // rather than from boost.
     //
-    // Note this reads `this.boost` BEFORE the valve has vented on the trigger
-    // frame, which is right: what stalls the compressor is the pressure that
-    // was standing in the plenum at the instant the throttle shut.
-    const head = clamp((this.boost - 0.12) / 0.45, 0, 1);
+    // Boost goes with the square of tip speed, so gating on it squared the
+    // threshold as well: `boost > 0.12` needs spool 0.35 and full authority at
+    // `boost 0.57` needs spool 0.76 — which in practice means a near-flat-out
+    // pull. Surge is a compressor-map phenomenon; what decides it is where the
+    // wheel is running when the flow stops, and that is tip speed. Below 0.22
+    // the wheel is windmilling and an off-boost lift is correctly silent.
+    //
+    // Note this reads the state BEFORE the valve has vented on the trigger
+    // frame, which is right: what stalls the compressor is what was standing in
+    // the plenum at the instant the throttle shut.
+    const head = clamp((this.spool - 0.22) / 0.38, 0, 1);
 
     // What the valve relieves cannot reverse through the wheel. This is the
     // one place the valve's capacity decides the sound, and it has to be
     // applied to the ARMING rather than to the decaying state: the plenum is
     // vented on the same frame the throttle shuts, so subtracting it afterwards
     // just gets overwritten by the next arm.
-    const relief = clamp(1 - 0.85 * this.bovLevel, 0, 1);
+    //
+    // The coefficient is 0.55 and there is a floor, not the original 0.85 with
+    // none. A big atmospheric valve should mean LESS flutter than a small one —
+    // that trade is the whole point of `turbo.bov` — but at 0.85 the boxer4's
+    // 0.8 valve left 0.32 of authority and it barely chattered at all even
+    // flat out. The trade survives (0.32 of relief still separates the biggest
+    // valve from the smallest); it just no longer silences anything.
+    const relief = clamp(1 - 0.55 * this.bovLevel, 0.30, 1);
     const stall = head * relief * allow;
 
-    if (stall > 0 && (justClosed || shiftCut)) {
+    if (stall > 0 && (justClosed || dropped || shiftCut)) {
       // A snap-shut from full boost stalls harder than an easing-off.
       this._surge = Math.max(this._surge, stall);
     }
     // While the throttle stays shut and boost is still up, surge sustains
     // rather than decaying away — a long lift keeps chattering.
-    if (closed && stall > 0.10) {
+    if (closed && stall > 0.06) {
       this._surge = Math.max(this._surge, stall * 0.55);
     }
     if (!closed && !shifting) this._surge *= 0.25;   // reopening kills it at once
@@ -1363,6 +1189,29 @@ function bladeWave(ctx) {
  * Output is 0..1, never negative — this drives a gain, and a negative envelope
  * would invert the noise band mid-burst.
  */
+/**
+ * Soft ASYMMETRIC saturation, for the turbo whine.
+ *
+ * `tanh` is symmetric, so it generates only odd harmonics — 3f, 5f, 7f — which
+ * on an already-thin tone reads as the same thinness an octave up. Pushing the
+ * positive and negative halves through different amounts of curvature adds the
+ * EVEN harmonics too, and it is the evens (2f in particular) that the ear reads
+ * as body rather than as edge.
+ *
+ * @param {number} n     table size
+ * @param {number} bias  0 = symmetric, 1 = one half hard and the other nearly
+ *                       linear. 0.55 is enough to hear without buzzing.
+ */
+function grainCurve(n = 1024, bias = 0.55) {
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    const k = x >= 0 ? 2.4 * (1 + bias) : 2.4 * (1 - bias);
+    c[i] = Math.tanh(k * x) / Math.tanh(k);
+  }
+  return c;
+}
+
 function surgePulseCurve(n = 1024) {
   const c = new Float32Array(n);
   const RISE = 0.06;
@@ -1375,7 +1224,7 @@ function surgePulseCurve(n = 1024) {
 }
 
 // ===========================================================================
-// 4. TransientBank
+// 3. TransientBank
 // ===========================================================================
 
 /**

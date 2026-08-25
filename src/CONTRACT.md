@@ -9,9 +9,10 @@ Pure Web Audio API + ES6 modules. **No external libraries. No samples.** Target
 | File | Owner | Purpose |
 | --- | --- | --- |
 | `profiles.js` | orchestrator | engine + vehicle data, firing geometry helpers. **Do not edit.** |
+| `presets.js` | orchestrator | the sound file format: schema, defaults, validation. **Add a schema row for every profile field**, or `run.mjs` fails on the orphan check. |
 | `pulse.js` | orchestrator | firing geometry → `PeriodicWave` tables. **Do not edit.** |
 | `resonators.js` | agent A | exhaust waveguides, muffler, intake Helmholtz, nonlinearity, cabin |
-| `layers.js` | agent B | mechanical, transmission, turbo, noise beds, transients |
+| `layers.js` | agent B | transmission, turbo, noise beds, transients |
 | `physics.js` | agent C | drivetrain, driveline compliance, clutch |
 | `shift.js` | agent C | gear-shift state machine |
 | `character.js` | agent A | exhaust flow noise, sub layer, imperfection modulator |

@@ -47,9 +47,10 @@ engine_sim/
 │   └── serve.mjs                  zero-dependency static dev server
 ├── src/
 │   ├── profiles.js                engine + vehicle DATA, firing-geometry helpers
+│   ├── presets.js                 THE SOUND FILE FORMAT — schema, defaults, validation
 │   ├── pulse.js                   firing geometry → band-limited PeriodicWave
 │   ├── resonators.js              exhaust waveguides, muffler, intake, rasp, cabin
-│   ├── layers.js                  mechanical, gearbox, turbo, transient bank
+│   ├── layers.js                  gearbox, turbo, transient bank
 │   ├── character.js               exhaust noise, sub layer, imperfection modulator
 │   ├── fx.js                      EQ, reverb, stereo widener, 3-band compressor
 │   ├── physics.js                 drivetrain: inertias, clutch, torsional spring
@@ -59,7 +60,7 @@ engine_sim/
 │   └── CONTRACT.md                module interface contract
 └── test/
     ├── mock-audio.mjs             strict Web Audio mock + graph audit
-    ├── run.mjs                    unit + sweep suite (335 checks)
+    ├── run.mjs                    unit + sweep suite (359 checks)
     ├── drive.mjs                  driving-behaviour suite
     └── spectrum.mjs               ANALYTIC spectrum of the exhaust chain
 ```
@@ -73,12 +74,13 @@ of them from an older context dump:
 | `src/_v1_reference.js` | 809 lines of v1 that nothing imported |
 | `src/ambience.js` | environment bed, removed with its test suite |
 | `_rtest.html` | scratch file |
+| `MechanicalLayer` (in `layers.js`) | valvetrain clatter at engine order 0.5, injector ticks, timing-chain whirr and piston slap into fixed block modes. Removed at the user's request, along with its mix bus, the `mechanical` block in every profile, and its UI. Note that `TransientBank` still has a voice-pool *partition* called `mechanical` — that is the casing-radiated clunk/thump/click, and it stays. |
 
 Commands:
 ```
 npm start                   # dev server on :8000  (= node tools/serve.mjs)
 npm test                    # run.mjs + drive.mjs
-node test/run.mjs           # 335 checks, exits non-zero on failure
+node test/run.mjs           # 359 checks, exits non-zero on failure
 node test/drive.mjs         # driving behaviour, 80 engine×vehicle combos
 node test/run.mjs orders    # run one suite by substring
 node test/spectrum.mjs      # harshness table, all engines
@@ -180,9 +182,9 @@ TransientBank combustion bus ──(popSend 1.05)────────→ Exh
    ExhaustSystem = per-bank Waveguide → collector Waveguide → Muffler → Nonlinearity
                                                               ↓ bus: exhaust
 intake wavetable osc ×2 → IntakeResonator (Helmholtz + turbulence)  ↓ bus: intake
-MechanicalLayer   valvetrain @0.5 order, injectors, chain, block modes ↓ mechanical
 TransmissionLayer mesh whine = driveshaft rpm × engaged gear teeth     ↓ transmission
-TurboLayer        lagged spool whine, shaft sidebands, chatter, BOV    ↓ turbo
+TurboLayer  grain-saturated spool whine, sidebands, chatter, BOV, surge
+            → airLP(4.6 k) → airShelf(−5.5 dB @2.6 k)                  ↓ turbo
 TransientBank     mechanical bus only (clunks, thumps, clicks)         ↓ transients
 SubLayer          octave-shifted chest-band sine + saturation          ↓ sub
 CharacterModulator → osc.detune (cents) and busses.exhaust.gain (tremolo)
@@ -194,9 +196,11 @@ CharacterModulator → osc.detune (cents) and busses.exhaust.gain (tremolo)
                      → limiter(−1.5, 20:1, 1 ms) → master → destination
 ```
 
-Default mix: `exhaust 1.0, intake 0.75, mechanical 0.55, transmission 0.45,
-turbo 0.7, transients 0.42, sub 0.9`. Steady state ≈ **293 nodes**, ~29 AudioParam
-writes/frame, **zero per-frame allocation**.
+Default mix: `exhaust 1.0, intake 0.75, transmission 0.45, turbo 0.49,
+transients 0.42, sub 0.9` — and it lives in `presets.js`, not here, so an engine
+can carry its own balance. Steady state ≈ **264 nodes** naturally aspirated,
+**303** turbocharged; ~29 AudioParam writes/frame, **zero per-frame
+allocation**.
 
 ### Module notes
 
@@ -223,10 +227,6 @@ writes/frame, **zero per-frame allocation**.
 - `CabinFilter` — exterior/interior perspective.
 
 **`layers.js`**
-- `MechanicalLayer` — valvetrain at engine order 0.5 (camshaft turns at half
-  crank speed), injector ticks, chain whirr, and block resonances. Block modes
-  are **pink noise through bandpasses at fixed structural frequencies**,
-  AM'd at the firing rate.
 - `TransmissionLayer` — mesh frequency = shaft rpm × `gearTeeth[gear-1]`, using
   `p.wheelRpm` not engine rpm, so each gear has a different whine pitch. Plus
   rattle driven by `p.dRpm` and `p.clutchSlip`.
@@ -235,18 +235,39 @@ writes/frame, **zero per-frame allocation**.
   tone** (not a stack of sines — that read as a single flat timbre and put a
   near-pure 4 kHz tone where the ear peaks), through a formant bandpass that
   tracks it, with **shaft-rate sidebands** (BPF/11) and **bearing wander** on
-  detune. Fundamental is capped at 3 kHz; the wavetable's harmonics carry the
-  brightness above that.
+  detune.
+  The fundamental is capped at **`TURBO_WHINE_MAX_HZ = 2200`**; the wavetable's
+  harmonics carry the brightness above that. It was 3 kHz, and five of the seven
+  turbo profiles sat pinned exactly AT the cap — same pitch on every car, and
+  still the sharpest thing in the mix. At 2200 they spread over 1.2-1.9 kHz.
+  **Grain** stops it reading as an oscillator: a soft **asymmetric** saturator
+  (`grainCurve`, even harmonics = body; `tanh` would give only odd ones, which
+  is the same thinness an octave up) before the formant, plus band-limited noise
+  AM on the gain. Both are deepest early in the spool, where a real compressor is
+  furthest from its efficiency island.
+  The whole layer then goes through its **own tone stage** — `airLP` at 4.6 kHz
+  and a −5.5 dB shelf at 2.6 kHz — because the turbo is the one voice that lives
+  in the 2-6 kHz band everything else is measured for staying out of. Measured:
+  −0.6 dB at 1.5 kHz, −4.2 at 3 k, −16.6 at 8 k.
   **Compressor surge** ("stu-stu-stu") is a sawtooth through a WaveShaper
   carrying an attack/decay pulse curve — a burst train, not a tremolo, and that
   shape is the entire difference between "stu" and "shoo". It drives a body band
   (the "tu") and a quiet edge band (the "st"). Armed by ANY throttle closure
   against standing boost, **including a gear-change ignition cut**, which is why
-  a boosted car flutters on every upshift.
-  Whether a profile goes "chiu" or "stu-stu-stu" is **one number**, `turbo.bov`
-  — the valve's capacity. A big atmospheric valve empties the plenum so nothing
-  is left to reverse through the wheel; a small or recirculating one leaves
-  pressure standing and the compressor stalls. Not a mode switch.
+  a boosted car flutters on every upshift — and by any fast large closure that
+  does not reach idle, because what stalls a compressor is the flow collapsing,
+  not the pedal reaching a particular number.
+  It is gated on **shaft speed, not boost** (ledger #44). Boost goes with the
+  square of tip speed, so a boost threshold is a squared threshold; on the old
+  gate the flutter needed ~0.85 of throttle and, measured over eight lifts per
+  engine at 0.6 throttle, fired on **0 of 8 for all seven turbo profiles**.
+  Whether a profile goes "chiu" or "stu-stu-stu" is still **one number**,
+  `turbo.bov` — the valve's capacity. A big atmospheric valve empties the plenum
+  so less is left to reverse through the wheel; a small or recirculating one
+  leaves pressure standing and the compressor stalls. Not a mode switch, and no
+  longer a mute switch either: the relief coefficient is 0.55 with a 0.30 floor,
+  not 0.85 with none, so the biggest valve trades the flutter down rather than
+  away.
 - `TransientBank` — 16 pre-built voices (noise → 2 bandpasses → gain),
   retriggered by scheduling envelopes. **Zero allocation per event.** The pool
   is **partitioned by bus**: 10 combustion voices hard-wired to `combustionOutput`
@@ -570,11 +591,14 @@ sim.setThrottle(1); sim.update(dt);   // per frame
 
 | method | notes |
 | --- | --- |
-| `setEngineType(id)` | 16 profiles, hot-swappable while driving |
+| `loadPreset(id \| object \| json)` | **the whole sound** — engine, mix, tone, EQ, space. See §6. |
+| `getPreset()` · `exportPreset()` | current sound as an object / as pretty JSON |
+| `setParam(path, v)` · `getParam(path)` | one parameter by dotted path; returns the clamped value or `null` |
+| `setEngineType(id)` | 16 profiles, hot-swappable while driving. Keeps the current mix/EQ — use `loadPreset` to bring those too. |
 | `setVehicle(id)` | 5 presets; **road speed is preserved** across the swap |
 | `setThrottle/setBrake/setClutch(0..1)` | |
 | `shiftUp() / shiftDown() / setGear(n)` | returns `false` if refused (would over-rev) |
-| `setMix({...})` | 7 buses |
+| `setMix({...})` | 6 buses |
 | `setTone({rumble, brightness})` | 0–2 each |
 | `setEQ(gains[5]) / setEQBand(i,dB) / resetEQ()` | ±18 dB |
 | `setReverb({mix,size,damping})` | **size rebuilds an IR (~6 ms) — debounce** |
@@ -586,11 +610,14 @@ sim.setThrottle(1); sim.update(dt);   // per frame
 | `getState()` | full telemetry — see below |
 | `getEvents()` | `{lash, pop, cut, engage, bov, shiftDone}` one-frame impulses |
 | `EngineSim.engines()` / `EngineSim.vehicles()` | **static** UI-ready listings |
+| `EngineSim.schema()` / `EngineSim.groups()` / `EngineSim.presets()` | **static** — every adjustable parameter with range/step/unit/group, and all 16 built-ins as full presets |
 | `sim.output` · `sim.connect(node)` · `opts.destination` | route into a host graph |
 
 **`_lastParams` is private and callers must not read it.** Everything a host
-needs is on `getState()` (which now includes `gearRatio`, `wheelRpm`, `load`,
-`overrun`, `rpmNorm`, `dRpm`, `volume`) and `getEvents()`. `index.html` was
+needs is on `getState()` (which includes `gearRatio`, `wheelRpm`, `load`,
+`overrun`, `rpmNorm`, `dRpm`, `volume`, `preset`, and `turbo` — whether the
+LOADED sound has one, which is not the same question as whether the stock
+profile for `engine` does) and `getEvents()`. `index.html` was
 reaching into it for the gear ratio and no longer does — it is now a consumer of
 the public API only, which is deliberate: it is the proof the API is sufficient.
 
@@ -608,10 +635,86 @@ The five newest, and what each is for:
 | id | what makes it different |
 | --- | --- |
 | `vtwin` | 90° V-twin, pin offset −90° → fires at 0/270°. Two cylinders in two pipes with a 270/450 split, so **50.8 % half-order energy** — the lumpiest thing here. Tiny inertia (0.055), snaps to the limiter. |
-| `rotary2` | Two-rotor Wankel. `cylinders: 4` is the *pulse count* per 720° of eccentric shaft, not pistons. Geometry matches an I4 (0 % half-orders); the sound comes from the pulse shape — slow rise, very long tail, so consecutive pulses **overlap**. That overlap is the "braap". No valvetrain, no timing chain. |
+| `rotary2` | Two-rotor Wankel. `cylinders: 4` is the *pulse count* per 720° of eccentric shaft, not pistons. Geometry matches an I4 (0 % half-orders); the sound comes from the pulse shape — slow rise, very long tail, so consecutive pulses **overlap**. That overlap is the "braap". |
 | `v6tt` | Twin-turbo V6. Low turbo inertia (0.30) so it spools fast. |
 | `v8tt` | Same cross-plane geometry as `v8cross`, so it keeps the burble — but the turbines cool the gas and damp the pipes hard, so it lands as a muffled thud instead of a bark. Same firing order, different voice, none of it hand-tuned. |
-| `i6diesel` | Compression ignition: `attack: 68`, by far the sharpest pulse here. Cool exhaust (1.16), heavy damping, 4600 rpm redline, and the loudest injector layer in the set — that tick is what makes a diesel a diesel. Big laggy VGT (inertia 0.95) with almost no blow-off valve. |
+| `i6diesel` | Compression ignition: `attack: 68`, by far the sharpest pulse here, and `hardness: 0.88`, the most load-hardening in the set. Cool exhaust (1.16), heavy damping, 4600 rpm redline. Big laggy VGT (inertia 0.95) with almost no blow-off valve. |
+
+---
+
+## 6. Presets — the sound file format (`presets.js`)
+
+A **preset** is one whole sound in one JSON-safe object: the machine (geometry,
+pipe lengths, pulse shape, turbo) *and* the mix, tone, EQ and effects on top of
+it. `loadPreset()` applies all of it; `exportPreset()` writes it out.
+
+```
+{ version, id, label,
+  engine: { cylinders, firingOrder, banks, pinOffsets?, idleRpm, redlineRpm,
+            peakTorque, peakTorqueRpm, engineInertia, gasTempFactor, voice,
+            pulse:{attack,decay,hardness,jitter},
+            exhaust:{bank,bankB?,collector,reflection,damping,muffler[3]},
+            intake:{helmholtz,q,level},
+            turbo: null | {inertia,maxBoost,whineOrder,bov,surge} },
+  mix:{...6}, tone:{rumble,brightness}, eq:[5 dB],
+  fx:{reverbMix,reverbSize,reverbDamping,width,popDepth,dynamics},
+  position, volume }
+```
+
+`ENGINE_PROFILES` in `profiles.js` is still the machine description and is
+unchanged in shape; a preset **embeds** one under `engine` and adds the sound.
+The vehicle is deliberately NOT in a preset — a preset is a sound, and the same
+engine goes in different cars.
+
+### The schema is the source of truth
+
+`PRESET_SCHEMA` describes every adjustable scalar once — path, range, step,
+unit, group, and whether changing it needs a voice rebuild. **Three consumers,
+and none of them may hard-code a parameter list:**
+
+1. `normalisePreset()` clamps and fills, so hand-edited JSON cannot put a NaN
+   into an AudioParam. It never throws; a corrupt file comes back usable.
+2. `index.html` builds every control by walking it. A parameter added in
+   `presets.js` appears in the console without the page being touched.
+3. `run.mjs` walks it **in both directions** and fails on an orphan.
+
+### Why the orphan check exists
+
+`voice` and `pulse.hardness` were in all sixteen profiles, read by **nothing**,
+for as long as the profiles existed. Nothing could see it: an unused number
+breaks no test, allocates no node, writes no param. Both are now wired up —
+`voice` is the per-engine level trim on the combustion voice, `hardness` scales
+how much the pulse sharpens under load (normalised so 0.65 reproduces the fixed
+coefficients it had before, so no existing engine changed character).
+
+The check runs both ways because both directions are real faults:
+
+- **A: a profile field the schema does not expose** — walks `ENGINE_PROFILES`
+  and requires a schema row for every scalar. The exception list is the
+  *architecture* (`firingOrder`, `banks`, `pinOffsets`, `cylinders`, `label`,
+  `exhaust.bankB`): carried and validated, but a slider cannot express them.
+- **B: a schema row nothing reads** — greps `src/` (excluding the two files that
+  *define* the data) for each leaf name. A control that moves and changes
+  nothing is the same bug from the other end.
+
+Both were verified to bite by injecting one of each.
+
+### `unit` is a display contract, not decoration
+
+A real unit (`m`, `Hz`, `rpm`, `dB`) is a suffix and the number is formatted by
+the row's own `step`; `'%'` means the value is a 0..1-ish proportion and reads
+×100; `''` is a bare number. Getting this from the schema rather than
+per-control is what stops a pipe length reading "175" and a fader reading
+"0.75" — which is exactly what the first version did.
+
+### `rebuild: true` is expensive and the UI must respect it
+
+Wavetables, waveguide delay lines and the turbo graph are all derived at
+construction, so there is no way to change a pipe length without allocating.
+`setParam()` takes the cheap path for everything else — a mix fader dragged at
+60 Hz must not serialise and re-apply the entire sound on every input event, and
+must certainly not tear down and rebuild every oscillator. The console debounces
+rebuild rows by 130 ms; the readout still tracks the finger.
 
 ---
 
@@ -731,11 +834,39 @@ panels, not a consumer dashboard.
   for live/hot state: throttle, redline, half-orders, clutch slip > 50 rpm.
 - Square geometry, 1 px hairlines, no rounded corners or soft shadows.
 - Motion is mechanical: 140 ms cubic, no springs.
-- Four tabs: Machine, Voice mix, Tone, EQ & FX. Instrument + telemetry always
-  visible above them.
+- Six tabs: Machine, Tune, Voice mix, Tone, EQ & space, Preset. Instrument +
+  telemetry always visible above them.
 - Instrument is a **semicircular sweep** with tick ring r=130, numeral ring
   r=104, sweep band r=78 — the three must stay on clearly separated radii or the
   numerals collide with the band (this happened, twice).
+
+### The console builds itself
+
+**Every control on every tab is generated by walking `EngineSim.schema()`**, and
+the page holds no parameter list of its own. That is not a style choice: the
+page used to hand-write one `<input>` and one binding per parameter, which is
+how two profile fields ended up with no control at all and no way to notice.
+
+- `controls` is a `Map` from schema path to `{input, out, row, el}`.
+  `syncControls()` pulls every one of them back from the sim, and is what runs
+  after anything that changes more than one parameter at once.
+- `setParam(path, v)` is the only way a control talks to the sim. The page never
+  calls `setMix`/`setTone`/`setReverb` directly, so a control does not need to
+  know which setter its parameter lives behind.
+- `rebuild: true` rows are **debounced by 130 ms**; the readout still tracks the
+  finger. Everything else writes on every input event.
+- `needs: 'turbo'` rows, and the group heading around them, are hidden on a
+  naturally aspirated engine rather than left doing nothing.
+- The spec sheet and the order spectrum read `sim.getPreset().engine`, the LIVE
+  engine section — not `ENGINE_PROFILES`. The Tune tab edits those numbers, and
+  a spec sheet still showing the factory figures would be lying about the sound
+  you are listening to. Same reason the drive HUD asks `getState().turbo`
+  instead of looking the engine up.
+
+The Preset tab is save / delete / revert / download / copy / import, plus a live
+JSON view with **Apply edits**. Saved presets go to `localStorage` under
+`engine-sim/presets/v2` and appear in the picker under "Saved here"; both
+storage calls are wrapped, because a browser in private mode throws on write.
 
 ---
 
@@ -785,6 +916,10 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 41 | **A hard click on tip-in, lift and every shift** | `clunk` was 1150/3100 Hz, Q 22/16, **0.8 ms** attack — a switch closing, not two castings colliding. Stranded alone in the mix after #31 | 330/1250 Hz, Q 7/6, 3.5 ms; `click` 3200/6400 → 1500/2800 and lvl 0.35 → 0.16, one per shift not two |
 | 42 | Pops went faint fixing #38 | dropping both presets an octave took the crackle's energy above 700 Hz from 71 % → **3 %**; `popDirect` 0.22 left only 8 % of the report in the dry path | midpoint by measurement: 112/680 and 700/1850, `popDirect` 0.75 → 38 % above 700 Hz, 2.3 % in 2-6 kHz |
 | 43 | **"Full throttle from stationary jumps to 3000 and sticks for a second"** — #39 again, from every entry it was not measured on | rolling re-launch on the old controller: 832 → 2307 rpm in 0.15 s = **11 547 rpm/s**, 94 % of an unloaded rev, then a crawl at 1900. Pulling away in 2nd: 2826 → pinned at ~2960 for a second. Over 64 manual combos × 4 entries: **42 launches with the revs going backwards**, median rate-collapse 0.19 in 2nd | the absolute ramp + slip curve (two curves that cross) replaced by ONE slew-limited demand seeded on the engine, `launchRateFor(gear)` instead of always 1st, a torque feed-forward clutch command with a leaking integral, and the flare absorbed rather than caught. **0** reversals, median collapse 0.85 / 0.92 / 1.00 across cold / 2nd / rolling |
+| 44 | **The turbo flutter was effectively unreachable** | gated on `boost`, which goes with the SQUARE of tip speed, so the threshold was squared too — it needed ~0.85 of throttle. Measured over eight lifts per engine at 0.6 throttle (ordinary driving): **0 of 8 on all seven turbo profiles**. The flat-out test passed the whole time | gate on shaft speed instead (`(spool−0.22)/0.38`); arm on any fast large closure, not only on a pedal reaching 10 %; BOV relief 0.85 with no floor → 0.55 with a 0.30 floor. Now 4-7 of 8 at 0.6 throttle and 8 of 8 pressing on, and the biggest valve still trades the flutter down by 3+ dB |
+| 45 | Turbo whine was pure and sharp | five of seven profiles sat pinned AT the 3 kHz fundamental cap — same pitch on every car, in the band where hearing peaks, and periodic to the sample | cap → **2200 Hz**; asymmetric saturation (evens = body) + band-limited noise AM for grain; the layer gets its own tone stage (−4.2 dB at 3 k, −16.6 at 8 k); bus level −30 % |
+| 46 | **Two profile fields were read by nothing** | `voice` and `pulse.hardness`, in all 16 profiles, for as long as the profiles existed. Invisible: an unused number breaks no test, allocates no node, writes no param | wire both up (`voice` = per-engine level trim, `hardness` = how much the pulse sharpens under load, normalised so 0.65 is the old fixed behaviour) and add the two-directional orphan check in `run.mjs`, verified to bite by injecting one of each |
+| 47 | The generated console read pipe lengths as percentages | first pass formatted any unitless row as `v×100`, so a 1.75 m header showed "175" and a 4.4 decay showed "440" | `unit` became a display CONTRACT — real unit = suffix formatted by `step`, `%` = ×100, `''` = bare number |
 
 ### #31 in detail — it will come back if the constant moves
 
@@ -817,14 +952,20 @@ Be honest about this with the user; it has been stated throughout.
 - **Nobody has heard the audio.** Every claim is numerical or physical —
   spectra, mode frequencies, damping ratios, impact velocities, gain reduction.
   None is a claim about how it sounds.
-- **CPU is unmeasured.** Node count (291) and per-frame writes (~29) are known;
-  real CPU is not. The original brief asked for < 5 %.
-- **Responsive breakpoints** (900/760/620 px) are written but only the 1280 px
+- **CPU is unmeasured.** Node count (264 NA / 303 turbo) and per-frame writes
+  (~29) are known; real CPU is not. The original brief asked for < 5 %.
+- **Responsive breakpoints** (900/760/620 px) are written but only the 1400 px
   layout has been screenshotted.
-- The console has been verified to **load and populate** in headless Chrome —
-  16 engines in the dropdown, live telemetry, boot guard correctly dormant, and
-  correctly firing on a `file://` origin. Nobody has clicked Ignition and
-  listened.
+- The console has been verified to **load, build and populate** in headless
+  Chrome — 16 presets in the picker, 49 generated controls, live telemetry, the
+  order spectrum drawn, the JSON view filled, turbo rows correctly hidden on a
+  naturally aspirated engine, boot guard dormant, and correctly firing on a
+  `file://` origin. **Nobody has clicked a control and listened**, and nobody
+  has exercised save/import/download by hand.
+- **The user's own report is the only evidence about how any of this sounds.**
+  The turbo rework (#44, #45) and the mechanical-layer removal were done to a
+  described complaint, and the numbers here confirm the mechanism changed in the
+  intended direction — not that the result is right.
 
 ---
 
@@ -900,7 +1041,26 @@ Be honest about this with the user; it has been stated throughout.
     #42 was the result. A pop takes its BODY from the pipe and its DEFINITION
     from its own top end and the dry path; killing either one is a bug.
 23. `index.html` uses **only** the public API. Keep it that way — it is the
-    working proof that the API is enough to build against.
+    working proof that the API is enough to build against. It now also builds
+    every control by walking `EngineSim.schema()` and never hard-codes a
+    parameter list — keep THAT too, for the reason in #24.
+24. **A parameter nothing reads is invisible to every other kind of test.**
+    `voice` and `pulse.hardness` sat in all sixteen profiles doing nothing for
+    the whole life of the project (#46). An unused number allocates no node,
+    writes no param, breaks no assertion and looks entirely reasonable in the
+    source. The two-directional orphan check in `run.mjs` is the only thing that
+    can see it; if you add a field to a profile, add its schema row.
+25. **Squaring a quantity squares the threshold you gate on.** The turbo flutter
+    was gated on boost, and boost goes with the square of tip speed, so a
+    "modest" threshold became a near-flat-out one and the feature was
+    unreachable in ordinary driving for months (#44). Gate on the underlying
+    quantity, and — the part that actually caught it — write the test at the
+    input level a user would really use, not at the extreme where the feature
+    obviously works.
+26. **`TransientBank`'s `mechanical` voice pool is not the deleted
+    `MechanicalLayer`.** It is the casing-radiated clunk/thump/click partition
+    and it stays. A search-and-destroy on the word "mechanical" will break the
+    driveline clunk.
 
 ---
 

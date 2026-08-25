@@ -164,7 +164,6 @@ await suite('audio modules — construction and parameter sweep', () => {
     add(resonators.ExhaustSystem);
     add(resonators.IntakeResonator);
     add(resonators.CabinFilter);
-    add(layers.MechanicalLayer);
     add(layers.TransmissionLayer, VEHICLE_PRESETS.sports);
     if (profile.turbo) add(layers.TurboLayer);
     add(layers.TransientBank);
@@ -189,7 +188,7 @@ await suite('audibility — every source started and connected to the output', a
   // The check that was missing. A source node that is built, connected and
   // never started is completely silent, and NOTHING else in this harness
   // notices: its params still get written, the graph still looks right, the
-  // node count is still stable. It cost an entire mechanical + gearbox layer.
+  // node count is still stable. It cost eight oscillators across two layers.
   const { EngineSim } = await import('../src/engine-sim.js');
   for (const e of Object.keys(ENGINE_PROFILES)) {
     for (const v of ['sports', 'truck']) {
@@ -541,7 +540,7 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
   ok(TURBOS.length >= 4, 'there are turbocharged profiles to test', TURBOS.join(','));
 
   /** Drive one engine through gear pulls with periodic lifts. */
-  const run = (engine, { lift = true, shift = true } = {}) => {
+  const run = (engine, { lift = true, shift = true, throttle = 1 } = {}) => {
     const mk = createMockContext();
     installGlobals(mk.ctx);
     const sim = new EngineSim(mk.ctx, { engine, vehicle: 'sports' });
@@ -551,7 +550,7 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
                 whineMin: Infinity, whineMax: 0, spoolMin: Infinity, spoolMax: 0 };
     for (let i = 0; i < 60 * 10; i++) {
       const closed = lift && (i % 180 >= 150);
-      sim.setThrottle(closed ? 0 : 1);
+      sim.setThrottle(closed ? 0 : throttle);
       mk.advance(1 / 60);
       sim.update(1 / 60);
       if (sim._lastParams.evBov > 0) r.bov++;
@@ -575,20 +574,62 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
     const semitones = 12 * Math.log2(r.whineMax / Math.max(1, r.whineMin));
     ok(semitones > 18, `${id}: whine sweeps a musically useful range`,
        `${r.whineMin.toFixed(0)}-${r.whineMax.toFixed(0)} Hz = ${semitones.toFixed(1)} semitones`);
-    // The fundamental must stay clear of the band where the ear peaks.
-    ok(r.whineMax <= 3000, `${id}: whine fundamental stays out of 3-6 kHz`,
+    // The fundamental must stay clear of the band where the ear peaks. It used
+    // to be capped at 3 kHz, but five of the seven profiles then sat pinned AT
+    // the cap — same pitch on every car, and still the sharpest thing in the
+    // mix. 2200 puts it under the ear's peak; the wavetable's harmonics, rolled
+    // off by the layer's own tone stage, carry the brightness.
+    ok(r.whineMax <= 2200, `${id}: whine fundamental stays out of the harsh band`,
        `max ${r.whineMax.toFixed(0)} Hz`);
     ok(r.peakSurge > 0.15 && r.surgeFrames > 20,
        `${id}: compressor surges on lift-off`,
        `peak ${r.peakSurge.toFixed(2)}, active ${r.surgeFrames} frames`);
   }
 
-  // A big atmospheric valve relieves the plenum, so there is much less left to
+  // THE FLUTTER HAS TO BE REACHABLE WITHOUT DRIVING FLAT OUT.
+  //
+  // It was gated on `boost`, and boost goes with the square of tip speed, so
+  // the threshold was squared too: nothing happened below ~0.85 of throttle.
+  // Measured over eight lifts per engine at 0.6 throttle — ordinary driving —
+  // every one of the seven turbo profiles surged on 0 of 8. Gating on shaft
+  // speed instead puts it at 4-7 of 8. This is the assertion that would have
+  // caught that, and the flat-out one above cannot: it passed the whole time.
+  for (const id of TURBOS) {
+    const r = run(id, { throttle: 0.6 });
+    ok(r.peakSurge > 0.15 && r.surgeFrames > 10,
+       `${id}: surges in ordinary driving, not only flat out`,
+       `peak ${r.peakSurge.toFixed(2)} at 0.6 throttle, active ${r.surgeFrames} frames`);
+  }
+
+  // A big atmospheric valve relieves the plenum, so there is less left to
   // reverse through the wheel. boxer4 (bov 0.80) against i6 (bov 0.25).
+  //
+  // The margin used to be > 5 dB, on a relief coefficient of 0.85 with no
+  // floor. That silenced the big-valve cars rather than trading them down —
+  // boxer4 kept 0.32 of its stall authority and barely chattered even flat out.
+  // The valve still decides how much flutter there is, which is the whole point
+  // of `turbo.bov`; it no longer decides whether there is any.
   const big = run('boxer4'), small = run('i6');
   const dB = 20 * Math.log10(small.peakBody / Math.max(1e-6, big.peakBody));
-  ok(dB > 5, 'a large blow-off valve suppresses the flutter',
+  ok(dB > 3, 'a large blow-off valve still trades flutter away',
      `i6 ${small.peakBody.toFixed(3)} vs boxer4 ${big.peakBody.toFixed(3)} = ${dB.toFixed(1)} dB`);
+  ok(big.peakSurge > 0.3, '...but never silences it — every turbo flutters',
+     `boxer4 peak ${big.peakSurge.toFixed(2)}`);
+
+  // The layer's own tone stage. The turbo is the only voice that lives in the
+  // 2-6 kHz band the whole synth is otherwise measured for staying out of (see
+  // the harshness suite), so it carries its own air cut. Transparent where the
+  // fundamental now sits, progressively down above it.
+  {
+    const { biquad } = await import('./spectrum.mjs');
+    const lp = biquad('lowpass', 4600, -3.01);
+    const sh = biquad('highshelf', 2600, 0, -5.5);
+    const at = (f) => 20 * Math.log10(lp(f) * sh(f));
+    ok(at(1500) > -1.0, 'the turbo tone stage leaves the whistle body alone',
+       `${at(1500).toFixed(1)} dB at 1.5 kHz`);
+    ok(at(4000) < -5 && at(8000) < -12, 'the turbo tone stage takes the top off',
+       `${at(4000).toFixed(1)} dB at 4 k, ${at(8000).toFixed(1)} dB at 8 k`);
+  }
   ok(big.bov > 0 && small.bov > 0, 'the blow-off valve still fires on both',
      `${big.bov} / ${small.bov} events`);
 
@@ -632,6 +673,147 @@ await suite('harshness — no screaming resonance at any rpm', async () => {
     ok(worst < LIMIT, `${id}: 2-6 kHz share stays under ${LIMIT * 100}%`,
        `${(worst * 100).toFixed(2)}% at ${wRpm} rpm (${wF.toFixed(0)} Hz)`);
   }
+});
+
+await suite('presets — the schema is the source of truth, and has no orphans', async () => {
+  const { EngineSim, DEFAULT_MIX } = await import('../src/engine-sim.js');
+  const { PRESET_SCHEMA, PRESET_GROUPS, builtinPresets, builtinPreset,
+          normalisePreset, presetToJSON, presetFromJSON, getPath } =
+    await import('../src/presets.js');
+  const { readFileSync, readdirSync } = await import('node:fs');
+
+  const presets = builtinPresets();
+  ok(Object.keys(presets).length === Object.keys(ENGINE_PROFILES).length,
+     'every engine has a preset', `${Object.keys(presets).length} presets`);
+
+  // --- every schema row resolves, on every engine -------------------------
+  let missing = [];
+  for (const [id, pr] of Object.entries(presets)) {
+    for (const row of PRESET_SCHEMA) {
+      if (row.needs === 'turbo' && !pr.engine.turbo) continue;
+      const v = getPath(pr, row.path);
+      if (typeof v !== 'number' || !isFinite(v) || v < row.min || v > row.max) {
+        missing.push(`${id}:${row.path}=${v}`);
+      }
+    }
+  }
+  ok(missing.length === 0, 'every schema parameter is present and in range',
+     missing.slice(0, 4).join(' ') || `${PRESET_SCHEMA.length} rows x ${Object.keys(presets).length} engines`);
+
+  const groups = new Set(PRESET_GROUPS.map(g => g.id));
+  ok(PRESET_SCHEMA.every(r => groups.has(r.group)),
+     'every schema row belongs to a declared group', [...groups].join(','));
+
+  // --- ORPHAN CHECK A: a profile field the schema does not expose ---------
+  //
+  // The direction that actually bit. `voice` and `pulse.hardness` were in all
+  // sixteen profiles, read by nothing, for as long as the profiles existed —
+  // and nothing could see it, because an unused number is not a failure of any
+  // other kind of test.
+  const ARCHITECTURE = new Set([
+    'label', 'cylinders', 'firingOrder', 'banks', 'pinOffsets',
+    'exhaust.bankB',       // optional, and only on engines with unequal headers
+  ]);
+  const paths = new Set(PRESET_SCHEMA.map(r => r.path));
+  const unexposed = [];
+  const walk = (obj, prefix) => {
+    for (const [k, v] of Object.entries(obj)) {
+      const path = prefix ? prefix + '.' + k : k;
+      if (ARCHITECTURE.has(path)) continue;
+      if (Array.isArray(v)) {
+        v.forEach((_, i) => { if (!paths.has(`engine.${path}.${i}`)) unexposed.push(path + '.' + i); });
+      } else if (v && typeof v === 'object') {
+        walk(v, path);
+      } else if (typeof v === 'number' && !paths.has('engine.' + path)) {
+        unexposed.push(path);
+      }
+    }
+  };
+  for (const p of Object.values(ENGINE_PROFILES)) walk(p, '');
+  ok(unexposed.length === 0, 'no profile field is missing from the schema',
+     [...new Set(unexposed)].join(', ') || 'all exposed');
+
+  // --- ORPHAN CHECK B: a parameter nothing downstream reads ---------------
+  //
+  // The other direction: a slider that moves and changes nothing. A leaf name
+  // has to appear somewhere in src/ other than the two files that DEFINE the
+  // data, or it is decoration.
+  const srcDir = new URL('../src/', import.meta.url);
+  const sources = readdirSync(srcDir)
+    .filter(f => f.endsWith('.js') && f !== 'presets.js' && f !== 'profiles.js')
+    .map(f => readFileSync(new URL(f, srcDir), 'utf8'))
+    .join('\n');
+  const unread = PRESET_SCHEMA
+    .map(r => r.path.split('.').pop())
+    .filter(leaf => !/^\d+$/.test(leaf))
+    .filter(leaf => !new RegExp('\\b' + leaf + '\\b').test(sources));
+  ok(unread.length === 0, 'no schema parameter is read by nothing',
+     [...new Set(unread)].join(', ') || 'all read');
+
+  // --- round trip ---------------------------------------------------------
+  const rt = presetFromJSON(presetToJSON(presets.v8cross));
+  ok(!rt.error && JSON.stringify(rt.preset) === JSON.stringify(presets.v8cross),
+     'a preset survives a JSON round trip', rt.error || 'identical');
+
+  // Hostile input must come back usable, not throw and not poison the graph.
+  const junk = normalisePreset({ id: 'v8cross', engine: { pulse: { attack: 'x' },
+    exhaust: { muffler: 'nope', bank: -50 }, firingOrder: [1, 1, 1, 1] },
+    eq: 'no', mix: { exhaust: NaN }, volume: 99 });
+  ok(isFinite(junk.engine.pulse.attack) && Array.isArray(junk.engine.exhaust.muffler)
+     && junk.engine.exhaust.muffler.length === 3 && junk.eq.length === 5
+     && isFinite(junk.mix.exhaust) && junk.volume <= 1
+     && new Set(junk.engine.firingOrder).size === junk.engine.cylinders,
+     'a corrupt preset is repaired rather than trusted',
+     `attack ${junk.engine.pulse.attack}, bank ${junk.engine.exhaust.bank}, vol ${junk.volume}`);
+
+  // --- the sim actually applies them --------------------------------------
+  const mk = createMockContext();
+  installGlobals(mk.ctx);
+  const sim = new EngineSim(mk.ctx, { engine: 'v8cross', vehicle: 'sports' });
+  await sim.start();
+
+  // Every schema row must round-trip through the live sim. A row that does not
+  // is a control that moves and changes nothing.
+  const dead = [];
+  for (const row of PRESET_SCHEMA) {
+    if (row.needs === 'turbo') continue;                 // v8cross has none
+    const cur = sim.getParam(row.path);
+    // Somewhere else in range, quantised to the row's own step.
+    let want = cur > (row.min + row.max) / 2 ? row.min + row.step : row.max - row.step;
+    const got = sim.setParam(row.path, want);
+    if (got === null || Math.abs(sim.getParam(row.path) - got) > 1e-6) dead.push(row.path);
+    sim.setParam(row.path, cur);
+  }
+  ok(dead.length === 0, 'every schema parameter round-trips through the sim',
+     dead.join(', ') || `${PRESET_SCHEMA.length} parameters`);
+
+  // A turbo row is refused on a naturally aspirated engine rather than
+  // silently creating a turbo section.
+  ok(sim.setParam('engine.turbo.bov', 0.5) === null && sim.getPreset().engine.turbo === null,
+     'turbo parameters do not apply to a naturally aspirated engine');
+  ok(sim.setParam('engine.nonsense', 1) === null, 'an unknown path is refused');
+
+  // Loading a preset brings the whole sound, not just the engine.
+  sim.setMix({ intake: 0.1 });
+  sim.setEQBand(0, 12);
+  ok(sim.loadPreset('i6diesel'), 'loadPreset accepts a built-in id');
+  const after = sim.getPreset();
+  ok(after.id === 'i6diesel' && after.engine.turbo !== null
+     && Math.abs(after.mix.intake - DEFAULT_MIX.intake) < 1e-6 && after.eq[0] === 0,
+     'a preset carries mix and EQ, not only the engine',
+     `intake ${after.mix.intake}, eq0 ${after.eq[0]}`);
+
+  // A hand-edited file loads and is audible.
+  const edited = builtinPreset('v8cross');
+  edited.id = 'my-sound'; edited.label = 'Hand edited';
+  edited.engine.exhaust.bank = 2.2;
+  edited.mix.exhaust = 1.4;
+  ok(sim.loadPreset(JSON.stringify(edited)), 'loadPreset accepts a JSON string');
+  const back = sim.getPreset();
+  ok(back.id === 'my-sound' && Math.abs(back.engine.exhaust.bank - 2.2) < 1e-6
+     && Math.abs(back.mix.exhaust - 1.4) < 1e-6,
+     'a custom preset keeps its own identity and values',
+     `${back.id}: bank ${back.engine.exhaust.bank}, exhaust ${back.mix.exhaust}`);
 });
 
 // ---------------------------------------------------------------------------

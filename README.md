@@ -156,7 +156,7 @@ is the driveline clunk, `pop` an exhaust bang, `engage` the clutch biting.
 | | |
 | --- | --- |
 | `setVolume(0..1)` | |
-| `setMix({exhaust, intake, mechanical, transmission, turbo, transients, sub})` | Per-voice balance, 0..2. |
+| `setMix({exhaust, intake, transmission, turbo, transients, sub})` | Per-voice balance, 0..2. |
 | `setTone({rumble, brightness})` | 0..2 each, 1 = default. |
 | `setDynamics(0..1)` | Three-band compressor amount. 0 ≈ bypass. |
 | `setEQ([5 gains])` · `setEQBand(i, dB)` · `resetEQ()` | ±18 dB at 60 / 200 / 800 / 2.5k / 8k. |
@@ -164,6 +164,33 @@ is the driveline clunk, `pop` an exhaust bang, `engage` the clutch biting.
 | `setWidth(0..1)` | Mono-sum safe. |
 | `setPopDepth(0..2)` | How much transient energy goes back through the exhaust. |
 | `setPerspective('exterior'\|'interior')` · `setPosition(0..1)` | Listener position; `setPosition` is continuous. |
+
+### Presets
+
+A preset is one whole sound in one JSON-safe object — the machine (geometry,
+pipe lengths, pulse shape, turbo) *and* the mix, tone, EQ and effects on top of
+it. Save it, mail it, load it somewhere else and you get the same sound.
+
+```js
+sim.loadPreset('v8cross');          // a built-in, by id
+sim.loadPreset(jsonStringOrObject); // one you saved earlier
+const json = sim.exportPreset();    // pretty JSON, ready to write to a file
+sim.setParam('engine.exhaust.bank', 1.4);   // one parameter, by path
+```
+
+| | |
+| --- | --- |
+| `loadPreset(id \| object \| json)` | Applies the whole sound. Returns `false` if it could not be read. |
+| `getPreset()` · `exportPreset()` | The current sound as an object / as pretty JSON. |
+| `setParam(path, v)` · `getParam(path)` | One parameter by dotted path. Returns the clamped value, or `null` if the path does not apply. |
+| `EngineSim.schema()` · `EngineSim.groups()` | Every adjustable parameter, with range, step, unit and group — enough to build a UI from. |
+| `EngineSim.presets()` | All sixteen built-ins as complete presets. |
+| `new EngineSim(ctx, { preset })` | Start from a preset instead of configuring afterwards. |
+
+`normalisePreset()` clamps and repairs anything hand-edited, so a corrupt file
+loads as a usable sound rather than taking the graph down. The console builds
+all of its controls by walking `EngineSim.schema()`, which is also what the test
+suite uses to prove no parameter exists that nothing reads.
 
 ### Routing into your own graph
 
@@ -186,12 +213,12 @@ sim.output;                  // the master GainNode
 | --- | --- |
 | `vtwin` | 90° V-twin, fires at 0/270°. The lumpiest thing here — 51 % half-order energy. |
 | `i3` | 1.0 turbo triple. Small recirculating valve, so it flutters hard. |
-| `rotary2` | Two-rotor Wankel. Overlapping pulses, no valvetrain, 9000 rpm. |
+| `rotary2` | Two-rotor Wankel. Overlapping pulses, 9000 rpm. |
 | `i4` | 2.0 naturally aspirated four. |
 | `boxer4` | Flat-four with unequal headers — the rumble is the header mismatch, not the firing order. Big atmospheric valve: the "chiu" engine. |
 | `i5` | 2.5 five-cylinder turbo, 2.5-order warble. |
 | `i6` | 3.0 straight six, inherently balanced. |
-| `i6diesel` | 6.7 turbo-diesel. Near-step pressure rise, loud injectors, 4600 rpm redline. |
+| `i6diesel` | 6.7 turbo-diesel. Near-step pressure rise, 4600 rpm redline. |
 | `v6` | 60° V6. |
 | `v6tt` | 3.8 twin-turbo V6, fast-spooling. |
 | `flat6` | 3.8 flat-six, 8500 rpm, induction howl. |
@@ -224,7 +251,7 @@ tools/serve.mjs     zero-dependency dev server
 src/profiles.js     engine + vehicle data — firing order, bank layout, pipe geometry
 src/pulse.js        firing geometry → band-limited PeriodicWave tables
 src/resonators.js   exhaust waveguides, muffler, Helmholtz intake, shock rasp, cabin
-src/layers.js       valvetrain, gear whine, turbo, transient bank
+src/layers.js       gear whine, turbo, transient bank
 src/character.js    exhaust flow noise, sub layer, imperfection modulator
 src/fx.js           EQ, reverb, stereo widener, three-band compressor
 src/physics.js      drivetrain with torsional compliance and backlash

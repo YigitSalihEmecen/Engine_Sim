@@ -7,7 +7,6 @@
  *        └→ ExhaustSystem  (per-bank waveguide → collector → muffler → rasp)
  *   intake wavetable oscillator
  *        └→ IntakeResonator (Helmholtz + induction turbulence)
- *   MechanicalLayer   (valvetrain at 0.5 order, injectors, chain, block modes)
  *   TransmissionLayer (mesh whine from the ENGAGED gear's tooth count)
  *   TurboLayer        (lagged spool whine, BOV, flutter)
  *   TransientBank     (bangs, driveline clunk, clutch thump, synchro)
@@ -19,25 +18,28 @@
  */
 
 import { ENGINE_PROFILES, VEHICLE_PRESETS, bankAngles } from './profiles.js';
+import {
+  PRESET_SCHEMA, PRESET_GROUPS, PRESET_VERSION, DEFAULT_SOUND,
+  builtinPreset, builtinPresets, normalisePreset, presetToJSON, presetFromJSON,
+  getPath, setPath, schemaFor,
+} from './presets.js';
 import { buildEngineWaves } from './pulse.js';
 import { ExhaustSystem, IntakeResonator, CabinFilter } from './resonators.js';
-import { MechanicalLayer, TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
+import { TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
 import { ExhaustNoise, SubLayer, CharacterModulator } from './character.js';
 import { Drivetrain } from './physics.js';
 import { EQ, Reverb, Stereoizer, Dynamics } from './fx.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
-/** Default balance between the voices. All user-adjustable at runtime. */
-export const DEFAULT_MIX = {
-  exhaust: 1.0,
-  intake: 0.75,
-  mechanical: 0.55,
-  transmission: 0.45,
-  turbo: 0.7,
-  transients: 0.42,
-  sub: 0.9,        // low-frequency weight the pipe model cannot radiate
-};
+/**
+ * Default balance between the voices. All user-adjustable at runtime.
+ *
+ * This is a re-export of the preset format's `mix` section — presets.js owns
+ * the defaults now, so an engine can carry its own balance rather than
+ * inheriting whatever the host left the faders on.
+ */
+export const DEFAULT_MIX = { ...DEFAULT_SOUND.mix };
 
 export class EngineSim {
   /**
@@ -50,13 +52,29 @@ export class EngineSim {
 
     this.engineId = opts.engine in ENGINE_PROFILES ? opts.engine : 'v8cross';
     this.vehicleId = opts.vehicle in VEHICLE_PRESETS ? opts.vehicle : 'sports';
-    this.profile = ENGINE_PROFILES[this.engineId];
+    // A private, normalised, MUTABLE copy — never the shared literal. The
+    // console edits engine parameters in place, and mutating ENGINE_PROFILES
+    // would poison every other EngineSim in the page and every preset built
+    // afterwards.
+    this.profile = builtinPreset(this.engineId).engine;
     this.vehicle = VEHICLE_PRESETS[this.vehicleId];
 
     this.mix = { ...DEFAULT_MIX, ...(opts.mix || {}) };
-    this._volume = opts.volume ?? 0.7;
+    this._volume = opts.volume ?? DEFAULT_SOUND.volume;
     this.running = false;
     this._destOpt = opts.destination || null;
+
+    // Preset identity. `presetId` is a built-in engine key for a stock sound
+    // and whatever the file said for a loaded one, so a custom preset does not
+    // masquerade as the engine it was derived from.
+    this.presetId = this.engineId;
+    this.presetLabel = this.profile.label;
+    this._rumble = DEFAULT_SOUND.tone.rumble;
+    this._brightness = DEFAULT_SOUND.tone.brightness;
+    this._popDepth = DEFAULT_SOUND.fx.popDepth;
+    this._dynamics = DEFAULT_SOUND.fx.dynamics;
+    this._width = DEFAULT_SOUND.fx.width;
+    this._position = DEFAULT_SOUND.position;
 
     // Drivetrain owns its ShiftController — the shift state machine has to run
     // inside the sub-stepped integration, not alongside it.
@@ -73,6 +91,11 @@ export class EngineSim {
     this._buildVoices();
     this.setPerspective(opts.perspective || 'exterior');
     this.setVolume(this._volume);
+    // A whole sound up front, so a host never has to construct and then
+    // reconfigure. `opts.mix`/`opts.volume` still work and are applied first,
+    // so an explicit override loses to an explicit preset — which is the right
+    // way round: the preset is the more specific statement of intent.
+    if (opts.preset) this.loadPreset(opts.preset);
   }
 
   // =========================================================================
@@ -194,9 +217,6 @@ export class EngineSim {
 
     this.intake = new IntakeResonator(ctx, p);
     this.intake.output.connect(this.busses.intake);
-
-    this.mechanical = new MechanicalLayer(ctx, p);
-    this.mechanical.output.connect(this.busses.mechanical);
 
     this.transmission = new TransmissionLayer(ctx, p, this.vehicle);
     this.transmission.output.connect(this.busses.transmission);
@@ -351,7 +371,7 @@ export class EngineSim {
   }
 
   _modules() {
-    return [this.exhaust, this.intake, this.mechanical, this.transmission,
+    return [this.exhaust, this.intake, this.transmission,
             this.turbo, this.transients, this.exhaustNoise, this.sub,
             this.character, this.cabin].filter(Boolean);
   }
@@ -360,27 +380,197 @@ export class EngineSim {
   // Public API
   // =========================================================================
 
-  /** @param {string} id key of ENGINE_PROFILES */
+  /**
+   * Swap the engine, keeping the current mix/tone/EQ. Use `loadPreset()` to
+   * bring a whole sound across instead.
+   * @param {string} id key of ENGINE_PROFILES
+   */
   setEngineType(id) {
     if (!(id in ENGINE_PROFILES) || id === this.engineId) return false;
+    this.engineId = id;
+    this._applyEngine(builtinPreset(id).engine);
+    return true;
+  }
+
+  /**
+   * Rebuild every voice around a new engine description.
+   *
+   * This is the expensive path — wavetables, waveguide delay lines and the
+   * turbo graph are all derived from these numbers at construction, so there is
+   * no way to change a pipe length without allocating. Anything a game touches
+   * per frame goes through an AudioParam instead; this is for the tuning
+   * console and for loading a preset.
+   *
+   * @param {object} engine an `engine` section, already normalised
+   */
+  _applyEngine(engine) {
     const wasRunning = this.running;
     if (wasRunning) this._hardStopVoices();
 
-    this.engineId = id;
-    this.profile = ENGINE_PROFILES[id];
+    this.profile = engine;
     this.physics.setEngine(this.profile);
 
     for (const m of this._modules()) {
       if (m !== this.cabin && m.dispose) m.dispose();
     }
     this._buildVoices();
+    // The voice set is brand new, so a pending stop() no longer needs start()
+    // to rebuild it. Without this, loading a preset while stopped built every
+    // oscillator twice — once here and once on the next start().
+    this._needsRebuild = false;
     if (wasRunning) {
       const t = this.ctx.currentTime + 0.02;
       for (const pair of this.oscs) { pair.soft.osc.start(t); pair.hard.osc.start(t); }
       for (const m of this._modules()) if (m.start) m.start(t);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Presets — the save/load surface
+  // -------------------------------------------------------------------------
+
+  /**
+   * Everything about the current sound, as a plain JSON-safe object. This is
+   * the file format; see presets.js.
+   */
+  getPreset() {
+    const rv = this.reverb.getState();
+    return normalisePreset({
+      version: PRESET_VERSION,
+      id: this.presetId,
+      label: this.presetLabel,
+      engine: this.profile,
+      mix: { ...this.mix },
+      tone: { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1 },
+      eq: this.eq.getGains(),
+      fx: {
+        reverbMix: rv.mix,
+        reverbSize: rv.size,
+        reverbDamping: rv.damping,
+        width: this.stereo.getWidth ? this.stereo.getWidth() : this._width,
+        popDepth: this._popDepth,
+        dynamics: this._dynamics,
+      },
+      position: this._position,
+      volume: this._volume,
+    });
+  }
+
+  /**
+   * Apply a whole preset: engine, mix, tone, EQ, effects, listener position and
+   * volume. Accepts a built-in id, a preset object, or a JSON string.
+   *
+   * The engine section is only rebuilt when it actually differs, because a
+   * rebuild stops and re-creates every oscillator — dragging a mix fader on a
+   * UI that round-trips through here must not tear the sound down 60 times a
+   * second.
+   *
+   * @returns {boolean} false if the argument could not be read as a preset
+   */
+  loadPreset(source) {
+    let preset = source;
+    if (typeof source === 'string') {
+      preset = ENGINE_PROFILES[source] ? builtinPreset(source)
+                                       : presetFromJSON(source).preset;
+    }
+    if (!preset || typeof preset !== 'object') return false;
+    preset = normalisePreset(preset);
+
+    this.presetId = preset.id;
+    this.presetLabel = preset.label;
+    if (ENGINE_PROFILES[preset.id]) this.engineId = preset.id;
+    if (JSON.stringify(preset.engine) !== JSON.stringify(this.profile)) {
+      this._applyEngine(preset.engine);
+    }
+
+    this.setMix(preset.mix);
+    this.setTone(preset.tone);
+    this.setEQ(preset.eq);
+    this.setReverb({
+      mix: preset.fx.reverbMix,
+      size: preset.fx.reverbSize,
+      damping: preset.fx.reverbDamping,
+    });
+    this.setWidth(preset.fx.width);
+    this.setPopDepth(preset.fx.popDepth);
+    this.setDynamics(preset.fx.dynamics);
+    this.setPosition(preset.position);
+    this.setVolume(preset.volume);
     return true;
   }
+
+  /** The current preset as pretty JSON — what a "save" button writes out. */
+  exportPreset() { return presetToJSON(this.getPreset()); }
+
+  /**
+   * Set one schema parameter by its dotted path, e.g.
+   * `setParam('engine.exhaust.bank', 1.4)`.
+   *
+   * This is how a tuning UI drives the sim: one entry point, so a control can
+   * be generated from `PRESET_SCHEMA` without the page knowing which setter a
+   * given parameter happens to live behind. Rows marked `rebuild` go through
+   * the voice rebuild; everything else takes the cheap path.
+   *
+   * @returns {number|null} the clamped value actually applied, or null if the
+   *          path is not in the schema
+   */
+  setParam(path, value) {
+    const row = schemaFor(path);
+    if (!row) return null;
+    if (row.needs === 'turbo' && !this.profile.turbo) return null;
+    const v = clamp(Number(value), row.min, row.max);
+    if (!isFinite(v)) return null;
+
+    // Rebuild rows go the long way round: wavetables and waveguide delay lines
+    // are derived at construction and there is no way to change a pipe length
+    // without allocating. A UI dragging one of these must debounce.
+    if (row.rebuild) {
+      const preset = this.getPreset();
+      setPath(preset, path, v);
+      this._applyEngine(normalisePreset(preset).engine);
+      return v;
+    }
+
+    // Everything else is a live parameter, and this is the path a control drag
+    // takes at 60 Hz. Going through loadPreset() here would serialise and
+    // re-apply the entire sound on every input event.
+    const seg = path.split('.');
+    if (seg[0] === 'mix') this.setMix({ [seg[1]]: v });
+    else if (seg[0] === 'tone') this.setTone({ [seg[1]]: v });
+    else if (seg[0] === 'eq') this.setEQBand(Number(seg[1]), v);
+    else if (path === 'position') this.setPosition(v);
+    else if (path === 'volume') this.setVolume(v);
+    else if (seg[0] === 'fx') {
+      if (seg[1] === 'reverbMix') this.setReverb({ mix: v });
+      else if (seg[1] === 'reverbSize') this.setReverb({ size: v });
+      else if (seg[1] === 'reverbDamping') this.setReverb({ damping: v });
+      else if (seg[1] === 'width') this.setWidth(v);
+      else if (seg[1] === 'popDepth') this.setPopDepth(v);
+      else if (seg[1] === 'dynamics') this.setDynamics(v);
+    } else if (seg[0] === 'engine') {
+      // Live engine constants: torque, inertia, rev range, per-engine trim and
+      // the whole turbo section. Mutating the private profile and re-pushing it
+      // is enough — every consumer re-derives from it.
+      setPath(this.profile, seg.slice(1).join('.'), v);
+      this.physics.setEngine(this.profile);
+      for (const m of this._modules()) if (m.setProfile) m.setProfile(this.profile);
+    } else {
+      return null;
+    }
+    return v;
+  }
+
+  /** Current value of a schema parameter, or null if it does not apply. */
+  getParam(path) {
+    const v = getPath(this.getPreset(), path);
+    return typeof v === 'number' ? v : null;
+  }
+
+  /** The tuning schema, for a UI that builds itself. */
+  static schema() { return PRESET_SCHEMA; }
+  static groups() { return PRESET_GROUPS; }
+  /** Every built-in engine as a complete preset. */
+  static presets() { return builtinPresets(); }
 
   _hardStopVoices() {
     const at = this.ctx.currentTime + 0.05;
@@ -456,14 +646,14 @@ export class EngineSim {
   }
 
   /** Stereo width, 0 = mono, 1 = very wide. Mono-sum safe. */
-  setWidth(w) { return this.stereo.setWidth(w); }
+  setWidth(w) { return (this._width = this.stereo.setWidth(w)); }
 
   /**
    * How hard the three-band compressor works. 0 = effectively bypassed,
    * 1 = the tuned default. Lower it if the mix should breathe more; raise
    * nothing above 1, the bands are already at their intended thresholds.
    */
-  setDynamics(amount) { return this.dynamics.setAmount(amount); }
+  setDynamics(amount) { return (this._dynamics = this.dynamics.setAmount(amount)); }
 
   /** Per-band gain reduction in dB — diagnostics for the console UI. */
   getReduction() { return this.dynamics.getReduction(); }
@@ -471,12 +661,17 @@ export class EngineSim {
   /** How much of the transient energy is routed through the exhaust pipe. */
   setPopDepth(v) {
     const g = clamp(Number(v) || 0, 0, 2);
+    this._popDepth = g;
     this.popSend.gain.setTargetAtTime(g, this.ctx.currentTime, 0.03);
     return g;
   }
 
   /** 'exterior' | 'interior'. For a continuous blend use setPosition(). */
-  setPerspective(mode) { this.cabin.setPerspective(mode); this._perspective = mode; }
+  setPerspective(mode) {
+    this.cabin.setPerspective(mode);
+    this._perspective = mode;
+    this._position = mode === 'interior' ? 1 : 0;
+  }
 
   /**
    * Continuous listener position: 0 = outside the car, 1 = in the cabin.
@@ -485,6 +680,7 @@ export class EngineSim {
    */
   setPosition(x) {
     const v = clamp(Number(x) || 0, 0, 1);
+    this._position = v;
     this.cabin.setPosition(v);
     this._perspective = v >= 0.5 ? 'interior' : 'exterior';
     return v;
@@ -523,7 +719,13 @@ export class EngineSim {
       rpmNorm: p ? p.rpmNorm : 0,
       dRpm: p ? p.dRpm : 0,
       engine: this.engineId,
-      engineLabel: this.profile.label,
+      engineLabel: this.presetLabel || this.profile.label,
+      // Whether the LOADED sound has a turbo, which is not the same question as
+      // whether the stock profile for `engine` does: a preset can be edited or
+      // hand-written. A dashboard drawing a boost gauge has to ask this, not
+      // ENGINE_PROFILES.
+      turbo: !!this.profile.turbo,
+      preset: this.presetId,
       vehicle: this.vehicleId,
       vehicleLabel: this.vehicle.label,
       gearbox: this.vehicle.gearbox,
@@ -622,16 +824,22 @@ export class EngineSim {
     // combustion energy scales sub-linearly with load (the PTR model uses
     // torque^0.7) and radiation efficiency rises with firing rate. On overrun
     // there is no combustion at all, so the pulse train nearly vanishes and the
-    // airflow/mechanical layers carry the sound.
+    // airflow layers carry the sound.
     const x = clamp(p.load, 0, 1);
     // The load floor and the overrun cut compound, and at 0.22/0.72 they took
     // the exhaust down 94% on a trailing throttle — the engine all but vanished
     // when coasting, which is precisely when you most want to hear it. Fuel cut
     // stops COMBUSTION, but every cylinder is still pumping air past an open
     // exhaust valve, so the pulses go soft and dull rather than away.
+    //
+    // `profile.voice` is the per-engine trim on all of that: how loudly this
+    // particular engine speaks relative to the rest of the mix, before any
+    // user-facing level control. It sat in all sixteen profiles being read by
+    // NOTHING until the preset schema went looking for orphans.
     const ampl = (0.32 + 0.68 * Math.pow(x, 0.7))
                * (0.45 + 0.55 * clamp(p.rpmNorm, 0, 1))
-               * (1 - 0.45 * clamp(p.overrun, 0, 1));
+               * (1 - 0.45 * clamp(p.overrun, 0, 1))
+               * clamp(Number(this.profile.voice) || 1, 0.2, 2);
     const gSoft = Math.cos(x * Math.PI / 2) * ampl;
     const gHard = Math.sin(x * Math.PI / 2) * ampl;
 
@@ -647,4 +855,9 @@ export class EngineSim {
 }
 
 export { ENGINE_PROFILES, VEHICLE_PRESETS };
+export {
+  PRESET_SCHEMA, PRESET_GROUPS, PRESET_VERSION, DEFAULT_SOUND,
+  builtinPreset, builtinPresets, normalisePreset, presetToJSON, presetFromJSON,
+  getPath, setPath, schemaFor,
+};
 export default EngineSim;
