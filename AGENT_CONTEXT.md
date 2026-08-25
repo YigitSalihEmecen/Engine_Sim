@@ -367,15 +367,16 @@ A measured upshift:
 
 ### Launch behaviour — read this before touching `_launchClutch`
 
-Got wrong **four** times, and each attempt failed in a way the previous test
-could not see. The complaint was always the same sentence: *"it jumps to N rpm
-and gets stuck there."*
+Got wrong **five** times, and each attempt failed in a way the previous test
+could not see. The complaint has always been the same sentence: *"it jumps to N
+rpm and gets stuck there."*
 
 | attempt | what it did | why it failed |
 | --- | --- | --- |
 | fixed hold at `idle·1.05 + 850` | regulated rpm onto a setpoint | held 1585 rpm for 0.27 s |
 | same, flare 2400 + a "creep" term | setpoint that rose with road speed | moved the plateau to 3200 rpm |
 | slip decaying on a clock + ratchet | no setpoint, but a timed decay | demand *fell* on slow cars; revs went negative for 0.8 s |
+| absolute ramp `min(rampCap, slip)` | capped the demand's rate | correct **only** from a cold, stationary, 1st-gear start — the one case it was measured in. See below. |
 | **current** | see below | — |
 
 **The fault was never a plateau — it was a DISCONTINUITY IN THE RATE.** With the
@@ -385,50 +386,118 @@ then appear to hit a wall, *while still technically rising* — so every
 flat-spot test sailed straight past it. That is why the old tests passed while
 the bug was live.
 
-Three pieces, and all three are load-bearing:
+#### Why the fourth attempt was not enough
 
-**1. The wind-up rate is derived from the car.** The driver winds the engine up
-at the rate this combination will actually sustain in 1st, so there is no step
-between "engine spinning up" and "engine dragging a car":
+`rampCap = idle·1.05 + launchRate·launchT`, taken as `min(rampCap, geared+slip)`,
+is **two independent curves that cross**, and it only behaves where the crossing
+happens to be smooth. Three entry conditions break it, and all three sound
+exactly like the bug it was written to fix:
+
+| entry | measured on the old controller |
+| --- | --- |
+| **rolling re-launch** — brake to walking pace without stopping, then floor it | 832 → 2307 rpm in 0.15 s (**11 547 rpm/s**, 94 % of a free rev), then a crawl at ~1 900. `launchT` had already run on, so the cap started *above* the engine and the revs were thrown at it. A full stop resets `launchT`, which is why no from-a-standstill trace could see it. |
+| **pulling away in 2nd** | climbed to 2826 then sat at ~2 960 for a second. `launchRate` was derived from 1st and the sustainable rate goes with the ratio **squared**, so the ramp asked for 3× what the car could do and the wall moved one gear up. |
+| **held on the brake** | rose to 2690 then fell. |
+
+Over 64 manual engine×vehicle combinations × 4 entries, the old controller had
+**42 launches where the revs went backwards** and a median rate-collapse of 0.19
+in 2nd. The current one has **zero** and 0.92.
+
+#### What it does now
+
+**1. The wind-up rate is derived from the car AND from the gear.**
+`launchRateFor(gear)` — the rate this combination sustains once the clutch is
+home, which is what removes the step between "engine spinning up" and "engine
+dragging a car":
 
 ```
-F = T·ratio₁·η/r     a = F/m     launchRate = (a/r)·ratio₁·(60/2π) · 0.55
+F = T·ratio·η/r     a = F/m     rate = (a/r)·ratio·(60/2π) · 0.55
 ```
 
-That is 3696 rpm/s for the hatch, 2897 for the sports car, 1377 for the muscle
-car — a 2.7× spread. Any fixed constant is right for one chassis and wrong for
-the rest.
+3696 rpm/s for the hatch in 1st, 2897 for the sports car, 1377 for the muscle
+car — and **966 for that same sports car in 2nd**, because it is quadratic in
+the ratio. `launchRate` (1st gear) is still exposed as a field; the controller
+calls `launchRateFor` every step.
 
 **2. Slip decays with the car's PROGRESS, not with a clock.**
 
 ```
-targetRpm = max(idle·1.05, min(rampCap, geared + slip0·(1 − geared/(flare·S))))
+slipDemand = geared + slip0·(1 − geared/(flare·S)),   slip0 = flare − idle
 ```
 
-`d(want)/d(geared) = 1 − slip0/(flare·S) > 0`, so **the demand rises whenever
-the car is speeding up at all, however slowly**. Monotonic by construction — no
-ratchet, no bleed, no special cases. A time-based decay assumes the car is
-getting on with it; when it is not, the demand falls and the controller drags
-the engine down with it.
+`d/d(geared) > 0`, so **the demand rises whenever the car is speeding up at all,
+however slowly**. Monotonic by construction. A time-based decay assumes the car
+is getting on with it; when it is not, the demand falls and the controller drags
+the engine down with it. `S = 1.8`.
 
-`S = 1.8`. Smaller converges sooner but makes the demand's slope shallow enough
-to sag at the bite; larger is flatter but slips longer.
+*(Deriving `slip0` from the wind-up rate as well was tried — the argument being
+that a launch closes its own slip at ~0.8× that rate, so a bigger flare never
+converges. It measures worse: on weak combinations the flare collapses to its
+floor, the demand sits on idle, and 16 of 64 second-gear launches went
+backwards. A launch that holds its revs while the car crawls is a slow car; a
+launch whose revs sag is a broken one.)*
 
-**3. A forced close that yields.** Holding the engine above the gearing keeps
-the clutch part-open, and a part-open clutch transmits part of the torque — a
-badly matched combination could slip indefinitely at 650 rpm/s. So the command
-is floored by a 1.2 s ramp from `launchT = 0.9`… **but only while `e ≥ −0.03`**.
-If the engine has fallen below what is being asked, closing further just drags
-it down harder (measured: −927 rpm/s on the muscle car).
+**3. ONE curve, slew-limited, seeded on the engine.** `launchRef` is the demand
+itself, carried frame to frame. It is seeded at the engine's **current speed**,
+rises no faster than `launchRateFor(gear)`, and eases onto `slipDemand`
+exponentially over `LAUNCH_BLEND = 0.45 s` rather than cornering onto it. No
+cap, no clock, no crossing — so there is no entry condition that can start the
+demand above the engine, and no hand-over to hear.
+
+It also **absorbs the flare**: the clutch has a 26 ms lag and starts open, so the
+crank always wins the first frame or two. If the demand then insists on the rpm
+it wanted, the only way to get it is to shut the clutch and haul the engine back
+down — measured on the i6 diesel in 2nd, clutch to 1.000 and revs *down* at
+240 rpm/s for a quarter of a second. So the flare becomes the demand's new
+floor. Bounded above by `slipDemand`, so it cannot ratchet.
+
+**4. The clutch command is a FEED-FORWARD, not an error signal.**
+
+```
+alpha = (Te − Tc)/Je   ⇒   Tc = Te − Je·alpha_ref   ⇒   cmd = Tc/(capacity·stallGuard)
+```
+
+An error controller cannot start the clutch moving until the engine has already
+left the demand, so the crank free-revs and then has to be caught. With the
+feed-forward the clutch is at roughly the right engagement on the **first**
+sub-step; the PI only trims what `Te` mispredicts, and its integral **leaks**
+over 0.6 s. Without the leak, coasting down winds it negative, the flare absorb
+then pins the error at zero so nothing pulls it back, and it under-commands the
+clutch forever — an i4 outran its own 612 rpm/s ramp at 3561 rpm/s. That is
+ledger #40 at the other end of the range.
+
+The same feed-forward is the **cap on the forced close** (`launchT > 0.9`, 1.2 s
+ramp). Yielding on a threshold failed both ways: yielding on `e < −0.03` (engine
+below the ramp) deadlocked any car that could not hold its own ramp — the v-twin
+held 2-4 % of clutch for two seconds with the car at walking pace — and yielding
+only below the gearing let the close haul the revs down at 927 rpm/s. Capping at
+plain `Te` (α = 0) is worse still: it is a stable equilibrium at **zero**
+acceleration, and pinned the engine at 1392 rpm in 3rd while the car went from
+17 to 33 km/h underneath it.
 
 Also: sitting still with the throttle shut is **not** a launch. The controller
 resets while stationary and off-throttle, so flooring it starts from a genuinely
 open clutch — otherwise the integrator winds up during the idle beforehand and
 the clutch is already half engaged when the throttle arrives.
 
-Measured over all **80** engine × vehicle combinations: **zero** have the revs
-go backwards during a launch. `drive.mjs` asserts the rate profile holds
-together (`min/median > 0.35`) rather than looking for flat spots.
+#### What `drive.mjs` asserts, and why each one exists
+
+Per chassis, from a cold standstill: revs never go backwards, `min/median > 0.35`
+of the rate profile, and the launch completes. Then, across 16 engine×vehicle
+combinations for **each of three other entry conditions** (`second`, `rolling`,
+`braked`):
+
+- **the revs never go backwards** — old code: −220 (2nd), −881 (braked).
+- **the revs are never thrown at the demand** — peak rate as a fraction of
+  `peakTorque/inertia`, the engine's own unloaded rate. A flare the clutch is
+  shaping is ~0.3; a jump is the unloaded rate because the clutch is simply
+  open. Old code on a rolling re-launch: **0.94**. Now: 0.32. This is scale-free
+  and stays meaningful when the launch legitimately converges to a constant,
+  which a ratio against the launch's own median does not.
+- **the revs never stick on one number** — longest window inside a 100 rpm band,
+  and only on launches that *complete*. A v-twin asked to drag 1720 kg away in
+  2nd cannot accelerate the car, so its revs levelling off under a slipping
+  clutch is the honest answer, not a wall.
 
 ### Exhaust thermal model (drives popping)
 
@@ -715,6 +784,7 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 40 | Launch integrator could never unwind | one-sided anti-bog wound to its -0.5 floor during the initial flare and stayed pinned, capping the clutch at 0.50 forever | let it recover when there is no sag |
 | 41 | **A hard click on tip-in, lift and every shift** | `clunk` was 1150/3100 Hz, Q 22/16, **0.8 ms** attack — a switch closing, not two castings colliding. Stranded alone in the mix after #31 | 330/1250 Hz, Q 7/6, 3.5 ms; `click` 3200/6400 → 1500/2800 and lvl 0.35 → 0.16, one per shift not two |
 | 42 | Pops went faint fixing #38 | dropping both presets an octave took the crackle's energy above 700 Hz from 71 % → **3 %**; `popDirect` 0.22 left only 8 % of the report in the dry path | midpoint by measurement: 112/680 and 700/1850, `popDirect` 0.75 → 38 % above 700 Hz, 2.3 % in 2-6 kHz |
+| 43 | **"Full throttle from stationary jumps to 3000 and sticks for a second"** — #39 again, from every entry it was not measured on | rolling re-launch on the old controller: 832 → 2307 rpm in 0.15 s = **11 547 rpm/s**, 94 % of an unloaded rev, then a crawl at 1900. Pulling away in 2nd: 2826 → pinned at ~2960 for a second. Over 64 manual combos × 4 entries: **42 launches with the revs going backwards**, median rate-collapse 0.19 in 2nd | the absolute ramp + slip curve (two curves that cross) replaced by ONE slew-limited demand seeded on the engine, `launchRateFor(gear)` instead of always 1st, a torque feed-forward clutch command with a leaking integral, and the flare absorbed rather than caught. **0** reversals, median collapse 0.85 / 0.92 / 1.00 across cold / 2nd / rolling |
 
 ### #31 in detail — it will come back if the constant moves
 
@@ -810,10 +880,17 @@ Be honest about this with the user; it has been stated throughout.
     must never cross buses — it is hard-wired to one output, so it would come
     out of the wrong place. Add a preset without a `bus` field and it silently
     becomes mechanical.
-20. **The launch has eaten four attempts. Read §4 before touching it.** Three
-    of the four failed the same way and the tests could not see it, because the
+20. **The launch has eaten five attempts. Read §4 before touching it.** Four
+    of the five failed the same way and the tests could not see it, because the
     audible fault is a discontinuity in the RATE, not a plateau in the value.
     If you change anything there, measure the rate profile.
+20a. **A launch has more than one entry condition, and a fix measured on one of
+    them is not a fix.** Attempt four was correct from a cold, stationary,
+    1st-gear, closed-throttle start and broken from every other entry — rolling
+    re-launch, 2nd gear, brake held — because its rate cap was an absolute ramp
+    on a clock that any of those had already started. `drive.mjs` now runs all
+    four entries; if you add a behaviour to `_launchClutch`, add the entry that
+    would break it.
 21. **A sub-millisecond attack is a click, not an impact.** Anything above
     ~1 kHz with a fast attack and a high Q will read as a switch closing rather
     than as part of the car. `run.mjs` asserts every preset is ≥ 1.5 ms and
