@@ -3,1387 +3,510 @@
 
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ENGINE SIM — procedural powertrain synthesis</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07080d">
+  <title>Engine Sim — procedural engine sound</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
   <style>
+    /* =====================================================================
+       DESIGN LANGUAGE
+       Dark, glass and light. Panels are frosted glass floating over a living
+       background that is drawn from the engine's own output — the low band
+       swells the light, the revs shift its colour from cold blue to hot
+       orange, the top end sparkles. One accent gradient, generous radii,
+       soft depth, motion that eases rather than snaps.
+       ===================================================================== */
     :root {
-      --paper: #f2f2ef;
-      --panel: #fbfbfa;
-      --panel2: #f6f6f3;
-      --ink: #14161a;
-      --ink2: #51565d;
-      --ink3: #8b9097;
-      --ink4: #b3b7bc;
-      --line: #d8d9d4;
-      --line2: #c3c5bf;
-      --hair: rgba(20, 22, 26, .10);
-      --acc: #e8481f;
-      --acc2: #1663c7;
-      --ok: #2b8a4e;
-      --warn: #c98a00;
-      --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+      --bg: #07080d;
+      --glass: rgba(255, 255, 255, .055);
+      --glass2: rgba(255, 255, 255, .085);
+      --glass3: rgba(255, 255, 255, .13);
+      --edge: rgba(255, 255, 255, .12);
+      --edge2: rgba(255, 255, 255, .22);
+      --ink: #f4f6fb;
+      --ink2: rgba(236, 240, 250, .74);
+      --ink3: rgba(226, 232, 245, .50);
+      --ink4: rgba(220, 226, 240, .32);
+      --hot: #ff5a36;
+      --hot2: #ffb347;
+      --cool: #42c6ff;
+      --vio: #8b6bff;
+      --ok: #3ee08f;
+      --warn: #ffc24a;
+      /* live, written by the frame loop from the audio */
+      --heat: 0;
+      --pulse: 0;
+      --accent: linear-gradient(120deg, #42c6ff, #8b6bff 45%, #ff5a36);
+      --r: 22px;
+      --r2: 14px;
       --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      --t: .14s cubic-bezier(.3, .7, .4, 1);
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --ease: cubic-bezier(.2, .8, .2, 1);
+      --gut: clamp(12px, 2.2vw, 28px);
     }
 
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
     body {
-      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.5 var(--sans);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
+    button, input, select, textarea { font: inherit; color: inherit; }
 
-    /* boot guard — see the markup near the top of <body> */
-    #boot {
+    /* ---- living background ------------------------------------------- */
+    #bg {
       position: fixed;
       inset: 0;
-      z-index: 999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      background: var(--paper);
+      width: 100vw;
+      height: 100vh;
+      z-index: 0;
+      display: block;
+      filter: saturate(1.15);
+    }
+    .grain {
+      position: fixed;
+      inset: -50%;
+      z-index: 1;
+      pointer-events: none;
+      opacity: .07;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      animation: grain 1.2s steps(6) infinite;
+    }
+    @keyframes grain {
+      0% { transform: translate(0, 0); }
+      33% { transform: translate(-3%, 2%); }
+      66% { transform: translate(2%, -3%); }
+      100% { transform: translate(0, 0); }
+    }
+    .vignette {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+      background: radial-gradient(120% 90% at 50% 40%, transparent 55%, rgba(0, 0, 0, .55));
     }
 
-    #boot[hidden] {
-      display: none;
-    }
-
-    .boot-card {
-      max-width: 620px;
-      width: 100%;
-      background: var(--panel);
-      border: 1px solid var(--line2);
-      padding: 26px 28px;
-    }
-
-    .boot-card h1 {
-      margin: 0 0 14px;
-      font: 600 13px/1.3 var(--mono);
-      letter-spacing: .14em;
-      text-transform: uppercase;
-      color: var(--acc);
-    }
-
-    .boot-card p {
-      margin: 0 0 14px;
-      font: 13px/1.6 var(--sans);
-      color: var(--ink2);
-    }
-
-    .boot-card pre {
-      margin: 0 0 14px;
-      padding: 14px 16px;
-      overflow-x: auto;
-      background: var(--panel2);
-      border: 1px solid var(--line);
-      font: 12px/1.7 var(--mono);
-      color: var(--ink);
-      white-space: pre-wrap;
-    }
-
-    .boot-note {
-      font-size: 12px !important;
-      color: var(--ink3) !important;
-    }
-
-    body {
-      color: var(--ink);
-      min-height: 100vh;
-      padding: 0 0 70px;
-      font: 13px/1.5 var(--sans);
-      -webkit-font-smoothing: antialiased;
-      background-color: var(--paper);
-      /* engineering paper: 8 mm fine grid over an 80 mm major grid */
-      background-image:
-        linear-gradient(var(--hair) 1px, transparent 1px),
-        linear-gradient(90deg, var(--hair) 1px, transparent 1px),
-        linear-gradient(rgba(20, 22, 26, .045) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(20, 22, 26, .045) 1px, transparent 1px);
-      background-size: 80px 80px, 80px 80px, 10px 10px, 10px 10px;
-      background-position: -1px -1px, -1px -1px, -1px -1px, -1px -1px;
-      background-attachment: fixed;
-    }
-
-    .wrap {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 0 20px;
-    }
-
-    /* ============ type ============ */
-    .mono {
-      font-family: var(--mono);
-    }
-
-    .lbl {
-      font: 600 9.5px/1 var(--mono);
-      letter-spacing: .14em;
-      text-transform: uppercase;
-      color: var(--ink3);
-    }
-
-    .num {
-      font-family: var(--mono);
-      font-variant-numeric: tabular-nums;
-      letter-spacing: -.01em;
-    }
-
-    /* ============ header ============ */
-    header {
-      display: flex;
-      align-items: stretch;
-      gap: 0;
-      margin: 20px 0 16px;
-      border: 1px solid var(--line2);
-      background: var(--panel);
+    /* ---- glass ------------------------------------------------------- */
+    .glass {
       position: relative;
+      background: linear-gradient(160deg, var(--glass2), var(--glass) 60%);
+      border: 1px solid var(--edge);
+      border-radius: var(--r);
+      backdrop-filter: blur(22px) saturate(160%);
+      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, .10) inset,
+        0 20px 50px -20px rgba(0, 0, 0, .7);
     }
-
-    .mark {
-      width: 52px;
-      flex: none;
-      border-right: 1px solid var(--line2);
-      display: grid;
-      place-items: center;
-      background: var(--ink);
-      position: relative;
-      overflow: hidden;
-    }
-
-    .mark svg {
-      width: 26px;
-      height: 26px;
-    }
-
-    .mark::after {
+    /* specular rim: a thin light along the top edge, like real glass */
+    .glass::before {
       content: "";
       position: absolute;
-      left: 0;
-      right: 0;
-      height: 1px;
-      background: var(--acc);
-      top: 0;
-      animation: scan 3.4s cubic-bezier(.5, 0, .5, 1) infinite;
+      inset: 0;
+      border-radius: inherit;
+      padding: 1px;
+      pointer-events: none;
+      background: linear-gradient(170deg, rgba(255, 255, 255, .35), rgba(255, 255, 255, 0) 30%, rgba(255, 255, 255, 0) 70%, rgba(255, 255, 255, .08));
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
     }
 
-    @keyframes scan {
-      0% {
-        top: 0;
-        opacity: 0
-      }
-
-      12% {
-        opacity: 1
-      }
-
-      88% {
-        opacity: 1
-      }
-
-      100% {
-        top: 100%;
-        opacity: 0
-      }
-    }
-
-    .htitle {
-      padding: 11px 16px;
+    .app {
+      position: relative;
+      z-index: 2;
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: max(var(--gut), env(safe-area-inset-top)) max(var(--gut), env(safe-area-inset-right)) 40px max(var(--gut), env(safe-area-inset-left));
       display: flex;
       flex-direction: column;
-      justify-content: center;
-      border-right: 1px solid var(--line);
+      gap: var(--gut);
     }
 
-    .htitle h1 {
-      margin: 0;
-      font: 650 14px/1.15 var(--sans);
-      letter-spacing: .02em;
-    }
-
-    .htitle .sub {
-      font: 10px/1.4 var(--mono);
-      color: var(--ink3);
-      letter-spacing: .04em;
-      margin-top: 2px;
-    }
-
-    .hspec {
-      flex: 1;
+    /* ---- top bar ----------------------------------------------------- */
+    .top {
       display: flex;
       align-items: center;
-      gap: 0;
-      overflow: hidden;
+      gap: 14px;
+      padding: 10px 12px 10px 16px;
+      border-radius: 999px;
+      flex-wrap: wrap;
     }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .logo {
+      width: 38px; height: 38px; border-radius: 12px; flex: none;
+      display: grid; place-items: center;
+      background: var(--accent);
+      box-shadow: 0 0 calc(10px + 30px * var(--pulse)) rgba(255, 110, 70, calc(.25 + .5 * var(--pulse)));
+      transition: box-shadow .1s linear;
+    }
+    .logo svg { width: 22px; height: 22px; }
+    .brand h1 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.01em; }
+    .brand .sub { font-size: 11.5px; color: var(--ink3); margin-top: -2px; white-space: nowrap; }
 
-    .hspec .cell {
-      padding: 0 15px;
-      border-right: 1px solid var(--line);
-      align-self: stretch;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
+    .pickers { display: flex; gap: 10px; flex: 1; min-width: 260px; justify-content: center; flex-wrap: wrap; }
+    .pick {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 6px 6px 14px; border-radius: 999px;
+      background: rgba(255, 255, 255, .06); border: 1px solid var(--edge);
       min-width: 0;
     }
-
-    .hspec .cell .v {
-      font: 600 12px var(--mono);
-      margin-top: 3px;
-      white-space: nowrap;
+    .pick span { font-size: 11px; color: var(--ink3); text-transform: uppercase; letter-spacing: .08em; font-weight: 600; }
+    select {
+      appearance: none; -webkit-appearance: none;
+      background: rgba(0, 0, 0, .25) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23cfd6e6' fill='none' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 12px center;
+      border: 1px solid var(--edge); border-radius: 999px;
+      padding: 7px 32px 7px 13px; font-weight: 600; font-size: 13px; cursor: pointer;
+      max-width: 240px; min-width: 0;
     }
-
-    .hact {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 0 12px;
+    select:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
+      outline: 2px solid var(--cool); outline-offset: 2px;
     }
+    option, optgroup { background: #12141c; color: var(--ink); }
 
-    /* ============ buttons ============ */
+    .acts { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     .btn {
-      font: 600 10.5px/1 var(--mono);
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      padding: 10px 15px;
-      border: 1px solid var(--line2);
-      background: var(--panel2);
-      color: var(--ink2);
-      cursor: pointer;
-      transition: var(--t);
-      position: relative;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 9px 16px; border-radius: 999px; cursor: pointer;
+      background: rgba(255, 255, 255, .07); border: 1px solid var(--edge);
+      font-weight: 600; font-size: 13px; white-space: nowrap;
+      transition: background .2s var(--ease), border-color .2s var(--ease), transform .15s var(--ease);
+      touch-action: manipulation;
+    }
+    .btn:hover { background: rgba(255, 255, 255, .13); border-color: var(--edge2); }
+    .btn:active { transform: scale(.97); }
+    .btn.sm { padding: 7px 13px; font-size: 12px; }
+    .btn.on { background: rgba(255, 255, 255, .92); color: #0b0d14; border-color: transparent; }
+    .btn svg { width: 15px; height: 15px; }
+    .ign {
+      padding: 10px 20px 10px 14px; font-weight: 700;
+      background: var(--accent); border: 0; color: #fff;
+      box-shadow: 0 8px 30px -8px rgba(255, 90, 54, .65);
+    }
+    .ign:hover { filter: brightness(1.1); background: var(--accent); }
+    .ign .dot {
+      width: 10px; height: 10px; border-radius: 50%; background: #fff;
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, .25);
+    }
+    .ign.running { background: rgba(255, 255, 255, .08); border: 1px solid var(--edge); box-shadow: none; }
+    .ign.running .dot { background: var(--ok); box-shadow: 0 0 10px var(--ok); animation: beat 1s infinite; }
+    @keyframes beat { 50% { opacity: .45; } }
+    #status {
+      font: 600 10.5px var(--mono); letter-spacing: .08em; color: var(--ink3);
+      text-transform: uppercase; white-space: nowrap;
     }
 
-    .btn:hover {
-      border-color: var(--ink3);
-      color: var(--ink);
-      background: #fff;
-    }
-
-    .btn:active {
-      transform: translateY(1px);
-    }
-
-    .btn.pri {
-      background: var(--acc);
-      border-color: var(--acc);
-      color: #fff;
-    }
-
-    .btn.pri:hover {
-      background: #d13d16;
-      border-color: #d13d16;
-      color: #fff;
-    }
-
-    .btn.on {
-      background: var(--ink);
-      border-color: var(--ink);
-      color: #fff;
-    }
-
-    .btn .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-      opacity: .85;
-    }
-
-    .btn.pri .dot {
-      animation: pulse 1.5s ease-in-out infinite;
-    }
-
-    @keyframes pulse {
-
-      0%,
-      100% {
-        opacity: .35
-      }
-
-      50% {
-        opacity: 1
-      }
-    }
-
-    /* ============ panels ============ */
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--line2);
-      position: relative;
-    }
-
-    /* technical-drawing crop marks at the corners */
-    .panel::before,
-    .panel::after {
-      content: "";
-      position: absolute;
-      width: 7px;
-      height: 7px;
-      pointer-events: none;
-    }
-
-    .panel::before {
-      top: -1px;
-      left: -1px;
-      border-top: 1px solid var(--ink);
-      border-left: 1px solid var(--ink);
-    }
-
-    .panel::after {
-      bottom: -1px;
-      right: -1px;
-      border-bottom: 1px solid var(--ink);
-      border-right: 1px solid var(--ink);
-    }
-
-    .phead {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--line);
-      background: var(--panel2);
-    }
-
-    .phead .id {
-      font: 600 9px var(--mono);
-      letter-spacing: .12em;
-      color: #fff;
-      background: var(--ink);
-      padding: 3px 6px;
-    }
-
-    .phead h2 {
-      margin: 0;
-      font: 600 10px var(--mono);
-      letter-spacing: .15em;
-      text-transform: uppercase;
-      color: var(--ink2);
-    }
-
-    .phead .r {
-      margin-left: auto;
-      font: 9.5px var(--mono);
-      color: var(--ink4);
-      letter-spacing: .08em;
-    }
-
-    .pbody {
-      padding: 16px;
-    }
-
-    /* ============ layout ============ */
+    /* ---- hero -------------------------------------------------------- */
     .hero {
       display: grid;
-      grid-template-columns: 322px 1fr;
-      gap: 14px;
-      margin-bottom: 14px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.18fr);
+      gap: var(--gut);
     }
-
-    @media(max-width:900px) {
-      .hero {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    /* ============ instrument ============ */
-    canvas#tach {
-      width: 288px;
-      height: 212px;
-      display: block;
-      margin: 0 auto;
-    }
-
-    .phase {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      border-top: 1px solid var(--line);
-    }
-
+    .gauge { padding: 18px; display: flex; flex-direction: column; align-items: center; min-height: 420px; }
+    .gauge .wrapc { position: relative; width: 100%; max-width: 470px; aspect-ratio: 1 / .93; }
+    #tach { width: 100%; height: 100%; display: block; }
+    .phase { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
     .phase span {
-      text-align: center;
-      font: 600 8px var(--mono);
-      letter-spacing: .08em;
-      text-transform: uppercase;
-      padding: 7px 0;
-      color: var(--ink4);
-      border-right: 1px solid var(--line);
-      transition: var(--t);
-      position: relative;
+      font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase;
+      padding: 4px 9px; border-radius: 999px; color: var(--ink4);
+      background: rgba(255, 255, 255, .04); border: 1px solid rgba(255, 255, 255, .06);
+      transition: all .15s var(--ease);
+    }
+    .phase span.on { color: #0b0d14; background: var(--hot2); border-color: transparent; box-shadow: 0 0 18px rgba(255, 180, 70, .6); }
+
+    .side { display: flex; flex-direction: column; gap: var(--gut); min-width: 0; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 14px; }
+    .stat {
+      border-radius: var(--r2); padding: 12px 14px;
+      background: rgba(0, 0, 0, .18); border: 1px solid rgba(255, 255, 255, .06);
+      min-width: 0;
+    }
+    .stat .k { font-size: 11px; color: var(--ink3); font-weight: 600; letter-spacing: .04em; }
+    .stat .v { font: 600 clamp(19px, 2vw, 26px)/1.15 var(--mono); font-variant-numeric: tabular-nums; margin-top: 4px; white-space: nowrap; }
+    .stat .v s { text-decoration: none; font-size: 11px; color: var(--ink3); margin-left: 4px; font-family: var(--sans); font-weight: 600; }
+    .stat.hot .v { color: var(--hot2); text-shadow: 0 0 16px rgba(255, 170, 60, .5); }
+
+    .scope { padding: 14px 16px 12px; }
+    .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-width: 0; }
+    .head h2 { margin: 0; font-size: 13.5px; font-weight: 700; letter-spacing: .01em; }
+    .head .meta { margin-left: auto; font: 500 11px var(--mono); color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .chip {
+      font: 600 10px var(--mono); letter-spacing: .08em; padding: 3px 8px; border-radius: 999px;
+      background: rgba(255, 255, 255, .08); color: var(--ink2); text-transform: uppercase;
+    }
+    #scope { width: 100%; height: 150px; display: block; border-radius: 12px; }
+
+    .meters { display: grid; gap: 9px; margin-top: 12px; }
+    .meter { display: grid; grid-template-columns: 68px 1fr 38px; align-items: center; gap: 10px; }
+    .meter .k { font-size: 11.5px; color: var(--ink3); font-weight: 600; }
+    .meter .tr { height: 8px; border-radius: 99px; background: rgba(255, 255, 255, .07); overflow: hidden; }
+    .meter .tr i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .06s linear; }
+    .meter.a i { background: linear-gradient(90deg, #42c6ff, #8b6bff); box-shadow: 0 0 12px rgba(120, 140, 255, .7); }
+    .meter.b i { background: linear-gradient(90deg, #ff8a5c, #ff3b3b); box-shadow: 0 0 12px rgba(255, 70, 60, .7); }
+    .meter.y i { background: linear-gradient(90deg, #ffd166, #ff9f1c); box-shadow: 0 0 12px rgba(255, 190, 60, .7); }
+    .meter .pc { font: 600 12px var(--mono); text-align: right; color: var(--ink2); }
+
+    .drive-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 14px; }
+    .seg { display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(0, 0, 0, .25); border: 1px solid var(--edge); }
+    .seg button {
+      border: 0; background: transparent; padding: 7px 14px; border-radius: 999px; cursor: pointer;
+      font-weight: 600; font-size: 12.5px; color: var(--ink2); transition: all .2s var(--ease);
+    }
+    .seg button.on { background: rgba(255, 255, 255, .92); color: #0b0d14; }
+    .hold {
+      flex: 1; min-width: 120px; position: relative; overflow: hidden;
+      padding: 12px 18px; border-radius: 16px; cursor: pointer; border: 1px solid var(--edge);
+      background: rgba(255, 255, 255, .05); font-weight: 700; font-size: 13px; letter-spacing: .02em;
+      user-select: none; -webkit-user-select: none; touch-action: none;
+    }
+    .hold .fillh { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0); transition: transform .08s linear; opacity: .9; }
+    .hold.gas .fillh { background: linear-gradient(90deg, rgba(66, 198, 255, .45), rgba(139, 107, 255, .6)); }
+    .hold.brk .fillh { background: linear-gradient(90deg, rgba(255, 138, 92, .45), rgba(255, 59, 59, .6)); }
+    .hold span { position: relative; }
+    .hold small { position: relative; display: block; font: 500 10.5px var(--mono); color: var(--ink3); margin-top: 1px; }
+    .hold.down { border-color: var(--edge2); }
+
+    /* ---- studio: sidebar navigation + panels -------------------------- */
+    .studio { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: var(--gut); align-items: start; }
+    .nav { padding: 10px; position: sticky; top: var(--gut); display: flex; flex-direction: column; gap: 4px; }
+    .nav button {
+      display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+      padding: 11px 12px; border-radius: 14px; border: 1px solid transparent; background: transparent;
+      cursor: pointer; color: var(--ink2); font-weight: 600; font-size: 13.5px;
+      transition: background .2s var(--ease), color .2s var(--ease);
+    }
+    .nav button:hover { background: rgba(255, 255, 255, .06); color: var(--ink); }
+    .nav button.on { background: rgba(255, 255, 255, .11); border-color: var(--edge); color: var(--ink); }
+    .nav button.on .ic { background: var(--accent); color: #fff; }
+    .nav .ic {
+      width: 30px; height: 30px; border-radius: 10px; flex: none; display: grid; place-items: center;
+      background: rgba(255, 255, 255, .07); transition: background .2s var(--ease);
+    }
+    .nav .ic svg { width: 16px; height: 16px; }
+    .nav .d { display: block; font-size: 11px; color: var(--ink3); font-weight: 500; margin-top: 1px; }
+    .nav .sep { height: 1px; background: var(--edge); margin: 8px 6px; }
+    .nav .keys { padding: 6px 10px 4px; font-size: 11.5px; color: var(--ink3); line-height: 1.9; }
+    kbd {
+      font: 600 10.5px var(--mono); padding: 2px 6px; border-radius: 6px; margin-right: 4px;
+      background: rgba(255, 255, 255, .08); border: 1px solid var(--edge); color: var(--ink2);
     }
 
-    .phase span:last-child {
-      border-right: 0;
+    .panes { min-width: 0; }
+    .pane { display: none; padding: 22px 24px 24px; animation: rise .35s var(--ease); }
+    .pane.on { display: block; }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .pane > .title { display: flex; align-items: baseline; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; }
+    .pane > .title h3 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -.015em; }
+    .pane > .lead { color: var(--ink3); font-size: 13px; margin: 0 0 18px; max-width: 70ch; }
+    .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 28px; }
+    .card {
+      border-radius: 18px; padding: 16px 16px 10px; background: rgba(0, 0, 0, .16);
+      border: 1px solid rgba(255, 255, 255, .06); min-width: 0;
     }
+    .card + .card { margin-top: 16px; }
+    .card h4 { margin: 0 0 4px; font-size: 13px; font-weight: 700; }
+    .card .note { font-size: 12px; color: var(--ink3); margin: 2px 0 12px; line-height: 1.5; }
+    .note { font-size: 12.5px; color: var(--ink3); line-height: 1.55; }
+    .note b { color: var(--ink2); }
 
-    .phase span.on {
-      background: var(--acc);
-      color: #fff;
-    }
-
-    /* ============ readouts ============ */
-    .reads {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      border-bottom: 1px solid var(--line);
-    }
-
-    @media(max-width:620px) {
-      .reads {
-        grid-template-columns: repeat(2, 1fr);
-      }
-    }
-
-    .read {
-      padding: 12px 14px;
-      border-right: 1px solid var(--line);
-      position: relative;
-    }
-
-    .read:last-child {
-      border-right: 0;
-    }
-
-    .read .v {
-      font: 600 26px/1 var(--mono);
-      font-variant-numeric: tabular-nums;
-      margin-top: 6px;
-      letter-spacing: -.03em;
-    }
-
-    .read .v s {
-      text-decoration: none;
-      font-size: 10px;
-      color: var(--ink3);
-      margin-left: 3px;
-      font-weight: 500;
-    }
-
-    .read.hot .v {
-      color: var(--acc);
-    }
-
-    /* ============ bars ============ */
-    .bars {
-      padding: 13px 14px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .bar {
-      display: flex;
-      align-items: center;
-      gap: 11px;
-      margin-bottom: 9px;
-    }
-
-    .bar:last-child {
-      margin-bottom: 0;
-    }
-
-    .bar .lbl {
-      width: 52px;
-      flex: none;
-    }
-
-    .bar .tr {
-      flex: 1;
-      height: 10px;
-      background:
-        repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 10%);
-      border: 1px solid var(--line);
-      position: relative;
-      overflow: hidden;
-    }
-
-    .bar .tr i {
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 0;
-      background: var(--ink);
-      transition: width .06s linear;
-    }
-
-    .bar.a .tr i {
-      background: var(--acc);
-    }
-
-    .bar.b .tr i {
-      background: var(--acc2);
-    }
-
-    .bar.y .tr i {
-      background: var(--warn);
-    }
-
-    .bar .pc {
-      width: 30px;
-      text-align: right;
-      font: 10px var(--mono);
-      color: var(--ink3);
-      font-variant-numeric: tabular-nums;
-    }
-
-    /* ============ spec table ============ */
-    .spec {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-    }
-
-    .spec .r {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-      padding: 7px 14px;
-      border-bottom: 1px solid var(--line);
-      border-right: 1px solid var(--line);
-    }
-
-    .spec .r:nth-child(2n) {
-      border-right: 0;
-    }
-
-    .spec .r .k {
-      font: 9.5px var(--mono);
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      color: var(--ink3);
-      white-space: nowrap;
-    }
-
-    .spec .r .d {
-      flex: 1;
-      border-bottom: 1px dotted var(--line2);
-      transform: translateY(-3px);
-    }
-
-    .spec .r .v {
-      font: 600 11px var(--mono);
-      white-space: nowrap;
-    }
-
-    /* ============ tabs ============ */
-    .tabs {
-      display: flex;
-      border: 1px solid var(--line2);
-      border-bottom: 0;
-      background: var(--panel2);
-      overflow-x: auto;
-    }
-
-    .tabs button {
-      border: 0;
-      border-right: 1px solid var(--line);
-      background: transparent;
-      cursor: pointer;
-      padding: 11px 20px;
-      font: 600 10px var(--mono);
-      letter-spacing: .13em;
-      text-transform: uppercase;
-      color: var(--ink3);
-      transition: var(--t);
-      position: relative;
-      white-space: nowrap;
-    }
-
-    .tabs button::after {
-      content: "";
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: -1px;
-      height: 2px;
-      background: var(--acc);
-      transform: scaleX(0);
-      transition: transform var(--t);
-    }
-
-    .tabs button:hover {
-      color: var(--ink2);
-      background: #fff;
-    }
-
-    .tabs button.on {
-      color: var(--ink);
-      background: var(--panel);
-    }
-
-    .tabs button.on::after {
-      transform: scaleX(1);
-    }
-
-    .tabs .idx {
-      color: var(--ink4);
-      margin-right: 7px;
-    }
-
-    .pane {
-      display: none;
-    }
-
-    .pane.on {
-      display: block;
-      animation: in .2s ease-out;
-    }
-
-    @keyframes in {
-      from {
-        opacity: 0;
-        transform: translateY(4px)
-      }
-
-      to {
-        opacity: 1;
-        transform: none
-      }
-    }
-
-    /* ============ controls ============ */
-    .g2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0 26px;
-    }
-
-    @media(max-width:760px) {
-      .g2 {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .ctl {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 7px 0;
-      border-bottom: 1px dotted var(--line);
-    }
-
-    .ctl .lbl {
-      width: 82px;
-      flex: none;
-    }
-
-    .ctl .val {
-      width: 42px;
-      text-align: right;
-      flex: none;
-      font: 600 10.5px var(--mono);
-      color: var(--ink2);
-      font-variant-numeric: tabular-nums;
-      /* Tabular numerals only line up if the readout stays on ONE line. At
-         42px "540 N·m" wrapped and the row grew, which broke the rhythm of a
-         whole column of controls. The unit lives in the label instead. */
-      white-space: nowrap;
-    }
-
-    /* Unit suffix on a generated control's label. */
-    .ctl .lbl u {
-      font-style: normal;
-      text-decoration: none;
-      color: var(--ink4);
-      margin-left: 4px;
-    }
-
-    select {
-      flex: 1;
-      appearance: none;
-      border: 1px solid var(--line2);
-      background: #fff;
-      color: var(--ink);
-      padding: 8px 30px 8px 10px;
-      font: 600 11px var(--mono);
-      letter-spacing: .02em;
-      cursor: pointer;
-      transition: var(--t);
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 5L9 0' fill='%2351565d'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-    }
-
-    select:hover {
-      border-color: var(--ink3);
-    }
-
-    select:focus {
-      outline: none;
-      border-color: var(--acc);
-      box-shadow: inset 0 0 0 1px var(--acc);
-    }
+    /* slider row */
+    .ctl { display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 2px 12px; align-items: center; padding: 7px 0; }
+    .ctl .lbl { font-size: 12.5px; color: var(--ink2); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ctl .lbl u { text-decoration: none; color: var(--ink4); font-weight: 500; margin-left: 6px; font-size: 11px; }
+    .ctl .val { font: 600 12px var(--mono); color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; grid-row: 1; grid-column: 2; }
+    .ctl input[type=range] { grid-column: 1 / -1; }
 
     input[type=range] {
-      -webkit-appearance: none;
-      appearance: none;
-      flex: 1;
-      height: 18px;
-      background: transparent;
-      margin: 0;
-      cursor: ew-resize;
+      -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; cursor: pointer; margin: 0;
+      --p: 50%;
     }
-
     input[type=range]::-webkit-slider-runnable-track {
-      height: 8px;
-      border: 1px solid var(--line2);
-      background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 10%);
+      height: 6px; border-radius: 99px;
+      background: linear-gradient(90deg, #42c6ff, #8b6bff var(--p), rgba(255, 255, 255, .1) var(--p));
     }
-
+    input[type=range]::-moz-range-track { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .1); }
+    input[type=range]::-moz-range-progress { height: 6px; border-radius: 99px; background: linear-gradient(90deg, #42c6ff, #8b6bff); }
     input[type=range]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 9px;
-      height: 16px;
-      margin-top: -5px;
-      background: var(--ink);
-      border: 0;
-      cursor: ew-resize;
-      transition: background var(--t);
+      -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; margin-top: -6px;
+      background: #fff; border: 0; box-shadow: 0 0 0 4px rgba(139, 107, 255, .28), 0 2px 8px rgba(0, 0, 0, .5);
+      transition: box-shadow .2s var(--ease);
+    }
+    input[type=range]:active::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(139, 107, 255, .35), 0 2px 8px rgba(0, 0, 0, .5); }
+    input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 0 0 4px rgba(139, 107, 255, .28); }
+
+    /* live inputs — larger, they are performance controls */
+    .inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+    .inp { border-radius: 18px; padding: 16px; background: rgba(0, 0, 0, .18); border: 1px solid rgba(255, 255, 255, .06); }
+    .inp .t { display: flex; align-items: baseline; gap: 8px; }
+    .inp .t b { font-size: 14px; }
+    .inp .t span { margin-left: auto; font: 600 13px var(--mono); }
+    .inp p { margin: 6px 0 10px; font-size: 12px; color: var(--ink3); line-height: 1.45; min-height: 52px; }
+    .scenes { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 16px; }
+
+    /* EQ */
+    .eq { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; height: 230px; }
+    .eqb { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; }
+    .eqb .n { font: 600 11.5px var(--mono); color: var(--ink); }
+    .eqb input[type=range] {
+      writing-mode: vertical-lr; direction: rtl; width: 22px; flex: 1; height: auto;
+    }
+    .eqb input[type=range]::-webkit-slider-runnable-track {
+      width: 6px; height: auto;
+      background: linear-gradient(0deg, rgba(255, 255, 255, .1), rgba(255, 255, 255, .1));
+    }
+    .eqb input[type=range]::-webkit-slider-thumb { margin-top: 0; margin-left: -6px; }
+    .eqb .f { font: 600 11px var(--mono); color: var(--ink2); }
+    .eqb .t { font-size: 10.5px; color: var(--ink3); text-transform: uppercase; letter-spacing: .06em; }
+
+    #orders { width: 100%; height: 170px; display: block; border-radius: 12px; }
+    .spec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+    .spec .r { border-radius: 12px; padding: 10px 12px; background: rgba(255, 255, 255, .04); min-width: 0; }
+    .spec .k { font-size: 11px; color: var(--ink3); font-weight: 600; }
+    .spec .v { font: 600 13px var(--mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+    .field span { font-size: 12px; color: var(--ink3); font-weight: 600; }
+    input[type=text], textarea {
+      background: rgba(0, 0, 0, .3); border: 1px solid var(--edge); border-radius: 12px; padding: 10px 12px; width: 100%;
+    }
+    textarea { font: 11.5px/1.5 var(--mono); resize: vertical; min-height: 300px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .toast {
+      margin-top: 12px; padding: 10px 12px; border-radius: 12px; font-size: 12.5px; color: var(--ink2);
+      background: rgba(66, 198, 255, .08); border: 1px solid rgba(66, 198, 255, .2);
     }
 
-    input[type=range]:hover::-webkit-slider-thumb {
-      background: var(--acc);
-    }
-
-    input[type=range]::-moz-range-track {
-      height: 8px;
-      border: 1px solid var(--line2);
-      background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 10%);
-    }
-
-    input[type=range]::-moz-range-thumb {
-      width: 9px;
-      height: 16px;
-      border-radius: 0;
-      background: var(--ink);
-      border: 0;
-    }
-
-    input[type=range].b::-webkit-slider-thumb {
-      background: var(--acc2);
-    }
-
-    input[type=range].b:hover::-webkit-slider-thumb {
-      background: var(--acc);
-    }
-
-    .seg {
-      display: inline-flex;
-      border: 1px solid var(--line2);
-    }
-
-    .seg button {
-      border: 0;
-      border-right: 1px solid var(--line2);
-      background: var(--panel2);
-      padding: 8px 14px;
-      font: 600 10px var(--mono);
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      color: var(--ink3);
-      cursor: pointer;
-      transition: var(--t);
-    }
-
-    .seg button:last-child {
-      border-right: 0;
-    }
-
-    .seg button:hover {
-      color: var(--ink);
-      background: #fff;
-    }
-
-    .seg button.on {
-      background: var(--ink);
-      color: #fff;
-    }
-
-    /* ============ EQ ============ */
-    .eq {
-      display: flex;
-      gap: 0;
-      border: 1px solid var(--line2);
-      background:
-        repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 20%);
-    }
-
-    .eqb {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 8px;
-      padding: 14px 4px 9px;
-      border-right: 1px solid var(--line);
-    }
-
-    .eqb:last-child {
-      border-right: 0;
-    }
-
-    .eqb input {
-      writing-mode: vertical-rl;
-      direction: rtl;
-      -webkit-appearance: slider-vertical;
-      appearance: slider-vertical;
-      width: 20px;
-      height: 104px;
-      flex: none;
-      accent-color: var(--acc);
-      cursor: ns-resize;
-    }
-
-    .eqb .n {
-      font: 600 10px var(--mono);
-      color: var(--ink);
-      font-variant-numeric: tabular-nums;
-    }
-
-    .eqb .f {
-      font: 9.5px var(--mono);
-      color: var(--ink3);
-    }
-
-    .eqb .t {
-      font: 600 8px var(--mono);
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      color: var(--ink4);
-    }
-
-    canvas#orders {
-      width: 100%;
-      height: 132px;
-      display: block;
-      border: 1px solid var(--line);
-    }
-
-    .note {
-      font: 10.5px/1.65 var(--mono);
-      color: var(--ink3);
-      margin-top: 12px;
-      padding-left: 11px;
-      border-left: 2px solid var(--line2);
-    }
-
-    .note b {
-      color: var(--ink2);
-      font-weight: 600;
-    }
-
-    footer {
-      margin-top: 18px;
-      border: 1px solid var(--line2);
-      background: var(--panel);
-      padding: 11px 14px;
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    kbd {
-      font: 9.5px var(--mono);
-      background: var(--ink);
-      color: #fff;
-      padding: 3px 6px;
-      letter-spacing: .06em;
-    }
-
-    footer .f {
-      font: 10px var(--mono);
-      color: var(--ink3);
-      letter-spacing: .03em;
-    }
-
-    #status {
-      font: 10px var(--mono);
-      color: var(--acc);
-      letter-spacing: .05em;
-    }
+    /* ---- boot guard ---- */
+    #boot { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg); }
+    #boot[hidden] { display: none; }
+    .boot-card { max-width: 620px; width: 100%; padding: 26px 28px; border-radius: var(--r); background: #12141c; border: 1px solid var(--edge); }
+    .boot-card h1 { margin: 0 0 14px; font-size: 18px; color: var(--hot); }
+    .boot-card p { margin: 0 0 14px; color: var(--ink2); }
+    .boot-card pre { margin: 0 0 14px; padding: 14px 16px; overflow-x: auto; background: rgba(0, 0, 0, .4); border-radius: 12px; font: 12px/1.6 var(--mono); }
+    .boot-note { font-size: 12px; color: var(--ink3); }
 
     /* =====================================================================
-       DRIVE MODE — the touch cockpit
-       =====================================================================
-       A full-viewport overlay: gear gate under one thumb, pedals under the
-       other, telemetry between them. Laid out for a phone held in landscape,
-       which is the only way two thumbs reach both sides at once.
-
-       Sizing is entirely in vmin/clamp so it is resolution-independent: the
-       same layout has to work on a 320 px-wide phone and a 1400 px tablet
-       without a breakpoint per device. Nothing here is in px except hairlines.
+       DRIVE MODE — the touch cockpit. Same wiring as before (ids, pointer
+       capture, per-control pointerId); restyled into the glass language.
        ===================================================================== */
     #drive {
-      position: fixed;
-      inset: 0;
-      z-index: 900;
-      display: none;
-      background: var(--paper);
-      background-image:
-        linear-gradient(var(--hair) 1px, transparent 1px),
-        linear-gradient(90deg, var(--hair) 1px, transparent 1px);
-      background-size: 28px 28px, 28px 28px;
-      /* Notches and home indicators. Without this the gate knob ends up under
-         the rounded corner on a phone and cannot be grabbed. */
-      padding:
-        max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
-        max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-      /* Every child is a control: no scrolling, no text selection, no
-         double-tap zoom, no long-press callout. */
-      touch-action: none;
-      overscroll-behavior: none;
-      user-select: none;
-      -webkit-user-select: none;
-      -webkit-touch-callout: none;
-      -webkit-tap-highlight-color: transparent;
-    }
-
-    body.driving {
-      overflow: hidden;
-    }
-
-    body.driving #drive {
-      display: grid;
-    }
-
-    /* Landscape (and anything wide): gate | telemetry | pedals.
-       `dvh` so the layout does not jump when mobile browser chrome hides. */
-    #drive {
-      height: 100vh;
-      height: 100dvh;
+      position: fixed; inset: 0; z-index: 900; display: none;
+      background: radial-gradient(120% 120% at 50% 0%, rgba(20, 24, 40, .55), rgba(5, 6, 10, .85));
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+      padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+      touch-action: none; overscroll-behavior: none; user-select: none; -webkit-user-select: none;
+      -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+      height: 100vh; height: 100dvh;
       grid-template-columns: minmax(0, 1.15fr) minmax(0, 1.5fr) minmax(0, 1fr);
       grid-template-rows: auto minmax(0, 1fr);
-      grid-template-areas:
-        "bar bar bar"
-        "left mid right";
-      gap: clamp(6px, 1.2vmin, 14px);
+      grid-template-areas: "bar bar bar" "left mid right";
+      gap: clamp(6px, 1.4vmin, 16px);
     }
-
-    #drive.swap {
-      grid-template-areas:
-        "bar bar bar"
-        "right mid left";
-    }
-
-    .dv-bar {
-      grid-area: bar;
-      display: flex;
-      align-items: center;
-      gap: clamp(6px, 1.4vmin, 12px);
-      min-height: 0;
-    }
-
-    .dv-left {
-      grid-area: left;
-      min-height: 0;
-      min-width: 0;
-      /* Bottom-anchored: the gate keeps its square aspect (an H-gate must not
-         be stretched — the knob would go oval and the slot spacing would lie),
-         so a tall area would otherwise centre it and leave the lever out of
-         thumb reach. Pushing it down puts it where the hand already is. */
-      display: flex;
-      align-items: flex-end;
-      /* The panel surface belongs to the container, not the SVG: the gate
-         graphic sits inside a full-height panel rather than being a short
-         panel floating in an empty column. Centred in landscape, where the
-         column is barely taller than the square; pushed to the bottom in
-         portrait, where it would otherwise float out of thumb reach. */
-      align-items: center;
-      background: var(--panel);
-      border: 1px solid var(--line2);
-    }
-
-    .dv-mid {
-      grid-area: mid;
-      min-height: 0;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: clamp(4px, 1vmin, 10px);
-    }
-
-    .dv-right {
-      grid-area: right;
-      min-height: 0;
-      min-width: 0;
-      display: flex;
-      gap: clamp(6px, 1.6vmin, 16px);
-    }
-
-    /* ---- top bar ---- */
+    body.driving { overflow: hidden; }
+    body.driving #drive { display: grid; }
+    body.driving .app { visibility: hidden; }
+    #drive.swap { grid-template-areas: "bar bar bar" "right mid left"; }
+    .dv-bar { grid-area: bar; display: flex; align-items: center; gap: clamp(6px, 1.4vmin, 12px); min-height: 0; }
+    .dv-left { grid-area: left; min-height: 0; min-width: 0; display: flex; align-items: center; border-radius: var(--r); background: rgba(255, 255, 255, .05); border: 1px solid var(--edge); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    .dv-mid { grid-area: mid; min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: clamp(4px, 1vmin, 10px); }
+    .dv-right { grid-area: right; min-height: 0; min-width: 0; display: flex; gap: clamp(6px, 1.6vmin, 16px); }
     .dv-btn {
-      font: 600 clamp(8px, 1.5vmin, 11px)/1 var(--mono);
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      padding: clamp(7px, 1.5vmin, 11px) clamp(9px, 2vmin, 15px);
-      border: 1px solid var(--line2);
-      background: var(--panel);
-      color: var(--ink2);
-      cursor: pointer;
-      touch-action: manipulation;
-      white-space: nowrap;
+      font: 600 clamp(10px, 1.7vmin, 13px)/1 var(--sans); padding: clamp(8px, 1.6vmin, 12px) clamp(11px, 2.2vmin, 18px);
+      border-radius: 999px; border: 1px solid var(--edge); background: rgba(255, 255, 255, .07); color: var(--ink2);
+      cursor: pointer; touch-action: manipulation; white-space: nowrap;
     }
-
-    .dv-btn.on {
-      background: var(--ink);
-      border-color: var(--ink);
-      color: #fff;
-    }
-
-    .dv-btn.pri {
-      background: var(--acc);
-      border-color: var(--acc);
-      color: #fff;
-    }
-
-    .dv-spacer {
-      flex: 1;
-    }
-
-    .dv-tag {
-      font: 600 clamp(8px, 1.4vmin, 10px)/1 var(--mono);
-      letter-spacing: .12em;
-      text-transform: uppercase;
-      color: var(--ink3);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      min-width: 0;
-    }
-
-    /* ---- centre telemetry ---- */
+    .dv-btn.on { background: rgba(255, 255, 255, .92); color: #0b0d14; }
+    .dv-btn.pri { background: var(--accent); border-color: transparent; color: #fff; }
+    .dv-spacer { flex: 1; }
+    .dv-tag { font: 600 clamp(9px, 1.5vmin, 12px)/1 var(--mono); color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .dv-read {
-      background: var(--panel);
-      border: 1px solid var(--line2);
-      display: flex;
-      align-items: baseline;
-      justify-content: center;
-      gap: clamp(4px, 1vmin, 10px);
-      padding: clamp(4px, 1vmin, 10px);
-      min-height: 0;
+      border-radius: var(--r); background: rgba(255, 255, 255, .05); border: 1px solid var(--edge);
+      backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+      display: flex; align-items: baseline; justify-content: center; gap: clamp(4px, 1vmin, 10px); padding: clamp(4px, 1vmin, 10px); min-height: 0;
     }
-
-    .dv-rpm {
-      flex: 1;
-      flex-direction: column;
-      /* In a column flex the cross axis is horizontal, so the inherited
-         `align-items: baseline` from .dv-read was pinning the number to the
-         left edge. Both axes have to be set explicitly here. */
-      align-items: center;
-      justify-content: center;
-      gap: 0;
-    }
-
-    .dv-rpm b {
-      font: 600 clamp(34px, 17vmin, 120px)/0.95 var(--mono);
-      font-variant-numeric: tabular-nums;
-      letter-spacing: -.03em;
-    }
-
-    .dv-rpm i {
-      font: 600 clamp(7px, 1.3vmin, 10px)/1 var(--mono);
-      font-style: normal;
-      letter-spacing: .18em;
-      color: var(--ink3);
-      margin-top: .5em;
-    }
-
-    .dv-rpm.hot b {
-      color: var(--acc);
-    }
-
-    /* rev bar — LEDs, sized off the container so it never overflows */
-    .dv-leds {
-      display: grid;
-      grid-template-columns: repeat(20, 1fr);
-      gap: clamp(1px, .35vmin, 3px);
-      height: clamp(8px, 2.2vmin, 18px);
-      flex: none;
-    }
-
-    .dv-leds i {
-      background: var(--line);
-      transition: background .05s linear;
-    }
-
-    .dv-leds i.on {
-      background: var(--ink2);
-    }
-
-    .dv-leds i.on.red {
-      background: var(--acc);
-    }
-
-    .dv-row {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: clamp(4px, 1vmin, 10px);
-      flex: none;
-    }
-
-    .dv-cell {
-      background: var(--panel);
-      border: 1px solid var(--line2);
-      padding: clamp(4px, 1.1vmin, 10px);
-      text-align: center;
-      min-width: 0;
-    }
-
-    .dv-cell span {
-      display: block;
-      font: 600 clamp(6.5px, 1.15vmin, 9px)/1 var(--mono);
-      letter-spacing: .14em;
-      text-transform: uppercase;
-      color: var(--ink3);
-    }
-
-    .dv-cell b {
-      display: block;
-      font: 600 clamp(13px, 3.4vmin, 30px)/1 var(--mono);
-      font-variant-numeric: tabular-nums;
-      margin-top: .35em;
-      letter-spacing: -.02em;
-    }
-
-    /* ---- gear gate ---- */
-    .gate {
-      width: 100%;
-      height: auto;
-      aspect-ratio: 1 / 1;
-      max-height: 100%;
-      display: block;
-      touch-action: none;
-    }
-
-    .gate .slot {
-      stroke: var(--line);
-      stroke-linecap: round;
-      fill: none;
-    }
-
-    .gate .gnum {
-      font: 600 7px var(--mono);
-      fill: var(--ink3);
-      text-anchor: middle;
-      dominant-baseline: central;
-    }
-
-    .gate .gnum.lit {
-      fill: var(--acc);
-    }
-
-    .gate .stick {
-      stroke: var(--ink3);
-      stroke-width: 1.6;
-      stroke-linecap: round;
-    }
-
-    .gate .knob {
-      fill: var(--ink);
-      stroke: var(--panel);
-      stroke-width: 1.5;
-    }
-
-    .gate.grabbed .knob {
-      fill: var(--acc);
-    }
-
-    .gate.refuse .knob {
-      fill: var(--warn);
-    }
-
-    /* ---- pedals ---- */
-    .pedal {
-      flex: 1;
-      position: relative;
-      background: var(--panel);
-      border: 1px solid var(--line2);
-      overflow: hidden;
-      cursor: pointer;
-      touch-action: none;
-      min-width: 0;
-    }
-
-    .pedal .fill {
-      position: absolute;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      height: 0%;
-      background: var(--ink2);
-      transition: height .05s linear;
-    }
-
-    .pedal.gas .fill {
-      background: var(--ink);
-    }
-
-    .pedal.brk .fill {
-      background: var(--acc);
-    }
-
-    /* Pinned to the top, because the fill grows from the bottom — the label is
-       then always on the panel colour and never fighting the fill for contrast.
-       (A mix-blend-mode trick works until it meets a browser where it does not.) */
+    .dv-rpm { flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 0; }
+    .dv-rpm b { font: 600 clamp(34px, 17vmin, 120px)/.95 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+    .dv-rpm i { font: 600 clamp(8px, 1.4vmin, 11px)/1 var(--mono); font-style: normal; letter-spacing: .2em; color: var(--ink3); margin-top: .5em; }
+    .dv-rpm.hot b { color: var(--hot2); text-shadow: 0 0 30px rgba(255, 140, 60, .7); }
+    .dv-leds { display: grid; grid-template-columns: repeat(20, 1fr); gap: clamp(2px, .4vmin, 4px); height: clamp(8px, 2.2vmin, 18px); flex: none; }
+    .dv-leds i { border-radius: 4px; background: rgba(255, 255, 255, .08); transition: background .05s linear; }
+    .dv-leds i.on { background: var(--cool); box-shadow: 0 0 10px var(--cool); }
+    .dv-leds i.on.red { background: var(--hot); box-shadow: 0 0 12px var(--hot); }
+    .dv-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(4px, 1vmin, 10px); flex: none; }
+    .dv-cell { border-radius: 16px; background: rgba(255, 255, 255, .05); border: 1px solid var(--edge); padding: clamp(5px, 1.2vmin, 12px); text-align: center; min-width: 0; }
+    .dv-cell span { display: block; font: 600 clamp(7px, 1.2vmin, 10px)/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink3); }
+    .dv-cell b { display: block; font: 600 clamp(14px, 3.6vmin, 32px)/1 var(--mono); font-variant-numeric: tabular-nums; margin-top: .35em; }
+    .gate { width: 100%; height: auto; aspect-ratio: 1 / 1; max-height: 100%; display: block; touch-action: none; }
+    .gate .slot { stroke: rgba(255, 255, 255, .12); stroke-linecap: round; fill: none; }
+    .gate .gnum { font: 600 7px var(--mono); fill: var(--ink3); text-anchor: middle; dominant-baseline: central; }
+    .gate .gnum.lit { fill: var(--hot2); }
+    .gate .stick { stroke: rgba(255, 255, 255, .35); stroke-width: 1.6; stroke-linecap: round; }
+    .gate .knob { fill: #f4f6fb; stroke: rgba(0, 0, 0, .4); stroke-width: 1.5; }
+    .gate.grabbed .knob { fill: var(--hot); }
+    .gate.refuse .knob { fill: var(--warn); }
+    .pedal { flex: 1; position: relative; border-radius: var(--r); background: rgba(255, 255, 255, .05); border: 1px solid var(--edge); overflow: hidden; cursor: pointer; touch-action: none; min-width: 0; }
+    .pedal .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; transition: height .05s linear; }
+    .pedal.gas .fill { background: linear-gradient(0deg, #8b6bff, #42c6ff); }
+    .pedal.brk .fill { background: linear-gradient(0deg, #ff3b3b, #ff8a5c); }
     .pedal .cap {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: clamp(6px, 1.6vmin, 12px) 2px;
-      font: 600 clamp(8px, 1.7vmin, 12px)/1 var(--mono);
-      letter-spacing: .16em;
-      text-transform: uppercase;
-      color: var(--ink3);
-      pointer-events: none;
-      writing-mode: vertical-rl;
-      text-orientation: mixed;
-      height: 100%;
-      justify-content: flex-start;
+      position: absolute; top: 0; left: 0; right: 0; height: 100%; display: flex; align-items: center; justify-content: flex-start;
+      padding: clamp(8px, 1.8vmin, 14px) 2px; font: 700 clamp(9px, 1.8vmin, 13px)/1 var(--sans); letter-spacing: .16em; text-transform: uppercase;
+      color: var(--ink2); pointer-events: none; writing-mode: vertical-rl; text-orientation: mixed;
     }
-
-    .pedal.down {
-      border-color: var(--ink);
-    }
-
-    /* ---- paddles ---- */
-    .dv-paddles {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: clamp(4px, 1vmin, 10px);
-      flex: none;
-    }
-
-    .paddle {
-      background: var(--panel);
-      border: 1px solid var(--line2);
-      color: var(--ink2);
-      font: 600 clamp(11px, 2.6vmin, 20px)/1 var(--mono);
-      padding: clamp(6px, 1.6vmin, 13px);
-      cursor: pointer;
-      touch-action: manipulation;
-    }
-
-    .paddle:active,
-    .paddle.down {
-      background: var(--ink);
-      border-color: var(--ink);
-      color: #fff;
-    }
-
-    /* ---- portrait: same controls, stacked, thumbs at the bottom ---- */
+    .pedal.down { border-color: var(--edge2); }
+    .dv-paddles { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(4px, 1vmin, 10px); flex: none; }
+    .paddle { border-radius: 16px; background: rgba(255, 255, 255, .06); border: 1px solid var(--edge); color: var(--ink2); font: 700 clamp(12px, 2.6vmin, 20px)/1 var(--sans); padding: clamp(8px, 1.8vmin, 14px); cursor: pointer; touch-action: manipulation; }
+    .paddle:active, .paddle.down { background: rgba(255, 255, 255, .92); color: #0b0d14; }
     @media (orientation: portrait) {
-      #drive {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        grid-template-rows: auto minmax(0, 0.8fr) minmax(0, 1.35fr);
-        grid-template-areas:
-          "bar bar"
-          "mid mid"
-          "left right";
-      }
-
-      #drive.swap {
-        grid-template-areas:
-          "bar bar"
-          "mid mid"
-          "right left";
-      }
-
-      .dv-rpm b {
-        font-size: clamp(34px, 13vw, 92px);
-      }
-
-      .dv-cell b {
-        font-size: clamp(15px, 5.5vw, 34px);
-      }
-
-      .dv-left {
-        align-items: flex-end;
-      }
+      #drive { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, .8fr) minmax(0, 1.35fr); grid-template-areas: "bar bar" "mid mid" "left right"; }
+      #drive.swap { grid-template-areas: "bar bar" "mid mid" "right left"; }
+      .dv-rpm b { font-size: clamp(34px, 13vw, 92px); }
+      .dv-cell b { font-size: clamp(15px, 5.5vw, 34px); }
+      .dv-left { align-items: flex-end; }
     }
+    @media (orientation: landscape) and (max-height: 380px) { .dv-row { display: none; } }
 
-    /* Very short landscape (small phone rotated): drop the secondary cells so
-       the gate and pedals keep their height rather than being crushed. */
-    @media (orientation: landscape) and (max-height: 380px) {
-      .dv-row {
-        display: none;
-      }
+    /* ---- responsive console ---- */
+    @media (max-width: 1100px) {
+      .hero { grid-template-columns: 1fr; }
+      .gauge { min-height: 0; }
+      .studio { grid-template-columns: 1fr; }
+      .nav { position: static; flex-direction: row; overflow-x: auto; scrollbar-width: none; padding: 6px; }
+      .nav::-webkit-scrollbar { display: none; }
+      .nav button { width: auto; flex: none; padding: 8px 12px; }
+      .nav .d, .nav .sep, .nav .keys { display: none; }
     }
-
-    /* The keyboard hint bar is meaningless without a keyboard. */
-    @media (pointer: coarse) {
-      footer .f:not(:last-child) {
-        display: none;
-      }
+    @media (max-width: 720px) {
+      .top { border-radius: var(--r); }
+      .pickers { order: 3; flex-basis: 100%; justify-content: stretch; }
+      .pickers { flex-direction: column; min-width: 0; }
+      .pick { flex: 1; }
+      .scope .head .meta { display: none; }
+      .pick select { flex: 1; max-width: none; }
+      .brand .sub { display: none; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid2 { grid-template-columns: 1fr; }
+      .pane { padding: 18px 16px; }
+      .spec { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #status { display: none; }
     }
-
-    /* ---- console layout on small screens ---- */
-    @media (max-width: 760px) {
-      .wrap {
-        padding: 0 12px;
-      }
-
-      header {
-        flex-wrap: wrap;
-        margin: 12px 0;
-      }
-
-      .htitle {
-        flex: 1;
-      }
-
-      .hspec {
-        order: 3;
-        flex-basis: 100%;
-        border-top: 1px solid var(--line);
-      }
-
-      .hspec .cell {
-        flex: 1;
-        padding: 8px 10px;
-      }
-
-      .hact {
-        padding: 0 10px 0 0;
-      }
-    }
-
-    @media (max-width: 460px) {
-      .htitle {
-        padding: 9px 12px;
-      }
-
-      .htitle h1 {
-        font-size: 12.5px;
-      }
-
-      .htitle .sub {
-        display: none;
-      }
-
-      .mark {
-        width: 42px;
-      }
+    @media (pointer: coarse) { .nav .keys { display: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .grain { animation: none; }
+      .pane { animation: none; }
     }
   </style>
 </head>
 
 <body>
-
-  <!-- Boot guard.
-     ES modules are fetched with CORS semantics, so opening this file straight
-     off the disk gives it an opaque `file://` origin, every import is blocked,
-     and the page renders as a silent, dead shell that looks exactly like a
-     broken app. That is by far the most likely way for someone to have a bad
-     first minute with this, so it is detected explicitly and named. Kept as a
-     CLASSIC script, not a module: if modules cannot load, a module cannot be
-     the thing that tells you so. -->
+  <!-- BOOT GUARD — classic script on purpose: if modules cannot load, a module
+       cannot be the thing that tells you so. -->
   <div id="boot" hidden>
     <div class="boot-card">
       <h1>Engine Sim did not start</h1>
@@ -1399,7 +522,6 @@
       var fix = document.getElementById('bootFix');
       var note = document.getElementById('bootNote');
       var shown = false;
-
       function show(reason, command, extra) {
         if (shown) return;
         shown = true;
@@ -1408,290 +530,224 @@
         note.textContent = extra || '';
         el.hidden = false;
       }
-
       if (location.protocol === 'file:') {
-        show(
-          'This page was opened directly from the disk. It is built from ES modules, '
+        show('This page was opened directly from the disk. It is built from ES modules, '
           + 'which browsers refuse to load over file:// — so none of the code ran. '
           + 'It needs to be served over http://.',
-          'cd ' + 'engine_sim\nnpm start\n\n# or, without npm:\nnode tools/serve.mjs\n'
-          + '\n# then open:\nhttp://localhost:8000',
+          'cd engine_sim\nnpm start\n\n# or, without npm:\nnode tools/serve.mjs\n\n# then open:\nhttp://localhost:8000',
           'Any static server works. python3 -m http.server 8000 is equivalent.');
         return;
       }
-
-      // Anything else that stops the module evaluating — a syntax error, a missing
-      // file, a bad MIME type from a misconfigured server.
       window.addEventListener('error', function (e) {
         if (window.__ENGINE_BOOTED) return;
-        show('The app failed to load a module.',
-          String((e && (e.message || e.type)) || 'unknown error'),
+        // Capture phase also sees RESOURCE errors. A web font or stylesheet
+        // that fails (offline, blocked) is cosmetic — only a script is fatal.
+        var t = e && e.target;
+        if (t && t !== window && t.tagName !== 'SCRIPT') return;
+        show('The app failed to load a module.', String((e && (e.message || e.type)) || 'unknown error'),
           'Full details are in the browser console.');
       }, true);
-
-      // Belt and braces: if nothing has reported success in a few seconds,
-      // something went wrong quietly.
       setTimeout(function () {
         if (!window.__ENGINE_BOOTED) {
-          show('The app did not finish starting.',
-            'Check the browser console for the first red error.',
-            'If this page is served by something other than tools/serve.mjs, make '
-            + 'sure it sends .js files as text/javascript.');
+          show('The app did not finish starting.', 'Check the browser console for the first red error.',
+            'If this page is served by something other than tools/serve.mjs, make sure it sends .js files as text/javascript.');
         }
       }, 5000);
     })();
   </script>
 
-  <div class="wrap">
+  <canvas id="bg" aria-hidden="true"></canvas>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
 
-    <header class="panel">
-      <div class="mark">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.3">
-          <circle cx="12" cy="12" r="8.2" />
-          <circle cx="12" cy="12" r="3.1" />
-          <path d="M12 1.6v2.6M12 19.8v2.6M1.6 12h2.6M19.8 12h2.6" />
-          <path d="M4.6 4.6l1.9 1.9M17.5 17.5l1.9 1.9M19.4 4.6l-1.9 1.9M6.5 17.5l-1.9 1.9" stroke-opacity=".5" />
-        </svg>
+  <div class="app">
+    <!-- top bar -->
+    <header class="top glass">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round">
+            <path d="M4 15a8 8 0 1 1 16 0" />
+            <path d="M12 15l4.5-5" />
+            <circle cx="12" cy="15" r="1.4" fill="#fff" />
+          </svg>
+        </div>
+        <div>
+          <h1>Engine Sim</h1>
+          <div class="sub">Procedural engine sound · no samples</div>
+        </div>
       </div>
-      <div class="htitle">
-        <h1>ENGINE SIM</h1>
-        <div class="sub">PROCEDURAL POWERTRAIN SYNTHESIS</div>
+      <div class="pickers">
+        <label class="pick"><span>Sound</span><select id="engine" aria-label="Engine preset"></select></label>
+        <label class="pick"><span>Car</span><select id="vehicle" aria-label="Vehicle"></select></label>
       </div>
-      <div class="hspec">
-        <div class="cell"><span class="lbl">Unit</span><span class="v" id="hEngine">—</span></div>
-        <div class="cell"><span class="lbl">Chassis</span><span class="v" id="hChassis">—</span></div>
-        <div class="cell"><span class="lbl">Voices</span><span class="v" id="hVoices">—</span></div>
-      </div>
-      <div class="hact">
+      <div class="acts">
         <span id="status"></span>
-        <button id="driveBtn" class="btn">Drive</button>
-        <button id="power" class="btn pri"><i class="dot"></i>Ignition</button>
+        <button id="driveBtn" class="btn" title="Full-screen touch cockpit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="2.2" /><path d="M12 14.2v6.3M9.9 11.4 4 9.8M14.1 11.4 20 9.8" /></svg>
+          Drive
+        </button>
+        <button id="power" class="btn ign"><i class="dot"></i>Start engine</button>
       </div>
     </header>
 
-    <div class="hero">
-      <!-- instrument -->
-      <div class="panel">
-        <div class="phead"><span class="id">01</span>
-          <h2>Instrument</h2>
-          <span class="r" id="instrR">—</span>
-        </div>
-        <div style="padding:14px 0 10px"><canvas id="tach" width="576" height="420"></canvas></div>
-        <div class="phase" id="phase"></div>
+    <!-- hero -->
+    <section class="hero">
+      <div class="gauge glass">
+        <div class="wrapc"><canvas id="tach" aria-label="Tachometer"></canvas></div>
+        <div class="phase" id="phase" title="Gear-shift state machine"></div>
       </div>
 
-      <!-- telemetry -->
-      <div class="panel">
-        <div class="phead"><span class="id">02</span>
-          <h2>Telemetry</h2>
-          <span class="r">live · 60 Hz</span>
+      <div class="side">
+        <div class="stats glass">
+          <div class="stat"><div class="k">Crank</div><div class="v" id="rpm">0<s>rpm</s></div></div>
+          <div class="stat"><div class="k">Road speed</div><div class="v" id="kmh">0<s>km/h</s></div></div>
+          <div class="stat"><div class="k">Total ratio</div><div class="v" id="ratio">—<s>:1</s></div></div>
+          <div class="stat" id="slipCell"><div class="k">Clutch slip</div><div class="v" id="slip">0<s>rpm</s></div></div>
         </div>
-        <div class="reads">
-          <div class="read"><span class="lbl">Crank</span>
-            <div class="v num" id="rpm">0<s>rpm</s></div>
+
+        <div class="scope glass">
+          <div class="head">
+            <h2>Live spectrum</h2><span class="chip" id="levelChip">−∞ dB</span>
+            <span class="meta" id="instrR">—</span>
           </div>
-          <div class="read"><span class="lbl">Road</span>
-            <div class="v num" id="kmh">0<s>km/h</s></div>
-          </div>
-          <div class="read"><span class="lbl">Total ratio</span>
-            <div class="v num" id="ratio">—<s>:1</s></div>
-          </div>
-          <div class="read" id="slipCell"><span class="lbl">Clutch slip</span>
-            <div class="v num" id="slip">0<s>rpm</s></div>
-          </div>
-        </div>
-        <div class="bars">
-          <div class="bar a"><span class="lbl">Throttle</span>
-            <div class="tr"><i id="mThr"></i></div><span class="pc" id="pThr">0</span>
-          </div>
-          <div class="bar b"><span class="lbl">Brake</span>
-            <div class="tr"><i id="mBrk"></i></div><span class="pc" id="pBrk">0</span>
-          </div>
-          <div class="bar y" id="boostRow"><span class="lbl">Boost</span>
-            <div class="tr"><i id="mBst"></i></div><span class="pc" id="pBst">0</span>
+          <canvas id="scope" aria-label="Live output spectrum"></canvas>
+          <div class="meters">
+            <div class="meter a"><span class="k">Throttle</span><div class="tr"><i id="mThr"></i></div><span class="pc" id="pThr">0</span></div>
+            <div class="meter b"><span class="k">Brake</span><div class="tr"><i id="mBrk"></i></div><span class="pc" id="pBrk">0</span></div>
+            <div class="meter y" id="boostRow"><span class="k">Boost</span><div class="tr"><i id="mBst"></i></div><span class="pc" id="pBst">0</span></div>
           </div>
         </div>
-        <div class="spec" id="spec"></div>
-        <div style="padding:12px 14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-          <div class="seg">
+
+        <div class="drive-row glass">
+          <button class="hold gas" id="holdGas"><i class="fillh"></i><span>Hold to rev</span><small>or W / ↑</small></button>
+          <button class="hold brk" id="holdBrk"><i class="fillh"></i><span>Brake</span><small>S / ↓</small></button>
+          <div class="seg" role="group" aria-label="Gearbox">
             <button id="autoBtn" class="on">Auto</button><button id="manBtn">Manual</button>
           </div>
-          <button class="btn" id="dn">↓ Down</button>
-          <button class="btn" id="up">↑ Up</button>
-          <div class="seg" style="margin-left:auto">
-            <button id="pExt" class="on">Exterior</button><button id="pInt">Cabin</button>
+          <button class="btn sm" id="dn" title="Shift down (Q)">− Gear</button>
+          <button class="btn sm" id="up" title="Shift up (E)">Gear +</button>
+          <div class="seg" role="group" aria-label="Listener">
+            <button id="pExt" class="on">Outside</button><button id="pInt">Cabin</button>
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="tabs" id="tabs">
-      <button data-p="machine" class="on"><span class="idx">A</span>Machine</button>
-      <button data-p="tune"><span class="idx">B</span>Tune</button>
-      <button data-p="mix"><span class="idx">C</span>Voice mix</button>
-      <button data-p="tone"><span class="idx">D</span>Tone</button>
-      <button data-p="fx"><span class="idx">E</span>EQ &amp; space</button>
-      <button data-p="preset"><span class="idx">F</span>Preset</button>
-    </div>
+    <!-- studio -->
+    <section class="studio">
+      <nav class="nav glass" id="tabs" aria-label="Sections">
+        <button data-p="inputs" class="on"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></span><span>Live inputs<span class="d">What the engine is going through</span></span></button>
+        <button data-p="mix"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 4v16M12 4v16M18 4v16" /><rect x="4" y="13" width="4" height="3" rx="1" fill="currentColor" /><rect x="10" y="7" width="4" height="3" rx="1" fill="currentColor" /><rect x="16" y="11" width="4" height="3" rx="1" fill="currentColor" /></svg></span><span>Sound &amp; mix<span class="d">Voices, tone, punch</span></span></button>
+        <button data-p="tune"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" /></svg></span><span>Engine tuning<span class="d">Pipes, pulse, turbo</span></span></button>
+        <button data-p="fx"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0" /></svg></span><span>EQ &amp; space<span class="d">Five bands, room, width</span></span></button>
+        <button data-p="machine"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20V10M9 20V4M14 20v-7M19 20v-11" /></svg></span><span>Analysis<span class="d">Firing orders, spec sheet</span></span></button>
+        <button data-p="preset"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 3h9l4 4v14H6z" /><path d="M9 13h6M9 17h6M14 3v5h5" /></svg></span><span>Presets<span class="d">Save, share, import</span></span></button>
+        <div class="sep"></div>
+        <div class="keys">
+          <div><kbd>W</kbd>throttle <kbd>S</kbd>brake</div>
+          <div><kbd>E</kbd>up <kbd>Q</kbd>down <kbd>A</kbd>auto</div>
+          <div><kbd>C</kbd>cabin <kbd>Space</kbd>start</div>
+        </div>
+      </nav>
 
-    <div class="panel" style="border-top:0">
-      <div class="pbody">
+      <div class="panes glass">
+        <div class="pane on" data-p="inputs">
+          <div class="title"><h3>Live inputs</h3><span class="chip">driven by a game, or by you</span></div>
+          <p class="lead">These are not part of the sound file — they are what is happening to the engine right now. A game
+            drives them every frame through <code>sim.setInputs()</code>; here they are sliders. Try a scene, then rev it.</p>
+          <div class="scenes" id="scenes"></div>
+          <div class="inputs" id="inputs"></div>
+        </div>
 
-        <div class="pane on" data-p="machine">
-          <div class="g2">
-            <div>
-              <div class="ctl"><span class="lbl">Preset</span><select id="engine"></select></div>
-              <div class="ctl"><span class="lbl">Chassis</span><select id="vehicle"></select></div>
-              <div class="note">A preset is one whole sound: the machine, the mix, the tone and the
-                effects. Loading one brings all of it. Firing geometry drives the rest — a bank that
-                fires at uneven intervals produces <b>half-orders</b>, which is the burble. Compare
-                <b>V8 cross-plane</b> against <b>V8 flat-plane</b>.
-              </div>
-              <div class="ctl" style="margin-top:10px"><span class="lbl">Editing</span>
-                <span class="val" id="presetName" style="font:10px var(--mono);color:var(--ink4)"></span>
-              </div>
-            </div>
-            <div>
-              <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
-                <span class="lbl">Order spectrum</span>
-                <span class="r" id="ordMeta" style="font:9.5px var(--mono);color:var(--ink4);
-              letter-spacing:.05em;margin-left:auto"></span>
-              </div>
-              <canvas id="orders" width="1240" height="264"></canvas>
+        <div class="pane" data-p="mix">
+          <div class="title"><h3>Sound &amp; mix</h3></div>
+          <p class="lead">Balance between the synthesis voices and the fixed-frequency tone. <b>Rumble</b> is the
+            firing-pulsed body of the engine; <b>Bass punch</b> adds the harmonics that let small speakers carry the low end.</p>
+          <div class="grid2">
+            <div class="card"><h4>Voices</h4><div class="note">Pops route mostly through the exhaust pipe, so Pops and Exhaust interact.</div><div id="mix"></div></div>
+            <div class="card"><h4>Tone</h4><div class="note">Compression is a three-band stage that only ever pulls down.</div><div id="tonePane"></div>
+              <div class="ctl"><span class="lbl">Gain reduction</span><span class="val" id="dynMeter" style="grid-column:1/-1;text-align:left;font-size:11px;color:var(--ink3)"></span></div>
             </div>
           </div>
         </div>
 
         <div class="pane" data-p="tune">
-          <div class="g2" id="tune"></div>
-          <div class="note">Every one of these is part of the preset and is written out with it.
-            Geometry changes — pipe lengths, pulse shape, plenum — rebuild the wavetables and the
-            waveguides, so they settle a moment after you let go of the control.</div>
-        </div>
-
-        <div class="pane" data-p="mix">
-          <div class="g2" id="mix"></div>
-          <div class="note">Balance between synthesis voices. Transients route mostly through the
-            exhaust waveguides, so <b>Pops</b> and <b>Exhaust</b> interact.</div>
-        </div>
-
-        <div class="pane" data-p="tone">
-          <div class="g2" id="tonePane"></div>
-          <div class="note">Rumble lifts the 145 Hz shelf and the 78 Hz body bump. Pop depth sets how
-            much transient energy is fed back through the exhaust waveguides. Compression drives a
-            three-band compressor split at 240 Hz and 2 kHz — the low band glues, the high band
-            holds down anything that would sting.</div>
-          <div class="ctl" style="margin-top:10px"><span class="lbl">Reduction</span>
-            <span class="val" id="dynMeter" style="font:10px var(--mono);color:var(--ink4)"></span>
-          </div>
+          <div class="title"><h3>Engine tuning</h3><span class="chip" id="presetName"></span></div>
+          <p class="lead">Every value here is part of the preset. Geometry changes — pipe lengths, pulse shape, plenum —
+            rebuild the wavetables and waveguides, so they settle a moment after you let go.</p>
+          <div class="grid2" id="tune"></div>
         </div>
 
         <div class="pane" data-p="fx">
-          <div class="g2">
-            <div>
-              <div style="display:flex;align-items:baseline;margin-bottom:9px">
-                <span class="lbl">Equaliser</span>
-                <span style="margin-left:auto;font:9.5px var(--mono);color:var(--ink4)">±18 dB</span>
-              </div>
-              <div class="eq" id="eq"></div>
-              <div style="display:flex;gap:8px;margin-top:12px">
-                <button class="btn" id="eqFlat">Flat</button>
-                <button class="btn" id="fxOff">Bypass</button>
-              </div>
+          <div class="title"><h3>EQ &amp; space</h3></div>
+          <p class="lead">Five musically placed bands and the room around the car. Width is mono-sum safe.</p>
+          <div class="grid2">
+            <div class="card">
+              <h4>Equaliser <span class="chip" style="margin-left:6px">±18 dB</span></h4>
+              <div class="eq" id="eq" style="margin-top:12px"></div>
+              <div class="row" style="margin:14px 0 6px"><button class="btn sm" id="eqFlat">Flat</button><button class="btn sm" id="fxOff">Dry</button></div>
             </div>
-            <div>
-              <div class="lbl" style="display:block;margin-bottom:9px">Space</div>
-              <div id="fxPane"></div>
-              <div class="note">Width is mono-sum safe — the delayed copies carry opposite polarity and
-                cancel exactly when summed. Listener position is continuous: 0 is standing outside the
-                car, 1 is sitting in it.</div>
-            </div>
+            <div class="card"><h4>Space</h4><div id="fxPane"></div></div>
           </div>
+        </div>
+
+        <div class="pane" data-p="machine">
+          <div class="title"><h3>Analysis</h3><span class="chip" id="ordMeta"></span></div>
+          <p class="lead">The engine's firing geometry, as engine orders. Grey bars are whole orders; <b>orange bars are
+            half-orders</b> — a bank firing at uneven intervals, which is the burble. Compare V8 cross-plane with flat-plane.</p>
+          <div class="card"><canvas id="orders" aria-label="Order spectrum"></canvas></div>
+          <div class="spec" id="spec"></div>
+          <div class="spec">
+            <div class="r"><div class="k">Unit</div><div class="v" id="hEngine">—</div></div>
+            <div class="r"><div class="k">Chassis</div><div class="v" id="hChassis">—</div></div>
+            <div class="r"><div class="k">Voices</div><div class="v" id="hVoices">—</div></div>
+          </div>
+          <p class="note" style="margin-top:14px">Lift above 3000 rpm after a hard run for bangs · <span id="turboHint"></span></p>
         </div>
 
         <div class="pane" data-p="preset">
-          <div class="g2">
+          <div class="title"><h3>Presets</h3></div>
+          <p class="lead">A preset is the whole sound — machine, mix, tone, EQ and space — as one JSON file. Save it here,
+            download it, or paste one in.</p>
+          <div class="grid2">
             <div>
-              <div class="ctl"><span class="lbl">Name</span>
-                <input id="pName" type="text" spellcheck="false"
-                  style="flex:1;min-width:0;background:var(--paper2);border:1px solid var(--rule);
-                         color:var(--ink);font:11px var(--mono);padding:5px 7px">
-              </div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-                <button class="btn" id="pSave">Save</button>
-                <button class="btn" id="pDelete">Delete</button>
-                <button class="btn" id="pRevert">Revert to stock</button>
-              </div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-                <button class="btn" id="pDownload">Download .json</button>
-                <button class="btn" id="pCopy">Copy</button>
-                <button class="btn" id="pImport">Import file</button>
-                <input id="pFile" type="file" accept="application/json,.json" hidden>
-              </div>
-              <div class="note" id="pStatus">Saved presets live in this browser. Download writes the
-                same object to a file — it is the whole sound, so it will reproduce exactly
-                anywhere this simulator runs.</div>
+              <label class="field"><span>Name</span><input id="pName" type="text" spellcheck="false"></label>
+              <div class="row"><button class="btn sm" id="pSave">Save</button><button class="btn sm" id="pDelete">Delete</button><button class="btn sm" id="pRevert">Revert to stock</button></div>
+              <div class="row" style="margin-top:8px"><button class="btn sm" id="pDownload">Download .json</button><button class="btn sm" id="pCopy">Copy</button><button class="btn sm" id="pImport">Import file</button>
+                <input id="pFile" type="file" accept="application/json,.json" hidden></div>
+              <div class="toast" id="pStatus">Saved presets live in this browser. Download writes the same object to a file —
+                it reproduces exactly anywhere this simulator runs.</div>
             </div>
             <div>
-              <div class="lbl" style="display:block;margin-bottom:9px">Preset source</div>
-              <textarea id="pJSON" spellcheck="false" rows="16"
-                style="width:100%;box-sizing:border-box;background:var(--paper2);border:1px solid var(--rule);
-                       color:var(--ink);font:10px/1.45 var(--mono);padding:8px;resize:vertical"></textarea>
-              <div style="display:flex;gap:8px;margin-top:8px">
-                <button class="btn" id="pApply">Apply edits</button>
-                <button class="btn" id="pRefresh">Refresh</button>
-              </div>
+              <label class="field"><span>Preset source</span><textarea id="pJSON" spellcheck="false" rows="16"></textarea></label>
+              <div class="row"><button class="btn sm" id="pApply">Apply edits</button><button class="btn sm" id="pRefresh">Refresh</button></div>
             </div>
           </div>
         </div>
-
       </div>
-
-    </div>
+    </section>
   </div>
 
-  <footer>
-    <span class="f"><kbd>W</kbd> throttle</span>
-    <span class="f"><kbd>S</kbd> brake</span>
-    <span class="f"><kbd>E</kbd> up</span>
-    <span class="f"><kbd>Q</kbd> down</span>
-    <span class="f"><kbd>A</kbd> auto</span>
-    <span class="f"><kbd>C</kbd> cabin</span>
-    <span class="f"><kbd>SPC</kbd> run</span>
-    <span class="f" style="margin-left:auto">Lift above 3000 rpm after a hard run for bangs ·
-      <span id="turboHint"></span></span>
-  </footer>
-  </div>
-
-  <!-- ===================================================================
-       DRIVE MODE. A real H-gate you drag between gears with one thumb, and
-       pedals under the other. The gate is an SVG with a viewBox, so it is
-       resolution-independent and needs no devicePixelRatio handling.
-       =================================================================== -->
+  <!-- DRIVE MODE -->
   <div id="drive">
     <div class="dv-bar">
       <button class="dv-btn" id="dvExit">&larr; Console</button>
-      <button class="dv-btn pri" id="dvPower">Ignition</button>
+      <button class="dv-btn pri" id="dvPower">Start</button>
       <button class="dv-btn" id="dvAuto">Auto</button>
       <div class="dv-spacer"></div>
       <span class="dv-tag" id="dvTag">—</span>
       <button class="dv-btn" id="dvSwap" title="Swap which side the gate is on">Swap sides</button>
     </div>
-
     <div class="dv-left">
-      <svg class="gate" id="gate" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"
-        aria-label="Gear gate">
+      <svg class="gate" id="gate" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" aria-label="Gear gate">
         <g id="gateSlots"></g>
         <g id="gateNums"></g>
         <line id="gateStick" class="stick" x1="50" y1="50" x2="50" y2="50" />
         <circle id="gateKnob" class="knob" cx="50" cy="50" r="9" />
       </svg>
     </div>
-
     <div class="dv-mid">
-      <div class="dv-read dv-rpm" id="dvRpmCell">
-        <b id="dvRpm">0</b><i>RPM</i>
-      </div>
+      <div class="dv-read dv-rpm" id="dvRpmCell"><b id="dvRpm">0</b><i>RPM</i></div>
       <div class="dv-leds" id="dvLeds"></div>
       <div class="dv-row">
         <div class="dv-cell"><span>km/h</span><b id="dvKmh">0</b></div>
@@ -1703,16 +759,9 @@
         <button class="paddle" id="dvUp">UP +</button>
       </div>
     </div>
-
     <div class="dv-right">
-      <div class="pedal brk" id="pedBrake">
-        <div class="fill"></div>
-        <div class="cap">Brake</div>
-      </div>
-      <div class="pedal gas" id="pedGas">
-        <div class="fill"></div>
-        <div class="cap">Throttle</div>
-      </div>
+      <div class="pedal brk" id="pedBrake"><div class="fill"></div><div class="cap">Brake</div></div>
+      <div class="pedal gas" id="pedGas"><div class="fill"></div><div class="cap">Throttle</div></div>
     </div>
   </div>
 
@@ -1728,37 +777,55 @@
     const $ = id => document.getElementById(id);
     const sim = new EngineSim(null, { engine: 'v8cross', vehicle: 'sports', volume: 0.7 });
     window.sim = sim;
+    const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+    const DPR = Math.min(devicePixelRatio || 1, 2);
 
-    /* tabs */
+    /* ---- audio tap for the visuals --------------------------------------
+       An AnalyserNode hung off the public output. connect() on an AudioNode
+       fans out, so this listens without moving the sim's own destination. */
+    const analyser = sim.ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.78;
+    sim.output.connect(analyser);
+    const fbins = new Uint8Array(analyser.frequencyBinCount);
+    const tbins = new Float32Array(analyser.fftSize);
+    const audio = { low: 0, mid: 0, high: 0, level: 0, lowS: 0, midS: 0, highS: 0, db: -99 };
+    function readAudio() {
+      analyser.getByteFrequencyData(fbins);
+      analyser.getFloatTimeDomainData(tbins);
+      const hz = sim.ctx.sampleRate / analyser.fftSize;
+      const band = (lo, hi) => {
+        let s = 0, n = 0;
+        for (let k = Math.max(1, Math.floor(lo / hz)); k < Math.min(fbins.length, hi / hz); k++) { s += fbins[k]; n++; }
+        return n ? s / n / 255 : 0;
+      };
+      audio.low = band(30, 160); audio.mid = band(160, 1500); audio.high = band(1500, 8000);
+      let ss = 0; for (let i = 0; i < tbins.length; i++) ss += tbins[i] * tbins[i];
+      const rms = Math.sqrt(ss / tbins.length);
+      audio.db = 20 * Math.log10(rms + 1e-9);
+      audio.level = clamp((audio.db + 48) / 42, 0, 1);
+      const k = 0.18;
+      audio.lowS += (audio.low - audio.lowS) * k;
+      audio.midS += (audio.mid - audio.midS) * k;
+      audio.highS += (audio.high - audio.highS) * 0.3;
+    }
+
+    /* ---- tabs ---- */
     $('tabs').onclick = e => {
-      const b = e.target.closest('button'); if (!b) return;
-      for (const x of $('tabs').children) x.classList.toggle('on', x === b);
+      const b = e.target.closest('button[data-p]'); if (!b) return;
+      for (const x of $('tabs').querySelectorAll('button[data-p]')) x.classList.toggle('on', x === b);
       for (const p of document.querySelectorAll('.pane')) p.classList.toggle('on', p.dataset.p === b.dataset.p);
+      if (b.dataset.p === 'machine') drawOrders();
     };
 
-    /* machine */
-    // Built from the public listings rather than the profile tables, so this is
-    // also a check that a host project can populate a picker without importing
-    // anything internal.
+    /* ---- vehicle ---- */
     for (const v of EngineSim.vehicles()) $('vehicle').add(new Option(v.label, v.id, false, v.id === 'sports'));
-    // Gear COUNT changes with the chassis (5, 6 or 7 here), so the gate has to
-    // be rebuilt or the lever would offer gears the gearbox does not have.
     $('vehicle').onchange = e => { sim.setVehicle(e.target.value); sync(); buildGateUI(); };
 
-    /* ---- presets -------------------------------------------------------
-       The picker lists the sixteen built-ins plus anything saved in this
-       browser, and selecting one loads the WHOLE sound — engine, mix, tone,
-       EQ, space. That is the point of the format: a preset is not "an engine",
-       it is everything you would have had to dial in by hand. */
+    /* ---- presets: picker ---- */
     const STORE = 'engine-sim/presets/v2';
-    const readStore = () => {
-      try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; }
-      catch (e) { return {}; }
-    };
-    const writeStore = (o) => {
-      try { localStorage.setItem(STORE, JSON.stringify(o)); return true; }
-      catch (e) { return false; }
-    };
+    const readStore = () => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { return {}; } };
+    const writeStore = (o) => { try { localStorage.setItem(STORE, JSON.stringify(o)); return true; } catch (e) { return false; } };
 
     function refreshPresetList(selectId) {
       const sel = $('engine');
@@ -1779,91 +846,65 @@
       sel.value = want;
       if (!sel.value) sel.value = 'v8cross';
     }
-
     function loadPresetById(key) {
       if (key && key.startsWith('user:')) {
         const rec = readStore()[key.slice(5)];
         if (rec) sim.loadPreset(rec);
-      } else {
-        sim.loadPreset(key);
-      }
+      } else sim.loadPreset(key);
       afterPresetChange();
     }
-
     refreshPresetList('v8cross');
     $('engine').onchange = e => loadPresetById(e.target.value);
 
-    const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-
     function sync() {
-      // The LIVE engine section, not the stock profile — the Tune pane edits
-      // these numbers, and a spec sheet that still showed the factory figures
-      // would be lying about the sound you are listening to.
+      // The LIVE engine section, not the stock profile — the tuning pane edits it.
       const p = sim.getPreset().engine, st = sim.getState();
       $('boostRow').style.display = p.turbo ? '' : 'none';
-      $('hEngine').textContent = p.cylinders + ' CYL · ' + (p.turbo ? 'TURBO' : 'NA');
-      $('hChassis').textContent = st.gearbox.toUpperCase() + ' · ' + st.gearCount + 'SP';
-      $('hVoices').textContent = Object.keys(sim.mix).length + ' BUS · ' + p.banks.length + ' BANK';
-      $('instrR').textContent = (p.redlineRpm / 1000).toFixed(1) + 'k limit';
-      const row = (k, v) => `<div class="r"><span class="k">${k}</span><span class="d"></span><span class="v">${v}</span></div>`;
+      $('hEngine').textContent = p.cylinders + ' cyl · ' + (p.turbo ? 'turbo' : 'NA');
+      $('hChassis').textContent = st.gearbox + ' · ' + st.gearCount + '-speed';
+      $('hVoices').textContent = Object.keys(sim.mix).length + ' buses · ' + p.banks.length + ' bank' + (p.banks.length > 1 ? 's' : '');
+      $('instrR').textContent = st.engineLabel + ' · limit ' + (p.redlineRpm / 1000).toFixed(1) + 'k';
+      const row = (k, v) => `<div class="r"><div class="k">${k}</div><div class="v">${v}</div></div>`;
       $('spec').innerHTML =
         row('Firing order', p.firingOrder.join('-')) +
         row('Bank layout', p.banks.length === 2 ? 'twin, ' + p.banks[0].length + '+' + p.banks[1].length : 'single') +
         row('Idle / limit', p.idleRpm + ' / ' + p.redlineRpm + ' rpm') +
         row('Peak torque', p.peakTorque + ' N·m @ ' + p.peakTorqueRpm) +
-        row('Exhaust bank', p.exhaust.bank.toFixed(2) + ' m') +
-        row('Intake helm.', p.intake.helmholtz + ' Hz');
+        row('Header', p.exhaust.bank.toFixed(2) + ' m') +
+        row('Intake Helmholtz', p.intake.helmholtz + ' Hz');
     }
 
-    /* ---- every control is generated from PRESET_SCHEMA --------------------
-       Not a style choice. The page used to hand-write one <input> and one
-       binding per parameter, which is how two profile fields ended up with no
-       control at all and no way to notice. Walking the schema means a parameter
-       added in presets.js appears here without this file being touched, and the
-       test suite fails if one ever exists that nothing reads.
-
-       Two behaviours the schema decides for us:
-         - `rebuild: true` rows tear down and re-create the wavetables and the
-           waveguide delay lines, so they are DEBOUNCED. The readout still moves
-           with the finger; only the sound waits for you to settle.
-         - `needs: 'turbo'` rows are hidden on a naturally aspirated engine
-           rather than shown doing nothing. */
-    const controls = new Map();      // path -> { input, out, row }
-
-    /* `unit` is the display convention, not decoration — see presets.js.
-       '%' means the value is a proportion and reads x100; a real unit is a
-       suffix and the number is formatted by the row's own step; '' is a bare
-       number. Getting this from the schema rather than per-control is what
-       stops a pipe length reading "175" and a fader reading "0.75". */
+    /* ---- every control is generated from PRESET_SCHEMA ----
+       A parameter added in presets.js appears here without this file being
+       touched. `rebuild` rows are debounced; `needs: 'turbo'` rows hide on NA. */
+    const controls = new Map();
     const fmtValue = (row, v) => {
       if (row.unit === 'dB') return (v > 0 ? '+' : '') + v.toFixed(1).replace(/\.0$/, '');
       if (row.unit === '%') return String(Math.round(v * 100));
       return row.step >= 1 ? String(Math.round(v)) : v.toFixed(row.step >= 0.1 ? 1 : 2);
     };
-    /** The unit belongs to the label, not to every readout. */
     const unitOf = (row) => (row.unit && row.unit !== '%' && row.unit !== 'dB') ? row.unit : '';
+    const paintRange = (inp) => {
+      const lo = +inp.min, hi = +inp.max;
+      inp.style.setProperty('--p', ((+inp.value - lo) / (hi - lo) * 100).toFixed(1) + '%');
+    };
 
     function makeControl(row, parent) {
       const el = document.createElement('div');
       el.className = 'ctl';
-      el.innerHTML = '<span class="lbl"></span>' +
-        `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}">` +
-        '<span class="val"></span>';
+      el.innerHTML = '<span class="lbl"></span><span class="val"></span>' +
+        `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}" aria-label="${row.label}">`;
       const lbl = el.querySelector('.lbl');
       lbl.textContent = row.label;
       const u = unitOf(row);
-      if (u) {
-        const tag = document.createElement('u');
-        tag.textContent = u;
-        lbl.appendChild(tag);
-      }
+      if (u) { const tag = document.createElement('u'); tag.textContent = u; lbl.appendChild(tag); }
       const inp = el.querySelector('input'), out = el.querySelector('.val');
       el.title = row.label + (u ? ' (' + u + ')' : '') + ' — ' + row.path;
-
       let timer = 0;
       const push = () => sim.setParam(row.path, +inp.value);
       inp.oninput = () => {
         out.textContent = fmtValue(row, +inp.value);
+        paintRange(inp);
         if (!row.rebuild) { push(); return; }
         clearTimeout(timer);
         timer = setTimeout(push, 130);
@@ -1872,123 +913,106 @@
       controls.set(row.path, { input: inp, out, row, el });
     }
 
-    /** Build the controls for one group into a container, two columns. */
-    function buildGroup(groupId, container, { note = true } = {}) {
+    function buildGroup(groupId, container) {
       const rows = PRESET_SCHEMA.filter(r => r.group === groupId);
       if (!rows.length) return;
       const g = PRESET_GROUPS.find(x => x.id === groupId);
       const box = document.createElement('div');
+      box.className = 'card';
       box.dataset.group = groupId;
-      if (g && note) {
-        const h = document.createElement('div');
-        h.className = 'lbl';
-        h.style.cssText = 'display:block;margin:0 0 9px';
-        if (container.children.length) h.style.marginTop = '18px';
-        h.textContent = g.label;
-        box.appendChild(h);
-      }
+      if (g) box.innerHTML = `<h4>${g.label}</h4><div class="note"></div>`;
+      if (g) box.querySelector('.note').textContent = g.note;
       for (const r of rows) makeControl(r, box);
-      if (g && g.note && note) {
-        const n = document.createElement('div');
-        n.className = 'note';
-        n.textContent = g.note;
-        box.appendChild(n);
-      }
       container.appendChild(box);
     }
-
-    // Tune: the machine. Two columns, split so neither runs long.
     {
       const left = document.createElement('div'), right = document.createElement('div');
       $('tune').append(left, right);
-      buildGroup('engine', left);
-      buildGroup('pulse', left);
-      buildGroup('exhaust', right);
-      buildGroup('intake', right);
-      buildGroup('turbo', right);
+      buildGroup('engine', left); buildGroup('pulse', left);
+      buildGroup('exhaust', right); buildGroup('intake', right); buildGroup('turbo', right);
     }
-    // Voice mix.
-    {
-      const left = document.createElement('div'), right = document.createElement('div');
-      $('mix').append(left, right);
-      const rows = PRESET_SCHEMA.filter(r => r.group === 'mix');
-      rows.forEach((r, i) => makeControl(r, i % 2 ? right : left));
-    }
-    // Tone, and the space controls on the FX pane.
-    {
-      const left = document.createElement('div'), right = document.createElement('div');
-      $('tonePane').append(left, right);
-      const rows = PRESET_SCHEMA.filter(r => r.group === 'tone');
-      rows.forEach((r, i) => makeControl(r, i < 2 ? left : right));
-      buildGroup('fx', $('fxPane'), { note: false });
-    }
+    for (const r of PRESET_SCHEMA.filter(r => r.group === 'mix')) makeControl(r, $('mix'));
+    for (const r of PRESET_SCHEMA.filter(r => r.group === 'tone')) makeControl(r, $('tonePane'));
+    for (const r of PRESET_SCHEMA.filter(r => r.group === 'fx')) makeControl(r, $('fxPane'));
 
-    /* equaliser — vertical faders, but the same schema rows as everything else,
-       so a band added in presets.js appears here too. */
+    /* equaliser — vertical faders from the same schema rows */
     EQ.BANDS.forEach((b, i) => {
       const row = PRESET_SCHEMA.find(r => r.path === 'eq.' + i);
       if (!row) return;
       const d = document.createElement('div');
       d.className = 'eqb';
       d.innerHTML = '<span class="n">0</span>' +
-        `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}" value="0">` +
+        `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}" value="0" aria-label="${row.label}">` +
         `<span class="f">${b.f >= 1000 ? (b.f / 1000) + 'k' : b.f}</span><span class="t">${b.label}</span>`;
       const inp = d.querySelector('input'), num = d.querySelector('.n');
-      inp.oninput = () => {
-        sim.setParam(row.path, +inp.value);
-        num.textContent = (+inp.value).toFixed(1).replace(/\.0$/, '');
-      };
+      inp.oninput = () => { sim.setParam(row.path, +inp.value); num.textContent = (+inp.value).toFixed(1).replace(/\.0$/, ''); };
       $('eq').appendChild(d);
-      controls.set(row.path, { input: inp, out: num, row: row, el: d, eq: true });
+      controls.set(row.path, { input: inp, out: num, row, el: d, eq: true });
     });
     $('eqFlat').onclick = () => { for (let i = 0; i < 5; i++) sim.setParam('eq.' + i, 0); syncControls(); };
-    $('fxOff').onclick = () => {
-      sim.setParam('fx.reverbMix', 0);
-      sim.setParam('fx.width', 0);
-      syncControls();
-    };
+    $('fxOff').onclick = () => { sim.setParam('fx.reverbMix', 0); sim.setParam('fx.width', 0); syncControls(); };
 
-    /** Pull every control back from the sim. Called after anything that can
-        change more than one parameter at once — loading a preset, mostly. */
+    /* ---- live inputs, generated from EngineSim.inputs() ---- */
+    const inputEls = new Map();
+    for (const r of EngineSim.inputs()) {
+      const d = document.createElement('div');
+      d.className = 'inp';
+      d.innerHTML = `<div class="t"><b></b><span>0</span></div><p></p>` +
+        `<input type="range" min="0" max="1" step="0.01" value="${r.default}" aria-label="${r.label}">`;
+      d.querySelector('b').textContent = r.label;
+      d.querySelector('p').textContent = r.note;
+      const inp = d.querySelector('input'), out = d.querySelector('.t span');
+      inp.oninput = () => { sim.setInput(r.id, +inp.value); out.textContent = Math.round(inp.value * 100); paintRange(inp); };
+      paintRange(inp);
+      $('inputs').appendChild(d);
+      inputEls.set(r.id, { inp, out });
+    }
+    const SCENES = [
+      ['Clean', { strain: 0, aggression: 0, roughness: 0, distance: 0, environment: 0 }],
+      ['Hill climb', { strain: 0.8, aggression: 0.2, roughness: 0, distance: 0, environment: 0 }],
+      ['Track day', { strain: 0.3, aggression: 1, roughness: 0, distance: 0.08, environment: 0 }],
+      ['Tunnel run', { strain: 0.2, aggression: 0.8, roughness: 0, distance: 0.05, environment: 1 }],
+      ['Fly-by', { strain: 0.1, aggression: 0.5, roughness: 0, distance: 0.7, environment: 0 }],
+      ['Tired engine', { strain: 0.3, aggression: 0, roughness: 0.8, distance: 0, environment: 0 }],
+    ];
+    for (const [name, vals] of SCENES) {
+      const b = document.createElement('button');
+      b.className = 'btn sm';
+      b.textContent = name;
+      b.onclick = () => {
+        sim.setInputs(vals);
+        for (const x of $('scenes').children) x.classList.toggle('on', x === b);
+        syncInputs();
+      };
+      $('scenes').appendChild(b);
+    }
+    $('scenes').firstChild.classList.add('on');
+    function syncInputs() {
+      const v = sim.getInputs();
+      for (const [id, e] of inputEls) { e.inp.value = v[id]; e.out.textContent = Math.round(v[id] * 100); paintRange(e.inp); }
+    }
+
     function syncControls() {
       const preset = sim.getPreset();
       const hasTurbo = !!preset.engine.turbo;
       for (const [path, c] of controls) {
-        if (c.row.needs === 'turbo') {
-          c.el.style.display = hasTurbo ? '' : 'none';
-          if (!hasTurbo) continue;
-        }
+        if (c.row.needs === 'turbo') { c.el.style.display = hasTurbo ? '' : 'none'; if (!hasTurbo) continue; }
         const v = sim.getParam(path);
         if (v == null) continue;
         c.input.value = v;
+        if (!c.eq) paintRange(c.input);
         c.out.textContent = c.eq ? v.toFixed(1).replace(/\.0$/, '') : fmtValue(c.row, v);
       }
-      // The whole turbo group heading goes with its controls.
-      for (const box of document.querySelectorAll('[data-group="turbo"]')) {
-        box.style.display = hasTurbo ? '' : 'none';
-      }
-      $('presetName').textContent = preset.label + '  ·  ' + preset.id;
+      for (const box of document.querySelectorAll('[data-group="turbo"]')) box.style.display = hasTurbo ? '' : 'none';
+      $('presetName').textContent = preset.label + ' · ' + preset.id;
       $('pName').value = preset.label;
     }
+    function afterPresetChange() { syncControls(); drawOrders(); sync(); $('pJSON').value = sim.exportPreset(); }
 
-    /** Everything that has to happen when the loaded sound changes. */
-    function afterPresetChange() {
-      syncControls();
-      drawOrders();
-      sync();
-      $('pJSON').value = sim.exportPreset();
-    }
-
-    /* ---- preset pane ---------------------------------------------------- */
-    const slug = (t) => String(t).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '').slice(0, 48) || 'preset';
+    /* ---- preset pane ---- */
+    const slug = (t) => String(t).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'preset';
     const status = (msg) => { $('pStatus').textContent = msg; };
-
-    $('pName').oninput = () => {
-      sim.presetLabel = $('pName').value || sim.presetLabel;
-      $('presetName').textContent = sim.presetLabel + '  ·  ' + sim.presetId;
-    };
-
+    $('pName').oninput = () => { sim.presetLabel = $('pName').value || sim.presetLabel; $('presetName').textContent = sim.presetLabel + ' · ' + sim.presetId; };
     $('pSave').onclick = () => {
       const label = ($('pName').value || '').trim() || 'Untitled';
       const id = slug(label);
@@ -2000,9 +1024,8 @@
       sim.loadPreset(preset);
       refreshPresetList('user:' + id);
       afterPresetChange();
-      status('Saved as "' + label + '". It is in the picker under "Saved here".');
+      status('Saved as "' + label + '". It is in the Sound picker under "Saved here".');
     };
-
     $('pDelete').onclick = () => {
       const key = $('engine').value;
       if (!key.startsWith('user:')) return status('That is a stock preset — nothing to delete.');
@@ -2014,7 +1037,6 @@
       loadPresetById('v8cross');
       status('Deleted "' + id + '".');
     };
-
     $('pRevert').onclick = () => {
       const id = sim.engineId;
       sim.loadPreset(builtinPreset(id));
@@ -2022,7 +1044,6 @@
       afterPresetChange();
       status('Reverted to the stock ' + id + ' preset.');
     };
-
     $('pDownload').onclick = () => {
       const preset = sim.getPreset();
       const blob = new Blob([presetToJSON(preset)], { type: 'application/json' });
@@ -2033,21 +1054,11 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       status('Downloaded ' + a.download + '.');
     };
-
     $('pCopy').onclick = async () => {
       const text = sim.exportPreset();
-      try {
-        await navigator.clipboard.writeText(text);
-        status('Preset copied to the clipboard.');
-      } catch (e) {
-        // Clipboard access is refused on an insecure origin, which is exactly
-        // where this gets developed. Fall back to selecting it.
-        $('pJSON').value = text;
-        $('pJSON').select();
-        status('Clipboard refused — the text is selected, copy it by hand.');
-      }
+      try { await navigator.clipboard.writeText(text); status('Preset copied to the clipboard.'); }
+      catch (e) { $('pJSON').value = text; $('pJSON').select(); status('Clipboard refused — the text is selected, copy it by hand.'); }
     };
-
     $('pImport').onclick = () => $('pFile').click();
     $('pFile').onchange = async (ev) => {
       const file = ev.target.files && ev.target.files[0];
@@ -2060,7 +1071,6 @@
       afterPresetChange();
       status('Loaded "' + preset.label + '" from ' + file.name + '.');
     };
-
     $('pApply').onclick = () => {
       const { preset, error } = presetFromJSON($('pJSON').value);
       if (error) return status('Could not apply — ' + error);
@@ -2070,15 +1080,13 @@
     };
     $('pRefresh').onclick = () => { $('pJSON').value = sim.exportPreset(); status('Refreshed from the live sound.'); };
 
-    /* transport */
+    /* ---- keyboard ---- */
     const keys = new Set();
     const HANDLED = ['w', 'a', 's', 'd', 'q', 'e', 'c', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
     addEventListener('keydown', ev => {
       const k = ev.key.toLowerCase();
-      // Guard BEFORE preventDefault, not after: space on a focused button or arrow
-      // keys on a focused slider are that control's input, and swallowing them
-      // makes the panel feel broken.
-      if (ev.repeat || /^(input|select|button)$/i.test(ev.target.tagName)) return;
+      // Guard BEFORE preventDefault: space on a button, arrows on a slider are that control's input.
+      if (ev.repeat || /^(input|select|button|textarea)$/i.test(ev.target.tagName)) return;
       if (HANDLED.includes(k)) ev.preventDefault();
       keys.add(k);
       if (k === 'e' || k === 'arrowright') sim.shiftUp();
@@ -2090,36 +1098,33 @@
     addEventListener('keyup', ev => keys.delete(ev.key.toLowerCase()));
     addEventListener('blur', () => keys.clear());
 
-    /* Ignition.
-       start() is async — it awaits ctx.resume(), which a browser will reject if it
-       does not consider this a user gesture. The old version neither awaited it nor
-       caught it, so a rejection left the button reading "Shutdown" over a sim that
-       was not running, with nothing on screen to say so. */
+    /* ---- ignition ----
+       start() awaits ctx.resume(), which a browser rejects outside a gesture;
+       the button always shows what is actually true. */
     let powerBusy = false;
-    async function togglePower() {
-      if (powerBusy) return;                 // double-tap of SPACE while resuming
+    function paintPower() {
       const b = $('power');
+      b.classList.toggle('running', sim.running);
+      b.innerHTML = '<i class="dot"></i>' + (sim.running ? 'Stop engine' : 'Start engine');
+    }
+    async function togglePower() {
+      if (powerBusy) return;
       powerBusy = true;
       try {
-        if (sim.running) {
-          sim.stop();
-          b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
-          $('status').textContent = 'STOPPED';
-        } else {
-          b.disabled = true;
-          $('status').textContent = 'STARTING';
+        if (sim.running) { sim.stop(); $('status').textContent = 'stopped'; }
+        else {
+          $('power').disabled = true;
+          $('status').textContent = 'starting';
           await sim.start();
-          b.innerHTML = '<i class="dot"></i>Shutdown'; b.classList.remove('pri');
-          $('status').textContent = 'RUNNING';
+          $('status').textContent = 'running';
         }
       } catch (err) {
-        // Leave the button showing what is actually true.
-        b.innerHTML = '<i class="dot"></i>Ignition'; b.classList.add('pri');
-        $('status').textContent = 'AUDIO BLOCKED — CLICK IGNITION';
+        $('status').textContent = 'audio blocked — click start';
         console.error('EngineSim.start() failed:', err);
       } finally {
-        b.disabled = false;
+        $('power').disabled = false;
         powerBusy = false;
+        paintPower();
       }
     }
     function setAuto(on) {
@@ -2131,6 +1136,7 @@
       sim.setPerspective(m);
       $('pExt').classList.toggle('on', m === 'exterior');
       $('pInt').classList.toggle('on', m === 'interior');
+      syncControls();
     }
     $('power').onclick = togglePower;
     $('autoBtn').onclick = () => setAuto(true);
@@ -2139,29 +1145,40 @@
     $('dn').onclick = () => sim.shiftDown();
     $('pExt').onclick = () => setPos('exterior');
     $('pInt').onclick = () => setPos('interior');
-    $('status').textContent = 'AWAITING GESTURE';
-    // Derived, so adding a turbocharged profile never leaves this hint stale.
-    $('turboHint').textContent = 'turbo: ' + EngineSim.engines()
-      .filter(e => e.turbo).map(e => e.id.toUpperCase()).join(' · ');
+    $('status').textContent = 'press start';
+    $('turboHint').textContent = 'turbocharged: ' + EngineSim.engines().filter(e => e.turbo).map(e => e.label).join(' · ');
     sync();
 
-    /* =====================================================================
-       DRIVE MODE
-       =====================================================================
-       An H-pattern gate you actually drag through, and two pedals. Everything
-       is pointer-event based rather than touch-event based, so one code path
-       serves finger, stylus and mouse — and, critically, `pointerId` tracking
-       lets both thumbs work at once. A touch-event implementation that assumed
-       one contact would drop the throttle the moment you moved the shifter.
-       ===================================================================== */
+    /* ---- hold-to-rev buttons: the console's own pedals, for a mouse.
+       Pressing one also starts the engine — the first thing anybody does on
+       this page is try to make a noise. */
+    const hold = { gas: 0, brake: 0 };
+    function bindHold(id, key) {
+      const el = $(id), fill = el.querySelector('.fillh');
+      let pid = null;
+      const set = v => { hold[key] = v; fill.style.transform = `scaleX(${v})`; el.classList.toggle('down', v > 0); };
+      el.addEventListener('pointerdown', ev => {
+        if (pid !== null) return;
+        ev.preventDefault();
+        pid = ev.pointerId;
+        set(1);
+        if (!sim.running && key === 'gas') togglePower();
+        try { el.setPointerCapture(ev.pointerId); } catch (e) { /* no capture */ }
+      });
+      const release = ev => { if (ev.pointerId === pid) { pid = null; set(0); } };
+      el.addEventListener('pointerup', release);
+      el.addEventListener('pointercancel', release);
+      addEventListener('blur', () => { pid = null; set(0); });
+    }
+    bindHold('holdGas', 'gas');
+    bindHold('holdBrk', 'brake');
 
-    /* ---- gear gate ------------------------------------------------------
-       Geometry and the constraint itself live in src/gate.js so they can be
-       unit tested in Node; everything here is rendering and wiring. */
+    /* =====================================================================
+       DRIVE MODE — gate geometry lives in src/gate.js; this is wiring.
+       ===================================================================== */
     let geom = buildGate(6);
     let gateGears = 0;
     const knob = { x: 50, y: GATE_MID, col: -1, grabbed: false, pid: null };
-
     function buildGateUI() {
       const n = sim.getState().gearCount;
       if (n === gateGears) return;
@@ -2176,14 +1193,12 @@
         if (geom.slots.some(s => s.col === i && s.y === GATE_BOT))
           path.push(`<line class="slot" x1="${c}" y1="${GATE_BOT}" x2="${c}" y2="${GATE_MID}" stroke-width="${w}"/>`);
       });
-      const nums = geom.slots.map(s =>
-        `<text class="gnum" data-g="${s.gear}" x="${s.x}" y="${s.y + (s.y === GATE_TOP ? -12 : 12)}">${s.gear}</text>`);
+      const nums = geom.slots.map(s => `<text class="gnum" data-g="${s.gear}" x="${s.x}" y="${s.y + (s.y === GATE_TOP ? -12 : 12)}">${s.gear}</text>`);
       nums.push(`<text class="gnum" data-g="0" x="${(geom.cols[0] + last) / 2}" y="${GATE_MID - GATE_CHAN - 6}">N</text>`);
       $('gateSlots').innerHTML = path.join('');
       $('gateNums').innerHTML = nums.join('');
       gateSnapTo(sim.getState().gear);
     }
-
     function gateRender() {
       $('gateKnob').setAttribute('cx', knob.x);
       $('gateKnob').setAttribute('cy', knob.y);
@@ -2193,15 +1208,7 @@
       const g = sim.getState().gear;
       for (const t of $('gateNums').children) t.classList.toggle('lit', +t.dataset.g === g);
     }
-
-    function gateSnapTo(gear) {
-      Object.assign(knob, gatePosition(gear, geom));
-      gateRender();
-    }
-
-    /* Client coords -> the SVG's own 0-100 space. preserveAspectRatio letterboxes
-       the square viewBox inside the element, so the offset has to be backed out
-       or the lever lags the finger. */
+    function gateSnapTo(gear) { Object.assign(knob, gatePosition(gear, geom)); gateRender(); }
     function gatePoint(ev) {
       const r = $('gate').getBoundingClientRect();
       const side = Math.min(r.width, r.height);
@@ -2209,7 +1216,6 @@
       const oy = r.top + (r.height - side) / 2;
       return { x: (ev.clientX - ox) / side * 100, y: (ev.clientY - oy) / side * 100 };
     }
-
     function gateRelease() {
       const gate = $('gate');
       gate.classList.remove('grabbed');
@@ -2217,12 +1223,8 @@
       const target = gateSelection(knob, geom);
       const cur = sim.getState().gear;
       if (target !== cur) {
-        // Moving the lever means you are driving it yourself.
         if (sim.getState().auto) setAuto(false);
         if (sim.setGear(target) === false) {
-          // The gearbox refused — it would over-rev, or a shift is already in
-          // flight. Let the lever spring back: a gate that will not take the
-          // gear is the honest feedback, and it is what a real one does.
           gate.classList.add('refuse');
           setTimeout(() => gate.classList.remove('refuse'), 260);
           gateSnapTo(cur);
@@ -2231,7 +1233,6 @@
       }
       gateSnapTo(target);
     }
-
     {
       const gate = $('gate');
       gate.addEventListener('pointerdown', ev => {
@@ -2240,10 +1241,7 @@
         knob.pid = ev.pointerId;
         knob.grabbed = true;
         gate.classList.add('grabbed');
-        // Capture LAST and guarded. setPointerCapture throws NotFoundError if
-        // the pointer is no longer active — which happens for real when a touch
-        // ends between dispatch and handling — and an exception here would
-        // abort the rest of the handler, leaving the lever grabbed but unmoved.
+        // Capture LAST and guarded: it throws if the pointer is already gone.
         try { gate.setPointerCapture(ev.pointerId); } catch (e) { /* no capture */ }
         Object.assign(knob, moveGate(knob, gatePoint(ev), geom));
         gateRender();
@@ -2258,45 +1256,29 @@
       gate.addEventListener('pointerup', up);
       gate.addEventListener('pointercancel', up);
     }
-
-    /* ---- pedals ---------------------------------------------------------
-       Held, not tapped. `pointerId` per pedal so the two are independent and
-       neither cares what the other thumb is doing. */
     const pedal = { gas: 0, brake: 0 };
     function bindPedal(id, key) {
       const el = $(id), fill = el.querySelector('.fill');
       let pid = null;
-      const set = v => {
-        pedal[key] = v;
-        fill.style.height = (v * 100) + '%';
-        el.classList.toggle('down', v > 0);
-      };
+      const set = v => { pedal[key] = v; fill.style.height = (v * 100) + '%'; el.classList.toggle('down', v > 0); };
       el.addEventListener('pointerdown', ev => {
         if (pid !== null) return;
         ev.preventDefault();
         pid = ev.pointerId;
         set(1);
-        // Guarded, and after the pedal is already down — see the gate handler.
         try { el.setPointerCapture(ev.pointerId); } catch (e) { /* no capture */ }
       });
       const release = ev => { if (ev.pointerId === pid) { ev.preventDefault(); pid = null; set(0); } };
       el.addEventListener('pointerup', release);
       el.addEventListener('pointercancel', release);
-      // Losing the window mid-press would otherwise leave the throttle stuck on.
       addEventListener('blur', () => { pid = null; set(0); });
       return set;
     }
     bindPedal('pedGas', 'gas');
     bindPedal('pedBrake', 'brake');
-
-    /* ---- paddles, bar ---- */
     const paddle = (id, fn) => {
       const el = $(id);
-      el.addEventListener('pointerdown', ev => {
-        ev.preventDefault();
-        el.classList.add('down');
-        fn();
-      });
+      el.addEventListener('pointerdown', ev => { ev.preventDefault(); el.classList.add('down'); fn(); });
       const up = () => el.classList.remove('down');
       el.addEventListener('pointerup', up);
       el.addEventListener('pointercancel', up);
@@ -2305,87 +1287,279 @@
     paddle('dvUp', () => { if (sim.getState().auto) setAuto(false); sim.shiftUp(); });
     paddle('dvDown', () => { if (sim.getState().auto) setAuto(false); sim.shiftDown(); });
 
+    let wakeLock = null;
     function setDriving(on) {
       document.body.classList.toggle('driving', on);
       if (on) {
         buildGateUI();
         gateSnapTo(sim.getState().gear);
-        // A phone will happily sleep mid-drive otherwise. Best-effort only.
-        if (navigator.wakeLock && !wakeLock) {
-          navigator.wakeLock.request('screen').then(w => { wakeLock = w; }).catch(() => { });
-        }
+        if (navigator.wakeLock && !wakeLock) navigator.wakeLock.request('screen').then(w => { wakeLock = w; }).catch(() => { });
       } else {
         pedal.gas = 0; pedal.brake = 0;
         if (wakeLock) { wakeLock.release().catch(() => { }); wakeLock = null; }
       }
     }
-    let wakeLock = null;
     $('driveBtn').onclick = () => setDriving(true);
-    // Deep link straight into the cockpit: ?drive. Handy on a phone (save it to
-    // the home screen and it opens ready to drive) and it is what the layout
-    // screenshots are taken through.
     if (/[?&]drive\b/.test(location.search)) setDriving(true);
     $('dvExit').onclick = () => setDriving(false);
     $('dvPower').onclick = togglePower;
     $('dvAuto').onclick = () => setAuto(!sim.getState().auto);
     $('dvSwap').onclick = () => $('drive').classList.toggle('swap');
-
-    // Rev LEDs, built once.
     $('dvLeds').innerHTML = Array.from({ length: 20 }, () => '<i></i>').join('');
     const ledEls = [...$('dvLeds').children];
-
     function driveHud(s) {
       $('dvRpm').textContent = Math.round(s.rpm);
       $('dvRpmCell').classList.toggle('hot', s.rpm > s.redline * 0.92);
       $('dvKmh').textContent = Math.round(s.speedKmh);
       $('dvGear').textContent = s.shiftPhase ? '–' : (s.gear === 0 ? 'N' : s.gear);
       $('dvBoost').textContent = s.turbo ? Math.round((s.boost || 0) * 100) : '—';
-      const frac = s.redline ? s.rpm / s.redline : 0;
-      const lit = Math.round(frac * ledEls.length);
+      const lit = Math.round((s.redline ? s.rpm / s.redline : 0) * ledEls.length);
       for (let i = 0; i < ledEls.length; i++) {
-        const on = i < lit;
-        ledEls[i].classList.toggle('on', on);
+        ledEls[i].classList.toggle('on', i < lit);
         ledEls[i].classList.toggle('red', i >= ledEls.length - 3);
       }
       $('dvAuto').classList.toggle('on', s.auto);
       $('dvTag').textContent = s.engineLabel + ' · ' + s.vehicleLabel;
-      $('dvPower').textContent = sim.running ? 'Shutdown' : 'Ignition';
+      $('dvPower').textContent = sim.running ? 'Stop' : 'Start';
       $('dvPower').classList.toggle('pri', !sim.running);
-      // The gearbox may shift itself (auto mode, or an auto-upshift), so the
-      // lever has to follow rather than being the only source of truth.
-      if (!knob.grabbed && !s.shiftPhase && gateSelection(knob, geom) !== s.gear) {
-        gateSnapTo(s.gear);
+      if (!knob.grabbed && !s.shiftPhase && gateSelection(knob, geom) !== s.gear) gateSnapTo(s.gear);
+    }
+
+    /* =====================================================================
+       VISUALS
+       ===================================================================== */
+
+    /* ---- background: light orbs that breathe with the engine ----
+       Drawn at a fraction of the screen's resolution — it is all soft light,
+       so nobody can see the difference and the GPU never notices it. */
+    const bg = $('bg'), bctx = bg.getContext('2d');
+    const BG_SCALE = 0.35;
+    function sizeBg() { bg.width = Math.max(64, innerWidth * BG_SCALE | 0); bg.height = Math.max(64, innerHeight * BG_SCALE | 0); }
+    sizeBg();
+    addEventListener('resize', () => { sizeBg(); sizeCanvases(); });
+    const orbs = Array.from({ length: 6 }, (_, i) => ({
+      fx: 0.05 + 0.04 * i, fy: 0.07 + 0.03 * ((i * 7) % 5), ph: i * 1.7, r: 0.38 + 0.08 * (i % 3), band: i % 3,
+    }));
+    const sparks = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random(), v: 0.2 + Math.random(), s: Math.random() }));
+    let tBg = 0, heat = 0;
+    const lerp = (a, b, t) => a + (b - a) * t;
+    function hueFor(h, shift) {
+      // cold blue (210) → violet (270) → hot orange (20, via 380) as the revs climb
+      return (lerp(205, 375, h) + shift) % 360;
+    }
+    function drawBg(dt, s) {
+      const W = bg.width, H = bg.height;
+      tBg += dt * (0.35 + 0.9 * heat);
+      const rn = s.redline ? clamp(s.rpm / s.redline, 0, 1) : 0;
+      heat += ((sim.running ? rn : 0) - heat) * Math.min(1, dt * 2.5);
+      bctx.globalCompositeOperation = 'source-over';
+      bctx.fillStyle = `hsl(${hueFor(heat, 20)}, 40%, ${3 + 2.5 * audio.lowS}%)`;
+      bctx.fillRect(0, 0, W, H);
+      bctx.globalCompositeOperation = 'lighter';
+      const bands = [audio.lowS, audio.midS, audio.highS];
+      for (const o of orbs) {
+        const e = bands[o.band];
+        const x = W * (0.5 + 0.42 * Math.sin(tBg * o.fx * 6 + o.ph));
+        const y = H * (0.5 + 0.38 * Math.cos(tBg * o.fy * 6 + o.ph * 1.3));
+        const r = Math.max(W, H) * o.r * (0.7 + 0.55 * e + 0.12 * audio.level);
+        const hue = hueFor(heat, o.band * 38 - 30);
+        const g = bctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `hsla(${hue}, 90%, ${30 + 16 * e}%, ${0.13 + 0.30 * e})`);
+        g.addColorStop(0.45, `hsla(${hue + 20}, 85%, 26%, ${0.05 + 0.12 * e})`);
+        g.addColorStop(1, 'hsla(0,0%,0%,0)');
+        bctx.fillStyle = g;
+        bctx.fillRect(0, 0, W, H);
+      }
+      // the glare: a slow diagonal sweep of light, brighter under load
+      const gx = ((tBg * 0.06) % 1.6 - 0.3) * W;
+      const lg = bctx.createLinearGradient(gx - W * 0.25, 0, gx + W * 0.25, H);
+      const ga = 0.04 + 0.12 * audio.midS;
+      lg.addColorStop(0, 'rgba(255,255,255,0)');
+      lg.addColorStop(0.5, `rgba(255,255,255,${ga})`);
+      lg.addColorStop(1, 'rgba(255,255,255,0)');
+      bctx.fillStyle = lg;
+      bctx.fillRect(0, 0, W, H);
+      // sparks: the top end, rising
+      bctx.fillStyle = `hsla(${hueFor(heat, 40)}, 100%, 80%, ${0.25 + 0.75 * audio.highS})`;
+      for (const p of sparks) {
+        p.y -= dt * p.v * (0.03 + 0.25 * audio.highS + 0.1 * heat);
+        if (p.y < -0.02) { p.y = 1.02; p.x = Math.random(); }
+        const sz = (0.6 + 1.6 * p.s) * (0.5 + audio.highS * 1.8);
+        bctx.fillRect(p.x * W, p.y * H, sz, sz);
+      }
+      document.documentElement.style.setProperty('--pulse', (audio.lowS * 1.4).toFixed(3));
+    }
+
+    /* ---- tachometer: a 270° neon sweep ---- */
+    const tach = $('tach'), tc = tach.getContext('2d');
+    const scope = $('scope'), sc = scope.getContext('2d');
+    const orders = $('orders'), oc = orders.getContext('2d');
+    function fit(cv) {
+      const r = cv.getBoundingClientRect();
+      const w = Math.max(10, r.width), h = Math.max(10, r.height);
+      cv.width = Math.round(w * DPR); cv.height = Math.round(h * DPR);
+      cv.getContext('2d').setTransform(DPR, 0, 0, DPR, 0, 0);
+      return { w, h };
+    }
+    let TS = { w: 400, h: 370 }, SS = { w: 600, h: 150 }, OS = { w: 800, h: 170 };
+    function sizeCanvases() { TS = fit(tach); SS = fit(scope); OS = fit(orders); drawOrders(); }
+
+    let needle = 0;
+    function drawTach(s, dt) {
+      const { w: W, h: H } = TS;
+      tc.clearRect(0, 0, W, H);
+      const cx = W / 2, cy = H * 0.53, R = Math.min(W, H * 1.05) * 0.43;
+      const max = Math.ceil((s.redline + 500) / 1000) * 1000;
+      const A0 = Math.PI * 0.75, SPAN = Math.PI * 1.5;
+      const ang = v => A0 + SPAN * clamp(v / max, 0, 1);
+      needle += (s.rpm - needle) * Math.min(1, dt * 18);
+      const hot = s.rpm > s.redline * 0.92;
+
+      // track
+      tc.lineCap = 'round';
+      tc.lineWidth = R * 0.075;
+      tc.strokeStyle = 'rgba(255,255,255,.07)';
+      tc.beginPath(); tc.arc(cx, cy, R, A0, A0 + SPAN); tc.stroke();
+      // red zone
+      tc.strokeStyle = 'rgba(255,80,60,.28)';
+      tc.beginPath(); tc.arc(cx, cy, R, ang(s.redline), A0 + SPAN); tc.stroke();
+      // live sweep with glow
+      const g = tc.createLinearGradient(cx - R, cy, cx + R, cy - R);
+      g.addColorStop(0, '#42c6ff'); g.addColorStop(0.55, '#8b6bff'); g.addColorStop(1, '#ff5a36');
+      tc.save();
+      tc.shadowColor = hot ? 'rgba(255,90,54,.95)' : 'rgba(139,107,255,.9)';
+      tc.shadowBlur = 18 + 30 * audio.lowS;
+      tc.strokeStyle = g;
+      tc.beginPath(); tc.arc(cx, cy, R, A0, ang(Math.max(needle, 1))); tc.stroke();
+      tc.restore();
+
+      // ticks + numerals
+      for (let k = 0; k <= max; k += 500) {
+        const a = ang(k), c = Math.cos(a), sn = Math.sin(a), major = k % 1000 === 0, red = k >= s.redline;
+        const r1 = R * 0.86, r2 = major ? R * 0.77 : R * 0.82;
+        tc.strokeStyle = red ? 'rgba(255,110,80,.9)' : (major ? 'rgba(255,255,255,.75)' : 'rgba(255,255,255,.25)');
+        tc.lineWidth = major ? 2 : 1;
+        tc.beginPath(); tc.moveTo(cx + c * r1, cy + sn * r1); tc.lineTo(cx + c * r2, cy + sn * r2); tc.stroke();
+        if (major) {
+          tc.fillStyle = red ? '#ff8a6a' : 'rgba(240,244,255,.8)';
+          tc.font = `600 ${Math.round(R * 0.085)}px "JetBrains Mono", ui-monospace, monospace`;
+          tc.textAlign = 'center'; tc.textBaseline = 'middle';
+          tc.fillText(k / 1000, cx + c * R * 0.66, cy + sn * R * 0.66);
+        }
+      }
+      // needle
+      const a = ang(needle), c = Math.cos(a), sn = Math.sin(a);
+      tc.save();
+      tc.shadowColor = 'rgba(255,120,80,.9)'; tc.shadowBlur = 14;
+      tc.strokeStyle = '#ffffff'; tc.lineWidth = 3;
+      tc.beginPath(); tc.moveTo(cx + c * R * 0.2, cy + sn * R * 0.2); tc.lineTo(cx + c * R * 0.9, cy + sn * R * 0.9); tc.stroke();
+      tc.restore();
+      tc.fillStyle = 'rgba(255,255,255,.12)';
+      tc.beginPath(); tc.arc(cx, cy, R * 0.2, 0, 7); tc.fill();
+
+      // centre: digits
+      tc.textAlign = 'center'; tc.textBaseline = 'alphabetic';
+      tc.fillStyle = hot || s.limiter ? '#ffb347' : '#f4f6fb';
+      tc.font = `700 ${Math.round(R * 0.22)}px "JetBrains Mono", ui-monospace, monospace`;
+      tc.fillText(Math.round(s.rpm), cx, cy + R * 0.50);
+      tc.fillStyle = 'rgba(226,232,245,.5)';
+      tc.font = `600 ${Math.round(R * 0.06)}px Inter, system-ui, sans-serif`;
+      tc.fillText('RPM', cx, cy + R * 0.61);
+      // gear + speed
+      tc.font = `800 ${Math.round(R * 0.22)}px Inter, system-ui, sans-serif`;
+      tc.fillStyle = '#f4f6fb';
+      tc.fillText(s.shiftPhase ? '–' : (s.gear === 0 ? 'N' : s.gear), cx, cy + R * 0.08);
+      tc.font = `600 ${Math.round(R * 0.07)}px "JetBrains Mono", ui-monospace, monospace`;
+      tc.fillStyle = 'rgba(226,232,245,.6)';
+      tc.fillText(Math.round(s.speedKmh) + ' km/h', cx, cy + R * 0.80);
+    }
+
+    /* ---- live spectrum: log-frequency bars, glowing with the level ---- */
+    function drawScope() {
+      const { w: W, h: H } = SS;
+      sc.clearRect(0, 0, W, H);
+      sc.fillStyle = 'rgba(0,0,0,.22)'; sc.fillRect(0, 0, W, H);
+      const N = Math.max(24, Math.min(96, W / 7 | 0));
+      const hz = sim.ctx.sampleRate / analyser.fftSize;
+      const f0 = 25, f1 = 12000, bw = W / N;
+      const grad = sc.createLinearGradient(0, H, 0, 0);
+      grad.addColorStop(0, 'rgba(66,198,255,.9)'); grad.addColorStop(0.55, 'rgba(139,107,255,.95)'); grad.addColorStop(1, 'rgba(255,90,54,1)');
+      sc.fillStyle = grad;
+      sc.shadowColor = 'rgba(139,107,255,.8)'; sc.shadowBlur = 10;
+      for (let i = 0; i < N; i++) {
+        const lo = f0 * Math.pow(f1 / f0, i / N), hi = f0 * Math.pow(f1 / f0, (i + 1) / N);
+        let m = 0;
+        for (let k = Math.floor(lo / hz); k <= Math.ceil(hi / hz) && k < fbins.length; k++) m = Math.max(m, fbins[k]);
+        const v = Math.pow(m / 255, 1.6);
+        const h = Math.max(2, v * (H - 18));
+        const x = i * bw + 1.5;
+        sc.beginPath();
+        sc.roundRect ? sc.roundRect(x, H - 14 - h, Math.max(2, bw - 3), h, 2) : sc.rect(x, H - 14 - h, Math.max(2, bw - 3), h);
+        sc.fill();
+      }
+      sc.shadowBlur = 0;
+      sc.fillStyle = 'rgba(226,232,245,.45)';
+      sc.font = '500 10px "JetBrains Mono", ui-monospace, monospace';
+      sc.textAlign = 'center';
+      for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+        const x = W * Math.log(f / f0) / Math.log(f1 / f0);
+        sc.fillText(f >= 1000 ? f / 1000 + 'k' : f, x, H - 2);
       }
     }
 
-    /* loop */
+    /* ---- order spectrum (static per sound) ---- */
+    function drawOrders() {
+      const p = sim.getPreset().engine;
+      const spec = orderSpectrum(p, bankAngles(p, 0), 0.6, 14);
+      const { w: W, h: H } = OS;
+      const padL = 8, padR = 8, base = H - 20;
+      oc.clearRect(0, 0, W, H);
+      oc.strokeStyle = 'rgba(255,255,255,.06)'; oc.lineWidth = 1;
+      for (let i = 1; i <= 4; i++) {
+        const y = Math.round(base - (base - 8) * (i / 4)) + .5;
+        oc.beginPath(); oc.moveTo(padL, y); oc.lineTo(W - padR, y); oc.stroke();
+      }
+      const max = Math.max(...spec.map(s => s.mag)) || 1, bw = (W - padL - padR) / spec.length;
+      spec.forEach((s, i) => {
+        const half = Math.abs(s.order % 1) > 0.01;
+        const h = Math.max(1, (s.mag / max) * (base - 12));
+        const x = padL + i * bw, w = Math.max(2.5, bw - 4);
+        const g = oc.createLinearGradient(0, base - h, 0, base);
+        if (half) { g.addColorStop(0, '#ffb347'); g.addColorStop(1, '#ff5a36'); }
+        else { g.addColorStop(0, 'rgba(200,210,235,.75)'); g.addColorStop(1, 'rgba(120,130,160,.45)'); }
+        oc.fillStyle = g;
+        oc.beginPath();
+        oc.roundRect ? oc.roundRect(x, base - h, w, h, 3) : oc.rect(x, base - h, w, h);
+        oc.fill();
+        if (s.order % 2 === 0) {
+          oc.fillStyle = 'rgba(226,232,245,.5)'; oc.font = '500 10px "JetBrains Mono", ui-monospace, monospace';
+          oc.textAlign = 'center'; oc.fillText(s.order, x + w / 2, H - 5);
+        }
+      });
+      const halfE = spec.filter(s => Math.abs(s.order % 1) > 0.01).reduce((a, s) => a + s.mag * s.mag, 0);
+      const tot = spec.reduce((a, s) => a + s.mag * s.mag, 0);
+      $('ordMeta').textContent = bankAngles(p, 0).map(a => a.toFixed(0) + '°').join(' / ') + ' · half-order ' + (100 * halfE / tot).toFixed(0) + '%';
+    }
+
+    /* ---- loop ---- */
     const PH = ['cut', 'open', 'sync', 'engage', 'lash', 'shuffle'];
     $('phase').innerHTML = PH.map(p => `<span data-p="${p}">${p}</span>`).join('');
     const phEls = [...$('phase').children];
-    let last = performance.now();
-    let lastMeter = 0;
+    let last = performance.now(), lastMeter = 0;
     function frame(now) {
-      const dt = (now - last) / 1000; last = now;
-      // Keyboard and pedals are ORed, so a plugged-in keyboard keeps working
-      // while drive mode is open and neither input starves the other.
-      sim.setThrottle(Math.max(keys.has('w') || keys.has('arrowup') ? 1 : 0, pedal.gas));
-      sim.setBrake(Math.max(keys.has('s') || keys.has('arrowdown') ? 1 : 0, pedal.brake));
+      const dt = Math.min(0.1, (now - last) / 1000); last = now;
+      // Keyboard, hold buttons and drive pedals are ORed so none starves the others.
+      sim.setThrottle(Math.max(keys.has('w') || keys.has('arrowup') ? 1 : 0, pedal.gas, hold.gas));
+      sim.setBrake(Math.max(keys.has('s') || keys.has('arrowdown') ? 1 : 0, pedal.brake, hold.brake));
       sim.update(dt);
       const s = sim.getState();
-
-      // Drive mode owns the whole viewport when it is open, so the console
-      // readouts and the tach are not visible — skip all of that work.
-      if (document.body.classList.contains('driving')) {
-        driveHud(s);
-        return;
-      }
+      readAudio();
+      drawBg(dt, s);
+      if (document.body.classList.contains('driving')) { driveHud(s); return; }
 
       $('rpm').innerHTML = Math.round(s.rpm) + '<s>rpm</s>';
       $('kmh').innerHTML = Math.round(s.speedKmh) + '<s>km/h</s>';
-      // This cell was labelled "Ratio" but displayed the gear NUMBER, which the
-      // instrument already shows. Total ratio (gearbox × final drive) is the thing
-      // the label promises and is genuinely useful: it is what maps road speed to
-      // rpm, so it explains the pitch you are hearing.
+      // Total ratio (gearbox × final drive): it maps road speed to rpm, so it explains the pitch.
       $('ratio').innerHTML = s.gearRatio > 0 ? s.gearRatio.toFixed(2) + '<s>:1</s>' : '—<s>N</s>';
       const slip = Math.round(Math.abs(s.clutchSlip || 0));
       $('slip').innerHTML = slip + '<s>rpm</s>';
@@ -2393,152 +1567,27 @@
       const set = (bar, pc, v) => { $(bar).style.width = (v * 100) + '%'; $(pc).textContent = Math.round(v * 100); };
       set('mThr', 'pThr', s.throttle); set('mBrk', 'pBrk', s.brake); set('mBst', 'pBst', s.boost || 0);
       for (const e of phEls) e.classList.toggle('on', e.dataset.p === s.shiftPhase);
-      // Gain reduction at 60 Hz is a blur and allocates an object per frame for
-      // nothing. 10 Hz is as fast as a meter is readable anyway.
       if (now - lastMeter > 100) {
         lastMeter = now;
         const gr = sim.getReduction();
-        $('dynMeter').textContent =
-          `LOW ${gr.low.toFixed(1)}  MID ${gr.mid.toFixed(1)}  HIGH ${gr.high.toFixed(1)}  dB`;
+        $('dynMeter').textContent = `LOW ${gr.low.toFixed(1)}  MID ${gr.mid.toFixed(1)}  HIGH ${gr.high.toFixed(1)} dB`;
+        $('levelChip').textContent = sim.running ? audio.db.toFixed(0) + ' dBFS' : 'off';
       }
-      drawTach(s);
+      drawTach(s, dt);
+      drawScope();
     }
-
-    /* One bad frame must not kill the render loop — if it did, the whole console
-       would freeze with no indication of why. Log the first failure and keep
-       going; a repeating error is still visible in the console. */
     let frameErr = false;
     function tick(now) {
       requestAnimationFrame(tick);
       try { frame(now); }
-      catch (err) {
-        if (!frameErr) { frameErr = true; console.error('frame() threw:', err); }
-      }
-    }
-    requestAnimationFrame(tick);
-
-    /* ---- instrument ----------------------------------------------------------
-       A true semicircle. The first radial attempt crowded its numerals against the
-       sweep band because the two sat only 8 px apart; here the tick ring, the
-       numeral ring and the sweep band are on clearly separated radii. */
-    const tc = $('tach').getContext('2d');
-    const DPR = Math.min(devicePixelRatio || 1, 2);
-    $('tach').width = 288 * DPR; $('tach').height = 212 * DPR; tc.scale(DPR, DPR);
-
-    const R_TICK = 130, R_NUM = 104, R_BAND = 78;
-    function drawTach(s) {
-      const W = 288, cx = W / 2, cy = 178;
-      tc.clearRect(0, 0, W, 212);
-      const max = s.redline + 500;
-      const A0 = Math.PI, A1 = Math.PI * 2;
-      const ang = v => A0 + (A1 - A0) * Math.min(1, Math.max(0, v / max));
-
-      // ---- graduations: fine 250, major 1000 ----
-      for (let k = 0; k <= max; k += 250) {
-        const a = ang(k), c = Math.cos(a), sn = Math.sin(a);
-        const major = k % 1000 === 0, red = k >= s.redline;
-        const inner = major ? R_TICK - 14 : R_TICK - 7;
-        tc.strokeStyle = red ? (major ? '#e8481f' : 'rgba(232,72,31,.42)')
-          : (major ? '#14161a' : 'rgba(20,22,26,.26)');
-        tc.lineWidth = major ? 1.6 : 1;
-        tc.beginPath();
-        tc.moveTo(cx + c * R_TICK, cy + sn * R_TICK);
-        tc.lineTo(cx + c * inner, cy + sn * inner);
-        tc.stroke();
-        if (major) {
-          tc.fillStyle = red ? '#e8481f' : '#51565d';
-          tc.font = '600 10px ui-monospace,Menlo,monospace';
-          tc.textAlign = 'center'; tc.textBaseline = 'middle';
-          tc.fillText(k / 1000, cx + c * R_NUM, cy + sn * R_NUM);
-        }
-      }
-
-      // ---- sweep band, well inside the numerals ----
-      tc.lineCap = 'butt'; tc.lineWidth = 9;
-      tc.strokeStyle = '#e4e4e0';
-      tc.beginPath(); tc.arc(cx, cy, R_BAND, A0, A1); tc.stroke();
-      tc.strokeStyle = 'rgba(232,72,31,.22)';
-      tc.beginPath(); tc.arc(cx, cy, R_BAND, ang(s.redline), A1); tc.stroke();
-      tc.strokeStyle = s.limiter ? '#e8481f' : '#14161a';
-      tc.beginPath(); tc.arc(cx, cy, R_BAND, A0, ang(Math.max(s.rpm, 1))); tc.stroke();
-
-      // ---- needle ----
-      const a = ang(s.rpm), c = Math.cos(a), sn = Math.sin(a);
-      tc.strokeStyle = '#e8481f'; tc.lineWidth = 2; tc.lineCap = 'round';
-      tc.beginPath();
-      tc.moveTo(cx + c * (R_BAND - 16), cy + sn * (R_BAND - 16));
-      tc.lineTo(cx + c * (R_TICK - 16), cy + sn * (R_TICK - 16));
-      tc.stroke();
-      tc.fillStyle = '#e8481f';
-      tc.beginPath(); tc.arc(cx + c * (R_BAND - 16), cy + sn * (R_BAND - 16), 2.6, 0, 7); tc.fill();
-
-      // ---- digital block, inside the arc ----
-      tc.textAlign = 'center'; tc.textBaseline = 'alphabetic';
-      tc.fillStyle = s.limiter ? '#e8481f' : '#14161a';
-      tc.font = '600 42px ui-monospace,Menlo,monospace';
-      tc.fillText(Math.round(s.rpm), cx, cy - 26);
-      tc.fillStyle = '#8b9097'; tc.font = '600 8.5px ui-monospace,Menlo,monospace';
-      tc.fillText('R P M', cx, cy - 12);
-
-      // ---- gear / speed strip below the arc ----
-      const y = cy + 22;
-      tc.strokeStyle = '#d8d9d4'; tc.lineWidth = 1;
-      tc.beginPath(); tc.moveTo(cx - 96, y - 15.5); tc.lineTo(cx + 96, y - 15.5); tc.stroke();
-      tc.beginPath(); tc.moveTo(cx, y - 15.5); tc.lineTo(cx, y + 9.5); tc.stroke();
-      tc.fillStyle = '#8b9097'; tc.font = '600 8px ui-monospace,Menlo,monospace';
-      tc.textAlign = 'left'; tc.fillText('GEAR', cx - 94, y - 4);
-      tc.textAlign = 'right'; tc.fillText('KM/H', cx + 94, y - 4);
-      tc.fillStyle = '#14161a'; tc.font = '600 20px ui-monospace,Menlo,monospace';
-      tc.textAlign = 'left'; tc.fillText(s.shiftPhase ? '\u2013\u2013' : (s.gear === 0 ? 'N' : s.gear), cx - 56, y + 2);
-      tc.textAlign = 'right'; tc.fillText(Math.round(s.speedKmh), cx + 56, y + 2);
+      catch (err) { if (!frameErr) { frameErr = true; console.error('frame() threw:', err); } }
     }
 
-    /* ---- order spectrum ---- */
-    const oc = $('orders').getContext('2d');
-    $('orders').width = 620 * DPR; $('orders').height = 132 * DPR; oc.scale(DPR, DPR);
-    function drawOrders() {
-      const p = sim.getPreset().engine;
-      const spec = orderSpectrum(p, bankAngles(p, 0), 0.6, 14);
-      const W = 620, H = 132, padL = 8, padR = 8, base = H - 18;
-      oc.clearRect(0, 0, W, H);
-      oc.fillStyle = '#fbfbfa'; oc.fillRect(0, 0, W, H);
-
-      // horizontal reference rules
-      oc.strokeStyle = 'rgba(20,22,26,.07)'; oc.lineWidth = 1;
-      for (let i = 1; i <= 4; i++) {
-        const y = Math.round(base - (base - 8) * (i / 4)) + .5;
-        oc.beginPath(); oc.moveTo(padL, y); oc.lineTo(W - padR, y); oc.stroke();
-      }
-      oc.strokeStyle = '#c3c5bf';
-      oc.beginPath(); oc.moveTo(padL, base + .5); oc.lineTo(W - padR, base + .5); oc.stroke();
-
-      const max = Math.max(...spec.map(s => s.mag)) || 1, bw = (W - padL - padR) / spec.length;
-      spec.forEach((s, i) => {
-        const half = Math.abs(s.order % 1) > 0.01;
-        const h = Math.max(1, (s.mag / max) * (base - 12));
-        const x = padL + i * bw, w = Math.max(2.5, bw - 4);
-        oc.fillStyle = half ? '#e8481f' : '#9aa0a6';
-        oc.fillRect(x, base - h, w, h);
-        // A thin cap on half-orders marks them without the full-height wash that
-        // swamped the chart.
-        if (half) { oc.fillStyle = '#14161a'; oc.fillRect(x, base - h - 2, w, 2); }
-        if (s.order % 2 === 0) {
-          oc.fillStyle = '#8b9097'; oc.font = '600 8.5px ui-monospace,Menlo,monospace';
-          oc.textAlign = 'center'; oc.fillText(s.order, x + w / 2, H - 6);
-        }
-      });
-      const half = spec.filter(s => Math.abs(s.order % 1) > 0.01).reduce((a, s) => a + s.mag * s.mag, 0);
-      const tot = spec.reduce((a, s) => a + s.mag * s.mag, 0);
-      $('ordMeta').textContent =
-        bankAngles(p, 0).map(a => a.toFixed(0) + '°').join(' / ') + '  ·  HALF-ORDER ' +
-        (100 * half / tot).toFixed(0) + '%';
-    }
-    // Pull every generated control up to the loaded preset, draw the spectrum,
-    // and fill the JSON view. Everything the page shows comes from the sim, so
-    // there is exactly one place initial values are set.
+    sizeCanvases();
     afterPresetChange();
-
-    // Everything above evaluated without throwing, so the boot guard can stand down.
+    syncInputs();
+    paintPower();
+    requestAnimationFrame(tick);
     window.__ENGINE_BOOTED = true;
   </script>
 </body>
