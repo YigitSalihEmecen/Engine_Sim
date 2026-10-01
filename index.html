@@ -766,7 +766,7 @@
   </div>
 
   <script type="module">
-    import { EngineSim, PRESET_SCHEMA, PRESET_GROUPS, builtinPreset, presetToJSON,
+    import { EngineSim, PRESET_SCHEMA, PRESET_GROUPS, INPUT_SCHEMA, builtinPreset, presetToJSON,
              presetFromJSON } from './src/engine-sim.js';
     import { orderSpectrum } from './src/pulse.js';
     import { bankAngles } from './src/profiles.js';
@@ -954,7 +954,8 @@
 
     /* ---- live inputs, generated from EngineSim.inputs() ---- */
     const inputEls = new Map();
-    for (const r of EngineSim.inputs()) {
+    const liveInputSchema = (typeof EngineSim.inputs === 'function') ? EngineSim.inputs() : INPUT_SCHEMA;
+    for (const r of liveInputSchema) {
       const d = document.createElement('div');
       d.className = 'inp';
       d.innerHTML = `<div class="t"><b></b><span>0</span></div><p></p>` +
