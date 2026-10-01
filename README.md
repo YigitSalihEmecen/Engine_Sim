@@ -156,14 +156,33 @@ is the driveline clunk, `pop` an exhaust bang, `engage` the clutch biting.
 | | |
 | --- | --- |
 | `setVolume(0..1)` | |
-| `setMix({exhaust, intake, transmission, turbo, transients, sub})` | Per-voice balance, 0..2. |
-| `setTone({rumble, brightness})` | 0..2 each, 1 = default. |
+| `setMix({exhaust, intake, transmission, turbo, transients, sub, rumble})` | Per-voice balance, 0..2. |
+| `setTone({rumble, brightness, punch})` | 0..2 each, 1 = default. `punch` is the psychoacoustic bass enhancer. |
 | `setDynamics(0..1)` | Three-band compressor amount. 0 ≈ bypass. |
 | `setEQ([5 gains])` · `setEQBand(i, dB)` · `resetEQ()` | ±18 dB at 60 / 200 / 800 / 2.5k / 8k. |
 | `setReverb({mix, size, damping})` | **`size` rebuilds an impulse response (~6 ms) — debounce it.** |
 | `setWidth(0..1)` | Mono-sum safe. |
 | `setPopDepth(0..2)` | How much transient energy goes back through the exhaust. |
 | `setPerspective('exterior'\|'interior')` · `setPosition(0..1)` | Listener position; `setPosition` is continuous. |
+
+### Live inputs
+
+Not part of a preset — what is happening to the engine *right now*. Every
+input is a normalised 0..1 scalar, so a game can map anything onto them:
+
+```js
+sim.setInputs({ strain: hillGrade, distance: camDist / 80, environment: inTunnel ? 1 : 0 });
+sim.setInput('aggression', sportMode ? 1 : 0);
+EngineSim.inputs();   // the table, with labels and notes — enough to build sliders from
+```
+
+| input | effect |
+| --- | --- |
+| `strain` | labouring: more rumble, harder combustion, more growl at the same throttle |
+| `aggression` | active exhaust valve: shallower muffler chambers, more rasp and level |
+| `roughness` | engine health: wander and random misfires (`getEvents().misfire`) |
+| `distance` | air absorption, spreading loss, more room |
+| `environment` | open road → tunnel: dense fluttering reflections |
 
 ### Presets
 
@@ -202,7 +221,7 @@ const musicBus = ctx.createGain();
 const sim = new EngineSim(ctx, { destination: musicBus });
 
 sim.connect(analyserNode);   // move it later
-sim.output;                  // the master GainNode
+sim.output;                  // the final node (after the safety soft-clipper)
 ```
 
 ---
@@ -241,8 +260,10 @@ converter slip.
 ## Development
 
 ```sh
-npm test           # 335 checks + a driving-behaviour suite
-npm run spectrum   # analytic harshness table for every engine
+npm test           # 384 checks + a driving-behaviour suite
+npm run spectrum   # analytic harshness + rpm-local resonance-spike table
+node test/render.mjs  # REAL browser render (Playwright + Chromium): peaks, clipping,
+                      # band shares, A-weighted harshness, tonal peaks per engine
 ```
 
 ```
@@ -252,8 +273,10 @@ src/profiles.js     engine + vehicle data — firing order, bank layout, pipe ge
 src/pulse.js        firing geometry → band-limited PeriodicWave tables
 src/resonators.js   exhaust waveguides, muffler, Helmholtz intake, shock rasp, cabin
 src/layers.js       gear whine, turbo, transient bank
-src/character.js    exhaust flow noise, sub layer, imperfection modulator
-src/fx.js           EQ, reverb, stereo widener, three-band compressor
+src/character.js    exhaust flow noise, sub layer, rumble layer, imperfection modulator
+src/fx.js           EQ, reverb, stereo widener, three-band compressor, bass enhancer,
+                    tunnel space, safety clipper
+src/inputs.js       live-input table (strain, valve, roughness, distance, enclosure)
 src/physics.js      drivetrain with torsional compliance and backlash
 src/shift.js        gear-shift state machine
 src/gate.js         H-pattern gear-gate geometry (UI-side, no audio)

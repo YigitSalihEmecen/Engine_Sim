@@ -174,24 +174,37 @@ const CURVE_CACHE = new Map();
  * kp > kn means the compression (positive) half saturates harder than the
  * rarefaction half, matching the direction the real steepening goes.
  */
-function shockCurve(kp, kn, n = 4096) {
-  const key = kp + ':' + kn + ':' + n;
+function shockCurve(kp, kn, n = 4096, head = SHOCK_HEADROOM) {
+  const key = kp + ':' + kn + ':' + n + ':' + head;
   const hit = CURVE_CACHE.get(key);
   if (hit) return hit;
 
+  // The curve now spans ±head of INPUT, not ±1. A WaveShaper clamps anything
+  // outside [-1, 1] to the curve's end value, and the offline render measured
+  // the shaper being fed 1.2-3x full scale on an ordinary full-load pull and
+  // up to 16x when a pop went through the pipe: every one of those was a
+  // FLAT-TOPPED waveform, i.e. hard digital clipping in the middle of the
+  // exhaust. That is the "oversaturated / overblown" sound, and it got worse
+  // with revs because the drive rises with rpm.
+  //
+  // The shape is a SOFT knee with an asymptote rather than a normalised tanh:
+  // unity slope at the origin (so the shaper never adds level at idle), and
+  // each half compresses smoothly toward its own ceiling. kp/kn still set the
+  // asymmetry: the compression half reaches its ceiling sooner than the
+  // rarefaction half, which is where the even harmonics come from.
+  const cp = 1 / Math.max(0.2, kp / 3.2) * 1.05;   // positive ceiling
+  const cn = 1 / Math.max(0.2, kn / 3.2) * 0.85;   // negative ceiling
   const c = new Float32Array(n);
-  const np = Math.tanh(kp);
-  const nn = Math.tanh(kn);
   for (let i = 0; i < n; i++) {
-    const x = (i / (n - 1)) * 2 - 1;
-    c[i] = x >= 0 ? Math.tanh(kp * x) / np : Math.tanh(kn * x) / nn;
+    const x = head * ((i / (n - 1)) * 2 - 1);
+    c[i] = x >= 0 ? cp * Math.tanh(x / cp) : cn * Math.tanh(x / cn);
   }
-  // f(0) is exactly 0, so the curve adds no static DC; the drive-dependent DC
-  // that asymmetric shaping creates from a symmetric signal is removed by the
-  // highpass after the shaper (see Nonlinearity).
   CURVE_CACHE.set(key, c);
   return c;
 }
+
+/** Input range the shock curve covers before the shaper's own hard clamp. */
+const SHOCK_HEADROOM = 6;
 
 // ---------------------------------------------------------------------------
 // Waveguide — one pipe
@@ -267,7 +280,15 @@ export class Waveguide {
     //   2.2 → worst  1.38 %,                     mean 0.04 %, centroid 199 Hz
     // i.e. a 17 dB cut in the worst case for 79 Hz of centroid — the engines
     // stay bright enough to keep their character and stop screaming.
-    const MODE_SURVIVAL = 2.2;
+    //
+    // 2.2 → 1.8 (with the collector change in ExhaustSystem). A 25-rpm sweep
+    // (spectrum.mjs `spikes`) found what the 1000-rpm grid never could: the
+    // header and collector combs in SERIES make narrow coincident peaks, and an
+    // engine harmonic crossing one jumped 20-26 dB above its own level a few
+    // hundred rpm either side — up to -9 dB of the loudest harmonic in the
+    // whole spectrum, at 750-1800 Hz. Mean spike 20.2 → 9.4 dB, and the worst
+    // remaining ones sit 25-30 dB under the engine note.
+    const MODE_SURVIVAL = 1.8;
     this.lpBase = clamp(this.frequency * (MODE_SURVIVAL / this.damping), 150, 12000);
     this.loopQ = 0.5;   // no resonance of its own; pure loss curve
 
@@ -644,11 +665,15 @@ export class Muffler {
       // reflectors (mean flow carries energy through), so the notches shallow
       // out under load — which is a real part of why a car gets louder when you
       // open the throttle rather than just brighter.
+      // `valve` is the live exhaust-bypass input: an open valve routes gas
+      // around the chambers, so the notches go shallow.
+      const valve = clamp(num(p && p.valve, 0), 0, 1);
       setT(s.branch.gain,
-        clamp(this.branchGain * s.taper * (1 - 0.12 * load), 0, 0.95), now, TC);
+        clamp(this.branchGain * s.taper * (1 - 0.12 * load) * (1 - 0.65 * valve), 0, 0.95), now, TC);
     }
+    const valve = clamp(num(p && p.valve, 0), 0, 1);
     setT(this.packing.frequency,
-      clamp(this.packingBase * (1 + 0.30 * load) * scale, F_MIN, this.fMax), now, TC);
+      clamp(this.packingBase * (1 + 0.30 * load) * (1 + 1.1 * valve) * scale, F_MIN, this.fMax), now, TC);
   }
 
   dispose() {
@@ -883,7 +908,10 @@ export class Nonlinearity {
     this.profile = profile;
     this.disposed = false;
 
-    this.maxDrive = clamp(num(opts.maxDrive, 4.5), 1, 40);
+    // 4.5 → 2.6. With the old curve the drive was mostly moving the signal
+    // into the clamp; with a curve that has real headroom, 2.6 at full load
+    // gives the same audible rasp onset without squaring the waveform.
+    this.maxDrive = clamp(num(opts.maxDrive, 2.6), 1, 40);
     this.idleDrive = clamp(num(opts.idleDrive, 1.0), 0.1, 10);
     const kp = clamp(num(opts.kp, 3.2), 0.5, 12);
     const kn = clamp(num(opts.kn, 2.0), 0.5, 12);
@@ -897,6 +925,9 @@ export class Nonlinearity {
     this.shaper = ctx.createWaveShaper();
     this.shaper.curve = shockCurve(kp, kn, 4096);   // built once, shared
     this.shaper.oversample = '4x';
+    // The curve spans ±SHOCK_HEADROOM; scale into its domain.
+    this.span = ctx.createGain();
+    this.span.gain.value = 1 / SHOCK_HEADROOM;
 
     // Asymmetric shaping of a symmetric signal produces a load-dependent DC
     // offset. Without this highpass, rolling on throttle would thump.
@@ -911,12 +942,13 @@ export class Nonlinearity {
     this.out = ctx.createGain();
     this.out.gain.value = 1;
 
-    this.drive.connect(this.shaper);
+    this.drive.connect(this.span);
+    this.span.connect(this.shaper);
     this.shaper.connect(this.dcBlock);
     this.dcBlock.connect(this.makeup);
     this.makeup.connect(this.out);
 
-    this._nodeCount = 5;
+    this._nodeCount = 6;
   }
 
   get input() { return this.drive; }
@@ -948,7 +980,8 @@ export class Nonlinearity {
     // On the overrun there is no combustion but there IS unburnt fuel lighting
     // off in the pipe — sharp, low-amplitude, and it crackles. A little drive
     // even at zero load.
-    const od = 0.25 * overrun * (0.3 + 0.7 * rpmNorm);
+    const od = 0.25 * overrun * (0.3 + 0.7 * rpmNorm)
+             + 0.22 * clamp(num(p && p.valve, 0), 0, 1) * (0.4 + 0.6 * load);
 
     const d = clamp(this.idleDrive + (this.maxDrive - this.idleDrive) * clamp(amp + od, 0, 1),
       0.1, this.maxDrive);
@@ -959,7 +992,7 @@ export class Nonlinearity {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    for (const n of [this.drive, this.shaper, this.dcBlock, this.makeup, this.out]) {
+    for (const n of [this.drive, this.span, this.shaper, this.dcBlock, this.makeup, this.out]) {
       if (n && n.disconnect) n.disconnect();
     }
   }
@@ -1193,8 +1226,14 @@ export class ExhaustSystem {
       // A collector is a bigger-diameter, better-supported pipe than a header
       // and it is further from the hot valve, so it reflects a little less and
       // loses a little more.
-      reflection: clamp(num(ex.reflection, 0.5) * 0.88, 0, MAX_FEEDBACK),
-      damping: clamp(num(ex.damping, 0.4) * 1.12, 0.05, 2),
+      //
+      // 0.88/1.12 → 0.5/2.0. A collector is a JUNCTION — an abrupt area change
+      // into a bigger pipe, with the other bank's header hanging off it — and
+      // reflects far less cleanly than a header's open end. Modelled as a
+      // second strong comb it lined its peaks up with the header's and made the
+      // rpm-local spikes described at MODE_SURVIVAL.
+      reflection: clamp(num(ex.reflection, 0.5) * 0.5, 0, MAX_FEEDBACK),
+      damping: clamp(num(ex.damping, 0.4) * 2.0, 0.05, 2),
     }, opts.collectorOpts));
     this.collectorNode.connect(this.collector.input);
 

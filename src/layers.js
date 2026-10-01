@@ -274,10 +274,14 @@ export class TransmissionLayer {
     // excitation, so real spectra always show the 2nd (and 3rd) mesh harmonic;
     // straight-cut boxes show far more of them.
     this.meshOsc1 = ctx.createOscillator();
-    this.meshOsc1.type = 'triangle';
+    // Sines, not triangles. A triangle's 3rd and 5th harmonics put a 2 kHz
+    // mesh tone at 6 and 10 kHz with nothing else up there to mask them; the
+    // second harmonic is already its own oscillator and the noise band
+    // carries the rest.
+    this.meshOsc1.type = 'sine';
     this.meshOsc1.frequency.value = 500;
     this.meshOsc2 = ctx.createOscillator();
-    this.meshOsc2.type = 'triangle';
+    this.meshOsc2.type = 'sine';
     this.meshOsc2.frequency.value = 1000;
     this.runoutOsc = ctx.createOscillator();  // shaft-runout AM
     this.runoutOsc.type = 'sine';
@@ -431,7 +435,7 @@ export class TransmissionLayer {
       // output at 10 kHz and the 2nd harmonic was pinned at the 20 kHz clamp —
       // physically wrong and, since the ear peaks around 3-4 kHz, genuinely
       // painful as the mesh swept up through it.
-      const hfRoll = 1 / (1 + Math.pow(mesh / 2600, 2.2));
+      const hfRoll = 1 / (1 + Math.pow(mesh / 1800, 2.4));
       band = clamp((mesh - 30) / 40, 0, 1) * hfRoll;
     }
 
@@ -452,7 +456,10 @@ export class TransmissionLayer {
     const speedRise = 0.45 + 0.55 * clamp(shaftRpm / 2500, 0, 1);
 
     const cutLevel = this.gearCut === 'straight' ? 1.0 : 0.42;
-    const whine = 0.16 * cutLevel * inGear * engaged * phaseMute * toothLoad * band * speedRise;
+    // 0.16 → 0.065. The offline render measured the whine as the single most
+    // prominent tone in the whole output — 40-43 dB above its neighbourhood in
+    // 1.3-2.3 kHz on every engine. A helical box is a faint whirr under load.
+    const whine = 0.065 * cutLevel * inGear * engaged * phaseMute * toothLoad * band * speedRise;
 
     setF(this.meshOsc1.frequency, mesh, now, TC, 500);
     setF(this.meshOsc2.frequency, mesh * 2, now, TC, 1000);
@@ -938,7 +945,7 @@ export class TurboLayer {
     // Weighted toward tip speed, NOT throttle: closing the throttle for a shift
     // must not collapse the whistle. The turbine is still spinning; it is still
     // whistling. What changes is that it is no longer being driven, so it sags.
-    const whineLvl = 0.40 * aero * (0.62 + 0.38 * flow);
+    const whineLvl = 0.27 * aero * (0.62 + 0.38 * flow);   // was 0.40: 36 dB tone, see render.mjs
     setT(this.whineGain.gain, whineLvl, now, TC);
 
     // Bearing wander, in cents. Deepest off-boost where the rotor is least
