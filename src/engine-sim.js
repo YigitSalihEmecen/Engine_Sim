@@ -69,7 +69,9 @@ export class EngineSim {
     // and whatever the file said for a loaded one, so a custom preset does not
     // masquerade as the engine it was derived from.
     this.presetId = this.engineId;
-    this.presetLabel = this.profile.label;
+    // The normalised engine section carries no label of its own (the label is
+    // the preset's), so take it from the preset — this read `undefined` before.
+    this.presetLabel = builtinPreset(this.engineId).label;
     this._rumble = DEFAULT_SOUND.tone.rumble;
     this._brightness = DEFAULT_SOUND.tone.brightness;
     this._popDepth = DEFAULT_SOUND.fx.popDepth;
