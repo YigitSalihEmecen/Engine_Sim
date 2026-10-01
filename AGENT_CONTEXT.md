@@ -870,6 +870,66 @@ storage calls are wrapped, because a browser in private mode throws on write.
 
 ---
 
+## 8b. v3 audio pass — what changed and why (read with §9 #48-52)
+
+Driven by a user report: "oversaturated / overblown at high rpm, peaks, very
+high-pitched resonance; needs more low end." Measured with a NEW tool,
+`test/render.mjs` + `test/render.html`: a real Chromium OfflineAudioContext
+render of the whole graph (2nd-gear pull to the limiter, lift, blip), 4 output
+channels = L/R + the waveshaper's input + the raw mix bus. Output is float and
+unclipped, so it measures true overs. `SOLO=<bus>`, `DYN=0`, `WAV=dir/` env vars.
+
+- **Compressor auto-makeup** (#48). Every browser DynamicsCompressor adds
+  `(1/gain@0dBFS)^0.6` of makeup it does not expose. The old high band
+  (-30 dB, 5:1) was therefore +13 dB on everything quiet above 2 kHz and
+  tripled the A-weighted 1-5 kHz share. `fx.js:compressorMakeupDb` models it
+  (matches Chromium to 0.3 dB); `Dynamics` divides it out so every band is
+  unity below threshold. **Any new DynamicsCompressor must do the same.**
+- **Waveshaper flat-topping** (#49). The shock curve covered ±1 of input and was
+  fed 1.2-3× on an ordinary pull and 16× under pops. Curve now spans ±6
+  (`SHOCK_HEADROOM`) with soft asymptotes, max drive 2.6.
+- **Series-comb resonance spikes** (#50). Header + collector waveguides in series
+  produce narrow coincident peaks; a harmonic crossing one rose 20-26 dB above
+  its own level a few hundred rpm either side (V12 order 12 at 5696 rpm, -12 dB
+  of the whole frame). The 1000-rpm grid in spectrum.mjs could not see it;
+  `spikes()` sweeps 25 rpm. Collector reflection ×0.5, damping ×2.0,
+  `MODE_SURVIVAL` 1.8. run.mjs asserts no audible spike.
+- **Pure-tone whines** (#51): gear whine 0.16→0.065 and sine oscillators, turbo
+  whine 0.40→0.27. They were 35-43 dB tones.
+- **Low end** (#52). 50-86 % of power sat in 40-80 Hz, mostly the sub sine —
+  inaudible on small speakers, but driving the compressor and limiter. Now: LR4
+  28 Hz infrasonic HPF, `mix.sub` 0.9→0.55, new `RumbleLayer` (brown noise,
+  firing-rate pulse AM via a WaveShaper-on-sawtooth envelope, lope for uneven
+  engines, LP 90-360 Hz tracking firing rate), and `BassEnhancer` (missing-
+  fundamental harmonics, `tone.punch`).
+- Output: limiter makeup trimmed, then `SafetyClipper` (linear to 0.6, tanh to
+  0.99). `sim.output` is now the clipper's output node.
+- Exhaust tremolo now modulates its own gain stage (`exhaustTrem`), not the bus
+  fader — at fader 0 it leaked the exhaust.
+- **Live inputs** (`src/inputs.js`): strain, aggression (exhaust valve),
+  roughness (misfires through per-bank `gates`), distance (air LPF + level +
+  reverb extra), environment (`Space` flutter delays + reverb extra). Folded
+  into a reused params object in `_applyInputs` — zero per-frame allocation.
+  Never part of the preset; `Reverb.setExtra` keeps them out of `getPreset()`.
+
+Not verified: still nobody has *heard* it. Render numbers after the pass: no
+clips, peaks ≤ -2.6 dBFS, A-weighted 1-5 kHz share at high rpm 2-21 % (was up
+to 54 %), infrasonic share ~2 % (was up to 34 %).
+
+### UI v3
+
+The console was redesigned from the blueprint look to dark glass over an
+audio-reactive canvas background (`#bg`, drawn at 0.35× resolution from an
+AnalyserNode on `sim.output`; revs shift hue cold→hot, low band swells the
+light, highs drive sparks). Sidebar sections replace tabs: Live inputs, Sound
+& mix, Engine tuning, EQ & space, Analysis, Presets. Hold-to-rev buttons
+(start the engine on first press). Everything is still generated from
+`EngineSim.schema()` / `EngineSim.inputs()` and uses only the public API; the
+drive cockpit keeps its ids and pointer handling. The boot guard ignores
+resource (font/stylesheet) load errors — the web fonts are optional.
+
+---
+
 ## 9. Complete bug ledger
 
 Every one of these was found by measurement, and several are counter-intuitive.
@@ -919,6 +979,11 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 44 | **The turbo flutter was effectively unreachable** | gated on `boost`, which goes with the SQUARE of tip speed, so the threshold was squared too — it needed ~0.85 of throttle. Measured over eight lifts per engine at 0.6 throttle (ordinary driving): **0 of 8 on all seven turbo profiles**. The flat-out test passed the whole time | gate on shaft speed instead (`(spool−0.22)/0.38`); arm on any fast large closure, not only on a pedal reaching 10 %; BOV relief 0.85 with no floor → 0.55 with a 0.30 floor. Now 4-7 of 8 at 0.6 throttle and 8 of 8 pressing on, and the biggest valve still trades the flutter down by 3+ dB |
 | 45 | Turbo whine was pure and sharp | five of seven profiles sat pinned AT the 3 kHz fundamental cap — same pitch on every car, in the band where hearing peaks, and periodic to the sample | cap → **2200 Hz**; asymmetric saturation (evens = body) + band-limited noise AM for grain; the layer gets its own tone stage (−4.2 dB at 3 k, −16.6 at 8 k); bus level −30 % |
 | 46 | **Two profile fields were read by nothing** | `voice` and `pulse.hardness`, in all 16 profiles, for as long as the profiles existed. Invisible: an unused number breaks no test, allocates no node, writes no param | wire both up (`voice` = per-engine level trim, `hardness` = how much the pulse sharpens under load, normalised so 0.65 is the old fixed behaviour) and add the two-directional orphan check in `run.mjs`, verified to bite by injecting one of each |
+| 48 | **Quiet treble boosted +13 dB** | browser compressor auto-makeup; A-weighted 1-5 kHz share 16 % bypassed vs 54 % on | `compressorMakeupDb`, divided out per band |
+| 49 | **Exhaust flat-topped** | shaper input 1.2-16× its ±1 curve | curve spans ±6, soft asymptotes, drive 2.6 |
+| 50 | **rpm-local scream, again** | header×collector series combs; 20-26 dB spikes the 1000-rpm grid missed | collector 0.5/2.0, MODE_SURVIVAL 1.8, `spikes()` test |
+| 51 | Whines were pure tones | 35-43 dB prominence | levels down, sines not triangles |
+| 52 | Low end inaudible yet dominant | 40-80 Hz sub sine = most of the power | infrasonic HPF, RumbleLayer, BassEnhancer |
 | 47 | The generated console read pipe lengths as percentages | first pass formatted any unitless row as `v×100`, so a 1.75 m header showed "175" and a 4.4 decay showed "440" | `unit` became a display CONTRACT — real unit = suffix formatted by `step`, `%` = ×100, `''` = bare number |
 
 ### #31 in detail — it will come back if the constant moves

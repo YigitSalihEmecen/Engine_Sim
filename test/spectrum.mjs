@@ -255,17 +255,18 @@ export function toneStage() {
  * Magnitude response from bank i's oscillator to the mix bus.
  * `tune` lets an experiment override the constants without editing src/.
  */
-export function chainMag(profile, bankIndex, load, rpmNorm, tune = {}) {
+export const TUNE = {};
+export function chainMag(profile, bankIndex, load, rpmNorm, tune = TUNE) {
   const ex = profile.exhaust;
   const nBanks = profile.banks.length;
   const len = (bankIndex === 1 && Number.isFinite(ex.bankB)) ? ex.bankB : ex.bank;
-  const modes = tune.modes ?? 2.2;
+  const modes = tune.modes ?? 1.8;
   const loopPoles = tune.loopPoles ?? 1;
 
   const bank = waveguideMag(wgParams(profile, len, load, rpmNorm, { modes, loopPoles }));
   const coll = waveguideMag(wgParams(profile, ex.collector, load, rpmNorm,
-    { reflMul: 0.88, dampMul: 1.12, modes, loopPoles }));
-  const muf = mufflerMag(...(() => {
+    { reflMul: tune.collReflMul ?? 0.5, dampMul: tune.collDampMul ?? 2.0, modes, loopPoles }));
+  const muf = tune.noMuffler ? (() => 1) : mufflerMag(...(() => {
     const m = mufParams(profile, load, rpmNorm);
     return [m.stages, m.packF, m.trim];
   })());
@@ -276,6 +277,8 @@ export function chainMag(profile, bankIndex, load, rpmNorm, tune = {}) {
   // measure the difference it makes.
   const tail = tune.tailHz ? biquad('lowpass', tune.tailHz, tune.tailQ ?? 0.6) : null;
   // The transit delay is a pure phase term; it does not change |H| of one bank.
+  if (tune.noCollector) return (f) => bank(f) * sum * muf(f) * tone(f);
+  if (tune.noBank) return (f) => sum * coll(f) * muf(f) * tone(f);
   return (f) => bank(f) * sum * coll(f) * muf(f) * tone(f) * (tail ? tail(f) : 1);
 }
 
@@ -337,6 +340,49 @@ export function harshness(profile, rpm, load) {
   };
 }
 
+/**
+ * Resonance spikes — the rpm-LOCAL kind that a coarse sweep walks straight
+ * past (ledger #31 came back this way: the offline render caught the V12's
+ * order-12 harmonic jumping to -12 dB of the whole frame at 5696 rpm and
+ * nowhere near it, while this file's 1000-rpm grid reported it clean).
+ *
+ * Sweep in 25 rpm steps at full load. For every harmonic above 700 Hz, compare
+ * its level at each rpm to the median of the SAME harmonic over ±450 rpm; a
+ * pipe mode crossing gives a gentle bump, a comb coincidence gives a spike.
+ * Only harmonics within 30 dB of the loudest one count — a spike nobody can
+ * hear is not a spike.
+ */
+export function spikes(profile, load = 1, step = 25) {
+  const lo = Math.max(1000, profile.idleRpm), hi = profile.redlineRpm;
+  const rpms = [];
+  for (let r = lo; r <= hi; r += step) rpms.push(r);
+  const levels = rpms.map(rpm => {
+    const { bins } = spectrumAt(profile, rpm, load);
+    const by = new Map();
+    let max = 0;
+    for (const b of bins) { by.set(b.order, (by.get(b.order) || 0) + b.p); if (b.p > max) max = b.p; }
+    return { rpm, by, max };
+  });
+  const W = Math.round(450 / step);
+  let worst = { db: 0, rpm: 0, f: 0, order: 0 };
+  for (let i = 0; i < levels.length; i++) {
+    const L = levels[i];
+    for (const [order, pw] of L.by) {
+      const f = order * 2 * L.rpm / 120;
+      if (f < 700 || f > 8000) continue;
+      if (10 * Math.log10(pw / L.max) < -30) continue;
+      const nb = [];
+      for (let j = Math.max(0, i - W); j <= Math.min(levels.length - 1, i + W); j++) {
+        nb.push(10 * Math.log10((levels[j].by.get(order) || 1e-30) / levels[j].max));
+      }
+      nb.sort((a, b) => a - b);
+      const db = 10 * Math.log10(pw / L.max) - nb[nb.length >> 1];
+      if (db > worst.db) worst = { db, rpm: L.rpm, f, order, rel: 10 * Math.log10(pw / L.max) };
+    }
+  }
+  return worst;
+}
+
 // ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
@@ -370,7 +416,8 @@ if (!isMain) {
 } else {
   console.log('\nHarshness — share of radiated power in 2-6 kHz (lower is better)\n');
   console.log('  ' + pad('engine', 10) + padL('worst%', 8) + padL('@rpm', 7)
-    + padL('load', 6) + padL('worst-f', 9) + padL('rel-dB', 8) + padL('mean%', 8));
+    + padL('load', 6) + padL('worst-f', 9) + padL('rel-dB', 8) + padL('mean%', 8)
+    + '   spike dB @rpm  (f, level vs loudest)');
   const rows = [];
   for (const [id, p] of Object.entries(ENGINE_PROFILES)) {
     let worst = { share: -1 }, wRpm = 0, wLoad = 0, sum = 0, n = 0;
@@ -385,12 +432,15 @@ if (!isMain) {
     rows.push({ id, worst, wRpm, wLoad, mean: sum / n });
   }
   rows.sort((a, b) => b.worst.share - a.worst.share);
+  for (const r of rows) r.spike = spikes(ENGINE_PROFILES[r.id]);
   for (const r of rows) {
     const flag = r.worst.share > 0.05 ? '  <-- harsh' : '';
     console.log('  ' + pad(r.id, 10) + padL((r.worst.share * 100).toFixed(2), 8)
       + padL(r.wRpm, 7) + padL(r.wLoad.toFixed(2), 6)
       + padL(r.worst.peakF.toFixed(0), 9) + padL(r.worst.peakDb.toFixed(1), 8)
-      + padL((r.mean * 100).toFixed(2), 8) + flag);
+      + padL((r.mean * 100).toFixed(2), 8)
+      + padL(r.spike.db.toFixed(1), 9) + padL(r.spike.rpm, 6)
+      + `  (${r.spike.f.toFixed(0)} Hz, ${(r.spike.rel || 0).toFixed(1)} dB)` + flag);
   }
   console.log('');
 }
