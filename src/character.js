@@ -361,8 +361,10 @@ export class CharacterModulator {
     // Idle is where an engine sounds most alive — lumpy, hunting, uneven. Under
     // load and revs the combustion is far more repeatable, so the wander fades.
     const lumpy = (1 - rpmNorm) * (1 - 0.55 * load);
-    setT(this.detune.gain, this.depthCents * (0.25 + 0.75 * lumpy), now, 0.08);
-    setT(this.tremolo.gain, this.depthGain * (0.2 + 0.8 * lumpy), now, 0.08);
+    // The `roughness` input: a tired engine wanders a lot more.
+    const r = clamp(fin(p.rough, 0), 0, 1);
+    setT(this.detune.gain, this.depthCents * (0.25 + 0.75 * lumpy) * (1 + 2.5 * r), now, 0.08);
+    setT(this.tremolo.gain, this.depthGain * (0.2 + 0.8 * lumpy) * (1 + 1.5 * r), now, 0.08);
     setT(this.roughLP.frequency, clamp(8 + 40 * rpmNorm, 4, 200), now, 0.1);
   }
 
@@ -370,6 +372,155 @@ export class CharacterModulator {
     for (const l of this.lfos) { l.osc.disconnect(); l.gain.disconnect(); }
     for (const n of [this.rough, this.roughLP, this.roughGain, this.bus,
                      this.detune, this.tremolo]) {
+      if (n && n.disconnect) n.disconnect();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+
+/** Attack/decay pulse curve for a WaveShaper fed a sawtooth (trap #14): the
+ *  saw sweeps the curve once per cycle, so the curve IS the envelope. */
+function firePulseCurve(n = 1024, rise = 0.07, tail = 5.5) {
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const u = i / (n - 1);                   // 0..1 across one firing period
+    const e = u < rise ? Math.sin((u / rise) * Math.PI / 2)
+                       : Math.exp(-tail * (u - rise));
+    c[i] = e;
+  }
+  return c;
+}
+
+/**
+ * Rumble — the low-mid grit of an engine's body and floorpan.
+ *
+ * What the offline render showed about the old low end: 50-86 % of all the
+ * power was in 40-80 Hz, almost all of it from one clean sine (SubLayer) —
+ * energy a laptop or a phone cannot reproduce, which drove the compressor and
+ * the limiter while adding nothing anybody could hear. "Needs more low end"
+ * was never "needs more 50 Hz"; it was "needs more 80-300 Hz that moves".
+ *
+ * A real engine's low end is not a tone. The block, the sump, the floor and
+ * the exhaust hangers are all being hit once per firing event, so the bottom of
+ * the spectrum is BROADBAND energy that arrives in pulses at the firing rate,
+ * plus a slower lope wherever the firing is uneven. That is what this is:
+ *
+ *   brown noise ─► HP 38 ─► LP (tracks firing rate) ─► level ─► out
+ *                                                       ▲
+ *        saw @ firing rate ─► pulse curve ─► depth ─────┤   (one thump per firing)
+ *        sine @ crank rate ─────────────────► lope ─────┘   (uneven engines lope)
+ *
+ * The lowpass tracks 2.4× the firing frequency, clamped to 90-360 Hz, so a
+ * four at idle rumbles low and dull and a twelve at the limiter gets a firmer,
+ * higher growl — and none of it ever reaches the harsh band.
+ *
+ * Driven by load (combustion pressure) and the `strain` input; recedes with
+ * revs so it does not become a drone, and ducks on the overrun where there is
+ * nothing burning.
+ */
+export class RumbleLayer {
+  constructor(ctx, profile, opts = {}) {
+    this.ctx = ctx;
+    this.profile = profile;
+    this.cyl = Math.max(1, profile.cylinders || 4);
+    // How lumpy the firing is: separate banks that each fire unevenly lope.
+    const banks = Array.isArray(profile.banks) ? profile.banks.length : 1;
+    const perBank = this.cyl / Math.max(1, banks);
+    this.lumpy = (perBank % 2 === 1 || this.cyl <= 2) ? 1 : (banks > 1 && this.cyl === 8 ? 0.7 : 0.25);
+
+    this.src = ctx.createBufferSource();
+    this.src.buffer = noiseBuffer(ctx, 3.3, true);
+    this.src.loop = true;
+
+    this.hp = ctx.createBiquadFilter();
+    this.hp.type = 'highpass';
+    this.hp.frequency.value = 38;
+    this.hp.Q.value = 0.6;
+
+    this.lp = ctx.createBiquadFilter();
+    this.lp.type = 'lowpass';
+    this.lp.frequency.value = 160;
+    this.lp.Q.value = 0.9;
+
+    // A broad body mode: a car's floorpan and the subframe ring around here.
+    this.body = ctx.createBiquadFilter();
+    this.body.type = 'peaking';
+    this.body.frequency.value = 92;
+    this.body.Q.value = 1.1;
+    this.body.gain.value = 5;
+
+    this.level = ctx.createGain();
+    this.level.gain.value = 0;
+
+    this.fire = ctx.createOscillator();
+    this.fire.type = 'sawtooth';
+    this.fire.frequency.value = 30;
+    this.fireShape = ctx.createWaveShaper();
+    this.fireShape.curve = firePulseCurve();
+    this.fireDepth = ctx.createGain();
+    this.fireDepth.gain.value = 0;
+
+    this.lope = ctx.createOscillator();
+    this.lope.type = 'sine';
+    this.lope.frequency.value = 6;
+    this.lopeDepth = ctx.createGain();
+    this.lopeDepth.gain.value = 0;
+
+    this.out = ctx.createGain();
+    this.out.gain.value = clamp(fin(opts.gain, 1), 0, 4);
+
+    this.src.connect(this.hp);
+    this.hp.connect(this.lp);
+    this.lp.connect(this.body);
+    this.body.connect(this.level);
+    this.level.connect(this.out);
+    this.fire.connect(this.fireShape);
+    this.fireShape.connect(this.fireDepth);
+    this.fireDepth.connect(this.level.gain);
+    this.lope.connect(this.lopeDepth);
+    this.lopeDepth.connect(this.level.gain);
+    this.started = false;
+  }
+
+  get input() { return null; }
+  get output() { return this.out; }
+
+  start(t) {
+    if (this.started) return;
+    this.started = true;
+    for (const s of [this.src, this.fire, this.lope]) { try { s.start(t); } catch (e) { /* started */ } }
+  }
+
+  stop(t) {
+    for (const s of [this.src, this.fire, this.lope]) { try { s.stop(t); } catch (e) { /* not started */ } }
+    this.started = false;
+  }
+
+  update(p) {
+    const now = fin(p.now, 0);
+    const f0 = clamp(fin(p.f0, 10), 0.05, 4000);
+    const load = clamp(fin(p.load, 0), 0, 1);
+    const rpmNorm = clamp(fin(p.rpmNorm, 0), 0, 1);
+    const overrun = clamp(fin(p.overrun, 0), 0, 1);
+    const strain = clamp(fin(p.strain, 0), 0, 1);
+    const fire = f0 * this.cyl;               // firing events per second (720° = cyl events)
+
+    const lvl = 0.9 * (0.28 + 0.72 * Math.pow(load, 0.8))
+              * (1 - 0.5 * rpmNorm) * (1 - 0.55 * overrun) * (1 + 0.8 * strain);
+    // Pulsing is most audible at low rpm; by the limiter the thumps fuse.
+    const pulse = clamp(1.05 - 0.75 * rpmNorm, 0.2, 1);
+    setT(this.level.gain, lvl * (1 - 0.6 * pulse), now);
+    setT(this.fireDepth.gain, lvl * 0.9 * pulse, now);
+    setT(this.fire.frequency, clamp(fire, 4, 2000), now);
+    setT(this.lope.frequency, clamp(f0 * 2, 1, 400), now);
+    setT(this.lopeDepth.gain, lvl * 0.35 * this.lumpy * (1 - rpmNorm), now);
+    setT(this.lp.frequency, clamp(fire * 2.4, 90, 360) * (1 + 0.25 * load), now);
+  }
+
+  dispose() {
+    for (const n of [this.src, this.hp, this.lp, this.body, this.level, this.fire,
+                     this.fireShape, this.fireDepth, this.lope, this.lopeDepth, this.out]) {
       if (n && n.disconnect) n.disconnect();
     }
   }

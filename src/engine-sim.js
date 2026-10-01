@@ -26,9 +26,10 @@ import {
 import { buildEngineWaves } from './pulse.js';
 import { ExhaustSystem, IntakeResonator, CabinFilter } from './resonators.js';
 import { TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
-import { ExhaustNoise, SubLayer, CharacterModulator } from './character.js';
+import { ExhaustNoise, SubLayer, CharacterModulator, RumbleLayer } from './character.js';
+import { INPUT_SCHEMA, DEFAULT_INPUTS } from './inputs.js';
 import { Drivetrain } from './physics.js';
-import { EQ, Reverb, Stereoizer, Dynamics } from './fx.js';
+import { EQ, Reverb, Stereoizer, Dynamics, SafetyClipper, BassEnhancer, Space, compressorMakeupDb } from './fx.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -75,6 +76,13 @@ export class EngineSim {
     this._dynamics = DEFAULT_SOUND.fx.dynamics;
     this._width = DEFAULT_SOUND.fx.width;
     this._position = DEFAULT_SOUND.position;
+    this._punch = DEFAULT_SOUND.tone.punch;
+    // Live inputs (inputs.js) and the reused per-frame params object they are
+    // folded into — Object.assign onto one object, so no per-frame allocation.
+    this.inputs = { ...DEFAULT_INPUTS, ...(opts.inputs || {}) };
+    this._ps = {};
+    this._misfireRng = 0x2545f491;
+    this._misfireHold = 0;
 
     // Drivetrain owns its ShiftController — the shift state machine has to run
     // inside the sub-stepped integration, not alongside it.
@@ -124,7 +132,7 @@ export class EngineSim {
     // to full scale that the compressor was working continuously and any
     // transient pushed it hard. Backing the bus off leaves room for a bang to
     // be loud without the gain stage reacting to it.
-    this.mixBus.gain.value = 0.42;
+    this.mixBus.gain.value = 0.52;   // was 0.42; the dynamics stage no longer adds 6-13 dB of its own
 
     // --- tone stage --------------------------------------------------------
     // The wavetable's radiation shelf is expressed in engine ORDERS, so it
@@ -159,7 +167,26 @@ export class EngineSim {
     this.airCut.frequency.value = 2900;
     this.airCut.gain.value = -6;
 
-    this.mixBus.connect(this.rumbleShelf);
+    // Infrasonic guard. Below ~28 Hz nothing reproduces it, nothing hears it,
+    // and it was a real share of the mix: the offline render put 5-34 % of the
+    // power under 40 Hz. All of that drove the low-band compressor and the
+    // limiter, i.e. it ducked the part of the low end that IS audible. LR4 so
+    // it adds no bump of its own.
+    this.infra = [0, 1].map(() => {
+      const f = ctx.createBiquadFilter();
+      f.type = 'highpass';
+      f.frequency.value = 28;
+      f.Q.value = -3.0103;      // Butterworth, in Web Audio's dB convention
+      return f;
+    });
+    this.mixBus.connect(this.infra[0]);
+    this.infra[0].connect(this.infra[1]);
+    this.infra[1].connect(this.rumbleShelf);
+    // Psychoacoustic bass: harmonics of the low end that small speakers CAN
+    // play, summed back in ahead of the tone stage. See BassEnhancer.
+    this.bass = new BassEnhancer(ctx);
+    this.infra[1].connect(this.bass.input);
+    this.bass.output.connect(this.rumbleShelf);
     this.rumbleShelf.connect(this.bodyBump);
     this.bodyBump.connect(this.presence);
     this.presence.connect(this.airCut);
@@ -176,18 +203,40 @@ export class EngineSim {
     this.limiter.ratio.value = 20;
     this.limiter.attack.value = 0.001;
     this.limiter.release.value = 0.05;
+    // The compressor adds its own makeup (+0.86 dB here); take it back out
+    // so the limiter never raises anything. See compressorMakeupDb.
+    this.limiterTrim = ctx.createGain();
+    this.limiterTrim.gain.value = Math.pow(10, -compressorMakeupDb(-1.5, 20, 0) / 20);
+    // And behind everything, a soft clipper: the limiter has look-ahead and a
+    // finite attack, so a bang on top of a full-scale note can overshoot it.
+    this.safety = new SafetyClipper(ctx);
 
     // --- output FX ---------------------------------------------------------
     this.eq = new EQ(ctx);
     this.reverb = new Reverb(ctx, { size: 0.32, mix: 0.14 });
     this.stereo = new Stereoizer(ctx, { width: 0.35 });
 
-    this.cabin.output.connect(this.eq.input);
-    this.eq.output.connect(this.reverb.input);
+    // Listener distance: air absorption is a lowpass whose corner falls with
+    // range, plus the level loss. Driven by the `distance` input.
+    this.air = ctx.createBiquadFilter();
+    this.air.type = 'lowpass';
+    this.air.frequency.value = 18000;
+    this.air.Q.value = 0.5;
+    this.distGain = ctx.createGain();
+    this.distGain.gain.value = 1;
+    this.space = new Space(ctx);
+
+    this.cabin.output.connect(this.air);
+    this.air.connect(this.distGain);
+    this.distGain.connect(this.eq.input);
+    this.eq.output.connect(this.space.input);
+    this.space.output.connect(this.reverb.input);
     this.reverb.output.connect(this.stereo.input);
     this.stereo.output.connect(this.dynamics.input);
     this.dynamics.output.connect(this.limiter);
-    this.limiter.connect(this.master);
+    this.limiter.connect(this.limiterTrim);
+    this.limiterTrim.connect(this.master);
+    this.master.connect(this.safety.input);
     // Routable output. A game usually has its own mixer — a music bus, a master
     // fader, an analyser for a visualiser — and hard-wiring to ctx.destination
     // forces the engine to be the last thing in the chain. Pass
@@ -212,8 +261,15 @@ export class EngineSim {
 
     this.waves = buildEngineWaves(ctx, p, bankAngles);
 
+    if (this.exhaustTrem) this.exhaustTrem.disconnect();
     this.exhaust = new ExhaustSystem(ctx, p);
-    this.exhaust.output.connect(this.busses.exhaust);
+    // The tremolo modulates its OWN gain stage, not the bus fader. Summed into
+    // the fader it leaked the exhaust through at ±tremolo depth with the fader
+    // at zero.
+    this.exhaustTrem = ctx.createGain();
+    this.exhaustTrem.gain.value = 1;
+    this.exhaust.output.connect(this.exhaustTrem);
+    this.exhaustTrem.connect(this.busses.exhaust);
 
     this.intake = new IntakeResonator(ctx, p);
     this.intake.output.connect(this.busses.intake);
@@ -271,9 +327,12 @@ export class EngineSim {
     this.sub = new SubLayer(ctx, p);
     this.sub.output.connect(this.busses.sub);
 
+    this.rumble = new RumbleLayer(ctx, p);
+    this.rumble.output.connect(this.busses.rumble);
+
     // Slow, non-repeating wander in pitch and level.
     this.character = new CharacterModulator(ctx, p);
-    this.character.tremolo.connect(this.busses.exhaust.gain);
+    this.character.tremolo.connect(this.exhaustTrem.gain);
 
     // --- wavetable oscillators --------------------------------------------
     // Every one of these MUST start at the same instant and always carry the
@@ -281,9 +340,18 @@ export class EngineSim {
     // pattern; if they drift apart, a cross-plane V8 stops burbling.
     this.oscs = [];
 
+    // One gate per bank between the combustion wavetable and the pipe. A
+    // misfire (the `roughness` input) drops one firing event here and leaves
+    // the flow noise and the pipe ringing — which is what a misfire sounds
+    // like: a hole in the pulse train, not silence.
+    if (this.gates) for (const g of this.gates) g.disconnect();
+    this.gates = [];
     this.waves.banks.forEach((bank, i) => {
-      const target = this.exhaust.inputs[i];
-      this.oscs.push(this._makeWavePair(bank.soft, bank.hard, target, 'bank' + i));
+      const gate = ctx.createGain();
+      gate.gain.value = 1;
+      gate.connect(this.exhaust.inputs[i]);
+      this.gates.push(gate);
+      this.oscs.push(this._makeWavePair(bank.soft, bank.hard, gate, 'bank' + i));
     });
     this.oscs.push(this._makeWavePair(
       this.waves.intake.soft, this.waves.intake.hard, this.intake.input, 'intake'));
@@ -364,7 +432,7 @@ export class EngineSim {
     for (const m of this._modules()) if (m.dispose) m.dispose();
     // The output-stage FX are not in _modules() — they have no per-frame work,
     // so they must not be walked every frame — but they still hold nodes.
-    for (const m of [this.eq, this.reverb, this.stereo, this.dynamics]) {
+    for (const m of [this.eq, this.reverb, this.stereo, this.dynamics, this.bass, this.space, this.safety]) {
       if (m && m.dispose) m.dispose();
     }
     if (this.ownsContext) setTimeout(() => this.ctx.close(), 500);
@@ -372,7 +440,7 @@ export class EngineSim {
 
   _modules() {
     return [this.exhaust, this.intake, this.transmission,
-            this.turbo, this.transients, this.exhaustNoise, this.sub,
+            this.turbo, this.transients, this.exhaustNoise, this.sub, this.rumble,
             this.character, this.cabin].filter(Boolean);
   }
 
@@ -441,7 +509,7 @@ export class EngineSim {
       label: this.presetLabel,
       engine: this.profile,
       mix: { ...this.mix },
-      tone: { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1 },
+      tone: { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1, punch: this._punch ?? 1 },
       eq: this.eq.getGains(),
       fx: {
         reverbMix: rv.mix,
@@ -590,6 +658,29 @@ export class EngineSim {
     return true;
   }
 
+  // -------------------------------------------------------------------------
+  // Live inputs — see inputs.js. Not part of the preset.
+  // -------------------------------------------------------------------------
+
+  /** Set one live input, 0..1. Returns the clamped value, or null if unknown. */
+  setInput(id, value) {
+    if (!(id in DEFAULT_INPUTS)) return null;
+    const v = clamp(Number(value) || 0, 0, 1);
+    this.inputs[id] = v;
+    return v;
+  }
+
+  /** Set several live inputs at once, e.g. from a game's telemetry. */
+  setInputs(partial = {}) {
+    for (const [k, v] of Object.entries(partial)) this.setInput(k, v);
+    return this.getInputs();
+  }
+
+  getInputs() { return { ...this.inputs }; }
+
+  /** The live-input table, for a UI that builds itself. */
+  static inputs() { return INPUT_SCHEMA; }
+
   setThrottle(v) { this.physics.throttle = clamp(Number(v) || 0, 0, 1); }
   setBrake(v) { this.physics.brake = clamp(Number(v) || 0, 0, 1); }
   setClutch(v) { this.physics.clutchPedal = clamp(Number(v) || 0, 0, 1); }
@@ -618,7 +709,7 @@ export class EngineSim {
    * shelf at 135 Hz plus a +4 dB bump at 72 Hz), `brightness` 0..2 scales the
    * high shelf (1 = default -5 dB above 3.2 kHz; >1 opens it back up).
    */
-  setTone({ rumble, brightness } = {}) {
+  setTone({ rumble, brightness, punch } = {}) {
     const now = this.ctx.currentTime;
     if (rumble != null) {
       this._rumble = clamp(Number(rumble) || 0, 0, 2);
@@ -629,7 +720,11 @@ export class EngineSim {
       this._brightness = clamp(Number(brightness) || 0, 0, 2);
       this.airCut.gain.setTargetAtTime(-6 * (2 - this._brightness), now, 0.05);
     }
-    return { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1 };
+    if (punch != null) {
+      this._punch = clamp(Number(punch) || 0, 0, 2);
+      this.bass.setAmount(0.32 * this._punch);
+    }
+    return { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1, punch: this._punch ?? 1 };
   }
 
   /** Five-band EQ, dB per band: [sub 60, body 200, honk 800, rasp 2.5k, air 8k]. */
@@ -693,6 +788,7 @@ export class EngineSim {
 
     // step() sub-steps internally and returns the fully populated params object.
     const p = this.physics.step(dt, this.ctx.currentTime);
+    this._evMisfire = 0;
     this._writeParams(p, false);
     this._lastParams = p;
     return this;
@@ -733,6 +829,7 @@ export class EngineSim {
       perspective: this._perspective,
       volume: this._volume,
       mix: { ...this.mix },
+      inputs: { ...this.inputs },
     };
   }
 
@@ -750,8 +847,9 @@ export class EngineSim {
    */
   getEvents() {
     const p = this._lastParams;
-    if (!p) return { lash: 0, pop: 0, cut: 0, engage: 0, bov: 0, shiftDone: 0 };
+    if (!p) return { misfire: 0, lash: 0, pop: 0, cut: 0, engage: 0, bov: 0, shiftDone: 0 };
     return {
+      misfire: this._evMisfire || 0,
       lash: p.evLash || 0,
       pop: p.evPop || 0,
       cut: p.evCut || 0,
@@ -762,7 +860,7 @@ export class EngineSim {
   }
 
   /** The node the whole simulator comes out of. */
-  get output() { return this.master; }
+  get output() { return this.safety.output; }
 
   /**
    * Route the output somewhere other than `ctx.destination`. Replaces any
@@ -773,9 +871,9 @@ export class EngineSim {
   connect(node) {
     if (!node) return this;
     if (this._destination) {
-      try { this.master.disconnect(this._destination); } catch (e) { /* wasn't connected */ }
+      try { this.safety.output.disconnect(this._destination); } catch (e) { /* wasn't connected */ }
     }
-    this.master.connect(node);
+    this.safety.output.connect(node);
     this._destination = node;
     return this;
   }
@@ -810,10 +908,11 @@ export class EngineSim {
   // Frame update
   // =========================================================================
 
-  _writeParams(p, immediate) {
+  _writeParams(raw, immediate) {
     if (!this.running && !immediate) return;
     const tc = immediate ? 0.002 : 0.02;
-    const now = p.now;
+    const now = raw.now;
+    const p = this._applyInputs(raw, now);
 
     // f0 is the frequency of one complete 720° engine cycle. Every wavetable
     // oscillator runs at exactly this, which keeps the banks phase-locked.
@@ -852,9 +951,65 @@ export class EngineSim {
 
     for (const m of this._modules()) m.update(p);
   }
+
+  /**
+   * Fold the live inputs into a private copy of the physics params, and drive
+   * the few nodes that belong to the inputs alone. The physics never sees any
+   * of this: `strain` makes the engine SOUND laboured, it does not slow the car.
+   */
+  _applyInputs(raw, now) {
+    const p = Object.assign(this._ps, raw);
+    const inp = this.inputs;
+    const strain = inp.strain, valve = inp.aggression, rough = inp.roughness;
+    p.strain = strain;
+    p.valve = valve;
+    p.rough = rough;
+    if (strain > 0 && !(p.overrun > 0.5)) {
+      p.load = clamp(p.load + (1 - p.load) * 0.55 * strain * Math.max(0.25, p.throttle || 0), 0, 1);
+    }
+
+    // Exhaust valve: more of the pipe reaches the air.
+    setTargetSafe(this.exhaustTrem.gain, 1 + 0.4 * valve, now, 0.08);
+
+    // Distance: air absorption + spreading loss + more room.
+    const d = inp.distance;
+    setTargetSafe(this.air.frequency, 18000 * Math.pow(0.09, d), now, 0.08);
+    setTargetSafe(this.distGain.gain, 1 / (1 + 2.6 * d), now, 0.08);
+    this.space.setEnvironment(inp.environment);
+    this.reverb.setExtra(0.35 * d + 0.32 * inp.environment);
+
+    // Roughness: misfires. Each firing event has a small chance of not
+    // happening; the gate drops for one firing period. Deterministic PRNG so
+    // a recorded run replays identically.
+    if (rough > 0 && this.gates && this.running) {
+      const fire = Math.max(1, (raw.f0 || 0) * (this.profile.cylinders || 4));
+      const dt = this._lastNow != null ? Math.max(0, now - this._lastNow) : 0;
+      const pMiss = 1 - Math.pow(1 - 0.06 * rough * rough, fire * dt);
+      this._misfireHold -= dt;
+      let r = this._misfireRng;
+      r ^= r << 13; r >>>= 0; r ^= r >> 17; r ^= r << 5; r >>>= 0;
+      this._misfireRng = r;
+      if (this._misfireHold <= 0 && (r / 4294967296) < pMiss && !(raw.overrun > 0.5)) {
+        const g = this.gates[r % this.gates.length].gain;
+        const per = this.gates.length / fire;
+        g.cancelScheduledValues(now);
+        g.setTargetAtTime(0.08, now + 0.004, 0.003);
+        g.setTargetAtTime(1, now + 0.004 + per, 0.01);
+        this._misfireHold = 0.12 + 0.4 * (1 - rough);
+        this._evMisfire = 1;
+      }
+    }
+    this._lastNow = now;
+    if (this.character) this.character.roughness = rough;
+    return p;
+  }
 }
 
-export { ENGINE_PROFILES, VEHICLE_PRESETS };
+function setTargetSafe(param, v, now, tc) {
+  if (Number.isFinite(v)) param.setTargetAtTime(v, now, tc);
+}
+
+export { ENGINE_PROFILES, VEHICLE_PRESETS, INPUT_SCHEMA, DEFAULT_INPUTS };
 export {
   PRESET_SCHEMA, PRESET_GROUPS, PRESET_VERSION, DEFAULT_SOUND,
   builtinPreset, builtinPresets, normalisePreset, presetToJSON, presetFromJSON,

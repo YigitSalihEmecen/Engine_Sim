@@ -526,12 +526,24 @@ await suite('dynamics — the three-band crossover sums flat', async () => {
   installGlobals(mk.ctx);
   const d = new Dynamics(mk.ctx, { amount: 1 });
   ok(d.bands.length === 3, 'three bands built', d.bands.map(b => b.spec.name).join('/'));
-  ok(d.bands[2].spec.attack <= 0.005 && d.bands[2].spec.ratio >= 4,
+  ok(d.bands[2].spec.attack <= 0.005 && d.bands[2].spec.ratio >= 3,
      'the high band is a fast harshness tamer',
      `${d.bands[2].spec.attack * 1000} ms, ${d.bands[2].spec.ratio}:1`);
   d.setAmount(0);
   ok(d.bands.every(b => b.comp.threshold.value === 0), 'amount 0 parks every threshold');
   d.setAmount(1);
+  // The browser compressor adds its own makeup; the stage must divide it back
+  // out, or every band becomes a fixed boost below threshold (the old high
+  // band was +13 dB on anything quiet — the "high pitched resonance").
+  const { compressorMakeupDb } = await import('../src/fx.js');
+  ok(Math.abs(compressorMakeupDb(-30, 5, 6) - 13.0) < 0.5 && Math.abs(compressorMakeupDb(-20, 3, 12) - 5.6) < 0.2,
+     'compressor auto-makeup model matches Chromium measurements',
+     `${compressorMakeupDb(-30, 5, 6).toFixed(2)} / ${compressorMakeupDb(-20, 3, 12).toFixed(2)} dB`);
+  const unity = d.bands.map(b => {
+    const auto = compressorMakeupDb(b.spec.threshold, b.spec.ratio, b.spec.knee);
+    return 20 * Math.log10(b.makeup.gain.value) + auto;
+  });
+  ok(unity.every(u => u < 1.0), 'no band boosts below its threshold', unity.map(u => u.toFixed(2) + ' dB').join(' / '));
 });
 
 await suite('turbo — spool, whine sweep and compressor surge', async () => {
@@ -673,6 +685,38 @@ await suite('harshness — no screaming resonance at any rpm', async () => {
     ok(worst < LIMIT, `${id}: 2-6 kHz share stays under ${LIMIT * 100}%`,
        `${(worst * 100).toFixed(2)}% at ${wRpm} rpm (${wF.toFixed(0)} Hz)`);
   }
+  // The rpm-LOCAL resonance (#31's second coming): swept in 50 rpm steps, no
+  // harmonic above 700 Hz may jump far above its own neighbourhood unless it
+  // is too quiet to matter. "far" = 15 dB; "quiet" = 22 dB under the loudest.
+  const { spikes } = await import('./spectrum.mjs');
+  for (const [id, p] of Object.entries(ENGINE_PROFILES)) {
+    const s = spikes(p, 1, 50);
+    ok(s.db < 15 || (s.rel ?? -99) < -22, `${id}: no audible rpm-local resonance spike`,
+       `${s.db.toFixed(1)} dB at ${s.rpm} rpm, ${s.f.toFixed(0)} Hz, ${(s.rel ?? 0).toFixed(1)} dB vs loudest`);
+  }
+});
+
+await suite('live inputs — strain, valve, roughness, distance, enclosure', async () => {
+  const { EngineSim, INPUT_SCHEMA } = await import('../src/engine-sim.js');
+  const mk = createMockContext();
+  installGlobals(mk.ctx);
+  const sim = new EngineSim(mk.ctx, { engine: 'v8cross', vehicle: 'sports' });
+  await sim.start();
+  ok(EngineSim.inputs() === INPUT_SCHEMA && INPUT_SCHEMA.length >= 5, 'input table is exposed statically',
+     INPUT_SCHEMA.map(r => r.id).join(','));
+  ok(sim.setInput('nonsense', 1) === null, 'an unknown input is refused');
+  ok(sim.setInput('distance', 7) === 1 && sim.setInput('distance', -3) === 0, 'inputs clamp to 0..1');
+  for (const r of INPUT_SCHEMA) sim.setInput(r.id, 1);
+  sim.setThrottle(1);
+  let misfires = 0;
+  for (let i = 0; i < 600; i++) { sim.update(1 / 60); mk.advance && mk.advance(1 / 60); misfires += sim.getEvents().misfire ? 1 : 0; }
+  ok(sim.getState().inputs.roughness === 1, 'state reports the live inputs');
+  ok(misfires > 0, 'full roughness produces misfires', `${misfires} in 10 s`);
+  ok(sim.air.frequency.value < 4000, 'full distance closes the air-absorption lowpass', `${sim.air.frequency.value.toFixed(0)} Hz`);
+  const preset = sim.getPreset();
+  ok(!('inputs' in preset) && preset.fx.reverbMix === sim.reverb.getState().mix,
+     'live inputs never leak into the saved preset');
+  sim.dispose();
 });
 
 await suite('presets — the schema is the source of truth, and has no orphans', async () => {

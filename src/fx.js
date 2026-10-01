@@ -174,11 +174,28 @@ export class Reverb {
   /** @param {number} v 0 = dry, 1 = fully wet */
   setMix(v) {
     this._mix = clamp(fin(v, 0), 0, 1);
+    this._writeMix(0.03);
+    return this._mix;
+  }
+
+  /**
+   * Extra wetness on top of the preset's mix, from the live inputs (distance,
+   * environment). Kept separate so a game moving the listener never edits the
+   * saved sound.
+   */
+  setExtra(v) {
+    const e = clamp(fin(v, 0), 0, 1);
+    if (Math.abs(e - (this._extra || 0)) < 1e-3) return;
+    this._extra = e;
+    this._writeMix(0.08);
+  }
+
+  _writeMix(tc) {
+    const m = clamp(this._mix + (this._extra || 0) * (1 - this._mix), 0, 1);
     const now = this.ctx.currentTime;
     // Equal-power so total loudness stays put as it is swept.
-    this.dry.gain.setTargetAtTime(Math.cos(this._mix * Math.PI / 2), now, 0.03);
-    this.wet.gain.setTargetAtTime(Math.sin(this._mix * Math.PI / 2) * 1.4, now, 0.03);
-    return this._mix;
+    this.dry.gain.setTargetAtTime(Math.cos(m * Math.PI / 2), now, tc);
+    this.wet.gain.setTargetAtTime(Math.sin(m * Math.PI / 2) * 1.4, now, tc);
   }
 
   /** @param {number} hz high-frequency absorption of the tail */
@@ -322,11 +339,23 @@ export class Stereoizer {
  * the whole stage can be dialled back to nearly transparent without rebuilding.
  */
 export class Dynamics {
+  // Re-tuned after the offline render (test/render.mjs) showed the previous
+  // high band — threshold -30 dB, 5:1, plus the browser's automatic makeup —
+  // acting as a +13 dB treble boost on everything below threshold. It
+  // roughly TRIPLED the A-weighted share of 1-5 kHz (boxer4 at high revs:
+  // 16.5 % with the stage bypassed, 54.4 % with it on). That was the "high
+  // pitched resonating" sound: every quiet comb peak, whine and hash in the
+  // top band brought up to meet the engine note.
+  //
+  // Now every band is unity below its threshold (the implementation makeup is
+  // divided back out, see compressorMakeupDb), and the bands only ever pull
+  // DOWN. The high band is the gentlest of the three thresholds' ratios and
+  // carries a slight cut, because nothing up there should be raised.
   static BANDS = [
     // f = upper edge of the band, Hz (the last band is open-ended).
-    { name: 'low', f: 240, threshold: -20, ratio: 3.0, attack: 0.014, release: 0.24, knee: 12, makeup: 1.30 },
-    { name: 'mid', f: 2000, threshold: -22, ratio: 2.4, attack: 0.020, release: 0.18, knee: 16, makeup: 1.24 },
-    { name: 'high', f: 0, threshold: -30, ratio: 5.0, attack: 0.002, release: 0.09, knee: 6, makeup: 1.55 },
+    { name: 'low', f: 220, threshold: -16, ratio: 2.6, attack: 0.018, release: 0.26, knee: 10, makeup: 1.10 },
+    { name: 'mid', f: 2000, threshold: -18, ratio: 2.0, attack: 0.022, release: 0.20, knee: 14, makeup: 1.06 },
+    { name: 'high', f: 0, threshold: -24, ratio: 3.0, attack: 0.003, release: 0.12, knee: 8, makeup: 0.90 },
   ];
 
   /** @param {object} [opts] { amount 0..1, makeup } */
@@ -362,7 +391,6 @@ export class Dynamics {
       const makeup = ctx.createGain();
       makeup.gain.value = spec.makeup;
 
-      // Build the filter chain that isolates this band.
       const chain = [];
       if (spec.name === 'low') {
         chain.push(pole('lowpass', LOW.f), pole('lowpass', LOW.f));
@@ -389,9 +417,11 @@ export class Dynamics {
   get output() { return this.out; }
 
   /**
-   * 0 = effectively bypassed (thresholds parked above the signal), 1 = the
-   * tuned defaults. Scales each band's threshold rather than its ratio, so the
-   * character of each band is preserved as it is dialled back.
+   * 0 = effectively bypassed (thresholds parked at 0 dBFS), 1 = the tuned
+   * defaults. Scales each band's threshold rather than its ratio, so the
+   * character of each band is preserved as it is dialled back. The makeup
+   * written is the intended makeup DIVIDED by what the implementation adds on
+   * its own at that threshold, so a band below threshold is always unity.
    */
   setAmount(a) {
     this._amount = clamp(fin(a, 1), 0, 1);
@@ -399,10 +429,9 @@ export class Dynamics {
     for (const b of this.bands) {
       const th = clamp(b.spec.threshold * this._amount, -100, 0);
       b.comp.threshold.setTargetAtTime(th, now, 0.05);
-      // Makeup has to come back with the threshold or dialling the stage down
-      // would read as a volume change instead of a dynamics change.
       const mk = 1 + (b.spec.makeup - 1) * this._amount;
-      b.makeup.gain.setTargetAtTime(mk, now, 0.05);
+      const auto = compressorMakeupDb(th, b.spec.ratio, b.spec.knee);
+      b.makeup.gain.setTargetAtTime(mk * Math.pow(10, -auto / 20), now, 0.05);
     }
     return this._amount;
   }
@@ -426,5 +455,180 @@ export class Dynamics {
     }
     this.inGain.disconnect();
     this.out.disconnect();
+  }
+}
+
+/**
+ * The gain, in dB, that a browser DynamicsCompressorNode adds ON ITS OWN.
+ *
+ * The Web Audio compressor (Chromium, Firefox and WebKit all share the same
+ * kernel) applies automatic makeup: (1 / gain-at-0-dBFS)^0.6. It is not
+ * exposed and cannot be turned off, so a compressor with a low threshold is
+ * also a big fixed boost to anything quiet. Measured in Chromium against this
+ * approximation:
+ *
+ *   threshold  ratio  knee   measured   this
+ *      -30       5      6     +13.22   +12.96
+ *      -20       3     12      +5.60    +5.60
+ *      -24       4      0     +10.80   +10.80
+ *     -1.5      20      0      +0.85    +0.86
+ */
+export function compressorMakeupDb(threshold, ratio, knee = 0) {
+  const t = Math.min(0, fin(threshold, 0)) + Math.max(0, fin(knee, 0)) / 2;
+  const r = Math.max(1, fin(ratio, 1));
+  return Math.max(0, -0.6 * Math.min(0, t) * (1 - 1 / r));
+}
+
+/**
+ * Final safety stage: a soft clipper that is perfectly linear up to 0.6 and
+ * approaches ±0.99 asymptotically. A DynamicsCompressor is NOT a brickwall —
+ * it has a fixed 6 ms look-ahead and a finite attack, and a bang landing on a
+ * full-scale note overshoots it. Whatever gets past it lands here and rounds
+ * off instead of flat-topping at the DAC, which is the click/crackle heard as
+ * "peaking". Inaudible on anything that was not going to clip anyway.
+ */
+export class SafetyClipper {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.pre = ctx.createGain();
+    // The curve covers ±HEAD of input so nothing realistic reaches the
+    // implementation's own hard clamp at the curve ends.
+    const HEAD = 4;
+    this.pre.gain.value = 1 / HEAD;
+    this.shaper = ctx.createWaveShaper();
+    const n = 8193, c = new Float32Array(n);
+    const lin = 0.6, room = 0.99 - lin;
+    for (let i = 0; i < n; i++) {
+      const x = HEAD * ((i / (n - 1)) * 2 - 1);
+      const a = Math.abs(x);
+      const y = a <= lin ? a : lin + room * Math.tanh((a - lin) / room);
+      c[i] = Math.sign(x) * y;
+    }
+    this.shaper.curve = c;
+    this.shaper.oversample = '2x';
+    this.pre.connect(this.shaper);
+  }
+  get input() { return this.pre; }
+  get output() { return this.shaper; }
+  dispose() { this.pre.disconnect(); this.shaper.disconnect(); }
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Psychoacoustic bass — the "missing fundamental".
+ *
+ * Most of what people listen to an engine on (a laptop, a phone, earbuds)
+ * cannot move air below ~100 Hz, and an engine's identity lives at 30-120 Hz.
+ * The ear does not need the fundamental to hear the pitch: given its 2nd, 3rd
+ * and 4th harmonics it reconstructs it. This is the principle behind every
+ * commercial bass enhancer (MaxxBass, Waves RBass, the "virtual bass" in a
+ * phone's DSP).
+ *
+ *   in ─► LP 140 (LR4) ─► drive ─► asymmetric shaper ─► HP 90 ─► LP 420 ─► amount ─► out
+ *
+ * The shaper is a soft asymmetric curve (even AND odd harmonics), the
+ * band-pass keeps only the harmonics a small driver CAN play, and nothing of
+ * it reaches the 1-5 kHz band. Fed from the mix bus after the infrasonic
+ * guard, summed back in ahead of the tone stage, and scaled by `tone.punch`.
+ */
+export class BassEnhancer {
+  constructor(ctx, opts = {}) {
+    this.ctx = ctx;
+    const BW_Q = -3.0103;
+    const mk = (type, f, q) => {
+      const b = ctx.createBiquadFilter();
+      b.type = type; b.frequency.value = f; b.Q.value = q; return b;
+    };
+    this.inGain = ctx.createGain();
+    this.lp1 = mk('lowpass', 140, BW_Q);
+    this.lp2 = mk('lowpass', 140, BW_Q);
+    this.drive = ctx.createGain();
+    this.drive.gain.value = 2.2;
+    this.span = ctx.createGain();
+    this.span.gain.value = 1 / 4;
+    this.shaper = ctx.createWaveShaper();
+    const n = 4097, c = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = 4 * ((i / (n - 1)) * 2 - 1);
+      const t = Math.tanh(x);
+      c[i] = t + 0.45 * t * t;               // even + odd harmonics
+    }
+    this.shaper.curve = c;
+    this.shaper.oversample = '2x';
+    this.hp = mk('highpass', 90, 0.7);
+    this.lp3 = mk('lowpass', 420, 0.6);
+    this.amount = ctx.createGain();
+    this.amount.gain.value = clamp(fin(opts.amount, 0.32), 0, 2);
+    this.inGain.connect(this.lp1); this.lp1.connect(this.lp2);
+    this.lp2.connect(this.drive); this.drive.connect(this.span);
+    this.span.connect(this.shaper); this.shaper.connect(this.hp);
+    this.hp.connect(this.lp3); this.lp3.connect(this.amount);
+  }
+  get input() { return this.inGain; }
+  get output() { return this.amount; }
+  setAmount(v) {
+    this.amount.gain.setTargetAtTime(clamp(fin(v, 0), 0, 2), this.ctx.currentTime, 0.05);
+  }
+  dispose() {
+    for (const n of [this.inGain, this.lp1, this.lp2, this.drive, this.span,
+                     this.shaper, this.hp, this.lp3, this.amount]) n.disconnect();
+  }
+}
+
+/**
+ * Space — the environment the car is in, as a live input.
+ *
+ * The convolution reverb is a fixed room (resizing it rebuilds an impulse
+ * response, never per frame). A tunnel, an underpass or a car park is a
+ * different thing: strong, discrete, closely spaced reflections that FLUTTER,
+ * because the walls are parallel and hard. That is two short feedback delays
+ * with a darkening filter in the loop, mixed in by `environment`.
+ *
+ *   in ──────────────────────────────────────────► out
+ *    └─►(+)─► delay A (37 ms) ─► LP ─┬─► wet ─────►
+ *        ▲                           └─► fb ─┐
+ *        └───────────────────────────────────┘     (and the same with B, 61 ms)
+ *
+ * Both loops clear the 128-sample in-cycle delay floor by a wide margin.
+ */
+export class Space {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.inGain = ctx.createGain();
+    this.out = ctx.createGain();
+    this.inGain.connect(this.out);
+    this.loops = [0.037, 0.061].map((t, i) => {
+      const sum = ctx.createGain();
+      const d = ctx.createDelay(0.2);
+      d.delayTime.value = t;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = i ? 1900 : 2600; lp.Q.value = 0.5;
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass'; hp.frequency.value = 70; hp.Q.value = 0.5;
+      const fb = ctx.createGain(); fb.gain.value = 0;
+      const wet = ctx.createGain(); wet.gain.value = 0;
+      this.inGain.connect(sum); sum.connect(d); d.connect(lp); lp.connect(hp);
+      hp.connect(fb); fb.connect(sum); hp.connect(wet); wet.connect(this.out);
+      return { sum, d, lp, hp, fb, wet };
+    });
+    this._env = -1;
+  }
+  get input() { return this.inGain; }
+  get output() { return this.out; }
+  /** 0 = open road, 1 = tunnel. */
+  setEnvironment(e) {
+    e = clamp(fin(e, 0), 0, 1);
+    if (Math.abs(e - this._env) < 1e-3) return;
+    this._env = e;
+    const now = this.ctx.currentTime;
+    this.loops.forEach((l, i) => {
+      l.fb.gain.setTargetAtTime(0.52 * e, now, 0.08);
+      l.wet.gain.setTargetAtTime((i ? 0.30 : 0.38) * e, now, 0.08);
+    });
+  }
+  dispose() {
+    this.inGain.disconnect(); this.out.disconnect();
+    for (const l of this.loops) for (const n of Object.values(l)) n.disconnect();
   }
 }
