@@ -1,0 +1,256 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>offline render harness</title>
+<!--
+  Real-browser offline render of the whole engine graph. Driven by
+  test/render.mjs through Playwright; nothing here is user-facing.
+
+  Unlike spectrum.mjs (analytic, linear path only) this runs the actual
+  browser DSP: the waveshaper, every DynamicsCompressor (including the
+  implementation's automatic makeup gain), the limiter and the convolver.
+  The OfflineAudioContext output is float and is NOT clipped, so a sample
+  above 1.0 here is a sample that would clip at a real device.
+-->
+<script type="module">
+import { EngineSim } from '../src/engine-sim.js';
+
+const SR = 48000;
+
+// ---- analysis helpers -------------------------------------------------------
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const vr = re[b] * cr - im[b] * ci, vi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - vr; im[b] = im[a] - vi; re[a] += vr; im[a] += vi;
+        const n2 = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = n2;
+      }
+    }
+  }
+}
+
+/** Power spectrum (dB) of a Hann-windowed frame. */
+function spectrum(x, at, N) {
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+    re[i] = (x[at + i] || 0) * w;
+  }
+  fft(re, im);
+  const p = new Float64Array(N / 2);
+  for (let k = 0; k < N / 2; k++) p[k] = re[k] * re[k] + im[k] * im[k];
+  return p;
+}
+
+const BANDS = [[15, 40], [40, 80], [80, 160], [160, 320], [320, 640],
+               [640, 1280], [1280, 2560], [2560, 5120], [5120, 20000]];
+
+function analyse(ch, rpm, opts = {}) {
+  const N = 8192, hop = 4096, bin = SR / N;
+  const frames = [];
+  for (let at = 0; at + N < ch.length; at += hop) {
+    const p = spectrum(ch, at, N);
+    let tot = 0; for (let k = 1; k < p.length; k++) tot += p[k];
+    const bands = BANDS.map(([lo, hi]) => {
+      let s = 0;
+      for (let k = Math.ceil(lo / bin); k < Math.min(p.length, hi / bin); k++) s += p[k];
+      return s / (tot || 1);
+    });
+    // A-weighted share of 1-5 kHz: how much of what the ear actually weights
+    // sits in its most sensitive band. This is the "harsh" number.
+    let aTot = 0, aHarsh = 0;
+    for (let k = 1; k < p.length; k++) {
+      const f = k * bin, f2 = f * f;
+      const ra = (12194 ** 2 * f2 * f2) / ((f2 + 20.6 ** 2) * Math.sqrt((f2 + 107.7 ** 2) * (f2 + 737.9 ** 2)) * (f2 + 12194 ** 2));
+      const v = p[k] * ra * ra;
+      aTot += v; if (f > 1000 && f < 5000) aHarsh += v;
+    }
+    const harsh = aHarsh / (aTot || 1);
+    let cen = 0; for (let k = 1; k < p.length; k++) cen += k * bin * p[k]; cen /= (tot || 1);
+    // Tonal prominence above 1.2 kHz: a bin vs the median of its 1/3-octave
+    // neighbourhood. A narrow resonance stands out; a harmonic series of a
+    // 100 Hz note in a broad spectrum does not reach 20 dB.
+    let worst = -99, worstF = 0;
+    const dB = new Float64Array(p.length);
+    for (let k = 1; k < p.length; k++) dB[k] = 10 * Math.log10(p[k] + 1e-20);
+    const frameLevel = 10 * Math.log10(tot + 1e-20);
+    for (let k = Math.round(1200 / bin); k < Math.round(12000 / bin); k++) {
+      const lo = Math.round(k / 1.26), hi = Math.round(k * 1.26);
+      const nb = [];
+      for (let j = lo; j <= hi; j += 2) nb.push(dB[j]);
+      nb.sort((a, b) => a - b);
+      const med = nb[nb.length >> 1];
+      // only count tones that also carry real energy relative to the frame
+      if (dB[k] - frameLevel < -45) continue;
+      const prom = dB[k] - med;
+      if (prom > worst) { worst = prom; worstF = k * bin; }
+    }
+    let peaks = '';
+    if (window.TRACE) {
+      const pk = [];
+      for (let k = Math.round(700 / bin); k < p.length - 1; k++)
+        if (p[k] > p[k - 1] && p[k] >= p[k + 1]) pk.push([dB[k] - frameLevel, k * bin]);
+      pk.sort((a, b) => b[0] - a[0]);
+      peaks = pk.slice(0, 5).map(([d, f]) => f.toFixed(0) + ':' + d.toFixed(0)).join(' ');
+    }
+    const t = (at + N / 2) / SR;
+    frames.push({ t, rpm: rpm(t), bands, cen, harsh, tone: worst, toneF: worstF, peaks });
+  }
+  return frames;
+}
+
+function levels(ch) {
+  const W = 2400;   // 50 ms
+  const out = [];
+  let clips = 0, peak = 0;
+  for (let at = 0; at < ch.length; at += W) {
+    let pk = 0, ss = 0;
+    for (let i = at; i < Math.min(ch.length, at + W); i++) {
+      const a = Math.abs(ch[i]); if (a > pk) pk = a; ss += ch[i] * ch[i];
+      if (a > 1) clips++;
+    }
+    if (pk > peak) peak = pk;
+    out.push({ t: at / SR, peak: pk, rms: Math.sqrt(ss / W) });
+  }
+  return { windows: out, clips, peak };
+}
+
+// ---- scenario ---------------------------------------------------------------
+/**
+ * A pull in 3rd from low revs to the limiter, held on the limiter, a lift,
+ * then a blip in neutral. The high-rpm load case is where the complaint lives.
+ */
+async function render(engine, vehicle = 'sports', seconds = 11, extra = {}) {
+  const ctx = new OfflineAudioContext({ numberOfChannels: 4, length: SR * seconds, sampleRate: SR });
+  const realResume = ctx.resume.bind(ctx);
+  ctx.resume = async () => {};      // an offline context cannot be resumed pre-render
+  const merger = ctx.createChannelMerger(4);
+  merger.channelInterpretation = 'discrete';
+  merger.connect(ctx.destination);
+  ctx.destination.channelCount = 4;
+  ctx.destination.channelInterpretation = 'discrete';
+
+  const sim = new EngineSim(ctx, { engine, vehicle, destination: merger, volume: extra.volume ?? 0.8 });
+  if (extra.preset) sim.loadPreset(extra.preset);
+  if (extra.dyn != null && extra.dyn !== '') sim.setDynamics(+extra.dyn);
+  if (extra.solo) {
+    const m = {};
+    for (const k of Object.keys(sim.mix)) m[k] = k === extra.solo ? sim.mix[k] : 0;
+    sim.setMix(m);
+    if (extra.solo !== 'transients') sim.setPopDepth(0);
+  }
+  // master is stereo; split it so each side lands on its own merger input
+  sim.connect(ctx.createGain());    // detach from the merger's input 0
+  const split = ctx.createChannelSplitter(2);
+  sim.master.connect(split);
+  split.connect(merger, 0, 0); split.connect(merger, 1, 1);
+  // ch2: what the exhaust waveshaper is fed. Above 1.0 the curve flat-tops.
+  const probeShaper = () => {
+    const nl = sim.exhaust && sim.exhaust.nonlinearity;
+    if (nl && nl.drive) nl.drive.connect(merger, 0, 2);
+  };
+  probeShaper();
+  // ch3: the mix bus before ANY dynamics — the raw sum of the voices.
+  sim.mixBus.connect(merger, 0, 3);
+
+  sim.setAutoShift(false);
+  await sim.start();
+  sim.setGear(extra.gear ?? 2);
+
+  const dt = 1 / 60;
+  const rpmLog = [];
+  // 0-0.6 idle, then WOT in the chosen gear until the limiter, held there,
+  // lift at 8.5 s, blip at 9.6 s. Long enough that every engine reaches the
+  // limiter in 2nd on the sports car.
+  const prog = (t) => {
+    if (t < 0.6) return { thr: 0 };
+    if (t < 8.5) return { thr: 1 };
+    if (t < 9.6) return { thr: 0 };
+    return { thr: t < 10.3 ? 1 : 0 };
+  };
+  for (let i = 1; i < seconds * 60 - 1; i++) {
+    const t = i * dt;
+    ctx.suspend(Math.round(t * SR / 128) * 128 / SR).then(() => {
+      const c = prog(t);
+      sim.setThrottle(c.thr);
+      sim.update(dt);
+      const s = sim.getState();
+      rpmLog.push([ctx.currentTime, s.rpm]);
+      realResume();
+    });
+  }
+  const buf = await ctx.startRendering();
+  const rpmAt = (t) => {
+    let best = rpmLog[0] ? rpmLog[0][1] : 0;
+    for (const [tt, r] of rpmLog) { if (tt > t) break; best = r; }
+    return best;
+  };
+  return { buf, rpmAt, sim };
+}
+
+function summarise(engine, res) {
+  const L = res.buf.getChannelData(0), R = res.buf.getChannelData(1);
+  const shaper = res.buf.getChannelData(2), bus = res.buf.getChannelData(3);
+  const lv = levels(L), lvR = levels(R), lvS = levels(shaper), lvB = levels(bus);
+  const fr = analyse(L, res.rpmAt);
+  const hi = fr.filter(f => f.rpm > 0.75 * (res.sim.profile.redlineRpm));
+  const mean = (a, f) => a.length ? a.reduce((s, x) => s + f(x), 0) / a.length : 0;
+  const allBands = BANDS.map((_, i) => mean(fr, f => f.bands[i]));
+  const hiBands = BANDS.map((_, i) => mean(hi, f => f.bands[i]));
+  const worstTone = fr.reduce((w, f) => f.tone > w.tone ? f : w, { tone: -99 });
+  if (window.TRACE) window.TRACE.push(...fr.map(f => [f.t.toFixed(2), Math.round(f.rpm), (f.harsh*100).toFixed(0), f.cen.toFixed(0), (f.tone||0).toFixed(0)+'@'+f.toneF.toFixed(0), f.peaks]));
+  return {
+    engine,
+    peak: Math.max(lv.peak, lvR.peak), clips: lv.clips + lvR.clips,
+    shaperPeak: lvS.peak, shaperOver: lvS.clips,
+    busPeak: lvB.peak,
+    rmsDb: 20 * Math.log10(mean(lv.windows, w => w.rms) + 1e-9),
+    crestDb: 20 * Math.log10(lv.peak / (Math.max(...lv.windows.map(w => w.rms)) + 1e-9)),
+    centroid: mean(fr, f => f.cen), centroidHi: mean(hi, f => f.cen),
+    bands: allBands, bandsHi: hiBands,
+    tone: worstTone.tone, toneF: worstTone.toneF, toneRpm: worstTone.rpm,
+    toneHiMean: mean(hi, f => f.tone),
+    harsh: mean(fr, f => f.harsh), harshHi: mean(hi, f => f.harsh), harshMax: Math.max(...fr.map(f => f.harsh)), harshMaxT: fr.reduce((w, f) => f.harsh > w.harsh ? f : w, fr[0]).t,
+    maxRpm: Math.max(...fr.map(f => f.rpm)),
+  };
+}
+
+window.runOne = async (engine, opts = {}) => {
+  const t0 = performance.now();
+  const res = await render(engine, opts.vehicle || 'sports', opts.seconds || 11, opts);
+  const t1 = performance.now();
+  const s = summarise(engine, res);
+  console.log('render ms', (t1 - t0).toFixed(0), 'analyse ms', (performance.now() - t1).toFixed(0));
+  if (opts.wav) {
+    // 16-bit stereo WAV of the main output, base64, so a human can listen
+    const L = res.buf.getChannelData(0), R = res.buf.getChannelData(1);
+    const n = L.length, buf = new ArrayBuffer(44 + n * 4), v = new DataView(buf);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 4, true); w(8, 'WAVE'); w(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+    v.setUint32(24, SR, true); v.setUint32(28, SR * 4, true); v.setUint16(32, 4, true);
+    v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 4, true);
+    for (let i = 0; i < n; i++) {
+      v.setInt16(44 + i * 4, Math.max(-1, Math.min(1, L[i])) * 32767, true);
+      v.setInt16(46 + i * 4, Math.max(-1, Math.min(1, R[i])) * 32767, true);
+    }
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    s.wav = btoa(bin);
+  }
+  return s;
+};
+window.engines = () => EngineSim.engines().map(e => e.id);
+window.ready = true;
+</script>

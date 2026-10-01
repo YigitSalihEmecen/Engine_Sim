@@ -66,9 +66,13 @@ export const DEFAULT_SOUND = Object.freeze({
     // loud. See TurboLayer's tone stage.
     turbo: 0.49,
     transients: 0.42,
-    sub: 0.9,
+    // 0.9 → 0.55. The sub sine was most of the power in the whole mix (see
+    // test/render.mjs) and almost none of what is audible; the rumble layer and
+    // the bass enhancer carry the low end now.
+    sub: 0.55,
+    rumble: 0.85,
   }),
-  tone: Object.freeze({ rumble: 1, brightness: 1 }),
+  tone: Object.freeze({ rumble: 1, brightness: 1, punch: 1 }),
   /** dB per band: [sub 60, body 200, honk 800, rasp 2.5 k, air 8 k]. */
   eq: Object.freeze([0, 0, 0, 0, 0]),
   fx: Object.freeze({
@@ -149,10 +153,12 @@ export const PRESET_SCHEMA = Object.freeze([
   { path: 'mix.turbo', label: 'Turbo', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
   { path: 'mix.transients', label: 'Pops', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
   { path: 'mix.sub', label: 'Sub', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
+  { path: 'mix.rumble', label: 'Rumble', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
 
   // --- tone + fx ----------------------------------------------------------
   { path: 'tone.rumble', label: 'Rumble', min: 0, max: 2, step: 0.01, unit: '%', group: 'tone', rebuild: false },
   { path: 'tone.brightness', label: 'Brightness', min: 0, max: 2, step: 0.01, unit: '%', group: 'tone', rebuild: false },
+  { path: 'tone.punch', label: 'Bass punch', min: 0, max: 2, step: 0.01, unit: '%', group: 'tone', rebuild: false },
   { path: 'fx.popDepth', label: 'Pop depth', min: 0, max: 2, step: 0.01, unit: '%', group: 'tone', rebuild: false },
   { path: 'fx.dynamics', label: 'Compression', min: 0, max: 1, step: 0.01, unit: '%', group: 'tone', rebuild: false },
   { path: 'fx.reverbMix', label: 'Reverb mix', min: 0, max: 1, step: 0.01, unit: '%', group: 'fx', rebuild: false },
