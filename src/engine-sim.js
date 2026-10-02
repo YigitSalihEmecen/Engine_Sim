@@ -29,7 +29,7 @@ import { TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
 import { ExhaustNoise, SubLayer, CharacterModulator, RumbleLayer } from './character.js';
 import { INPUT_SCHEMA, DEFAULT_INPUTS } from './inputs.js';
 import { Drivetrain } from './physics.js';
-import { EQ, Reverb, Stereoizer, Dynamics, SafetyClipper, BassEnhancer, Space, Exciter, compressorMakeupDb } from './fx.js';
+import { EQ, Reverb, Stereoizer, Dynamics, SafetyClipper, BassEnhancer, Space, compressorMakeupDb } from './fx.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -134,7 +134,7 @@ export class EngineSim {
     // to full scale that the compressor was working continuously and any
     // transient pushed it hard. Backing the bus off leaves room for a bang to
     // be loud without the gain stage reacting to it.
-    this.mixBus.gain.value = 0.74;   // 0.42 → 0.52 when the dynamics makeup went; → 0.74 with the exciter (the limiter has the headroom)
+    this.mixBus.gain.value = 0.74;   // 0.42 → 0.52 when the dynamics makeup went; → 0.74 (the limiter has the headroom)
 
     // --- tone stage --------------------------------------------------------
     // The wavetable's radiation shelf is expressed in engine ORDERS, so it
@@ -193,11 +193,6 @@ export class EngineSim {
     this.bodyBump.connect(this.presence);
     this.presence.connect(this.airCut);
     this.airCut.connect(this.cabin.input);
-    // Crispness: harmonics of the engine note, generated rather than EQ'd up,
-    // summed in after the treble shelf so the shelf does not take them back.
-    this.exciter = new Exciter(ctx);
-    this.infra[1].connect(this.exciter.input);
-    this.exciter.output.connect(this.cabin.input);
     // Brickwall after the slow compressor. The main compressor is deliberately
     // slow so transients keep their attack, which means peaks now get through
     // it — and a 150 Hz bang also collects the +9 dB rumble shelf on the way,
@@ -206,14 +201,18 @@ export class EngineSim {
     // something would otherwise distort.
     this.limiter = ctx.createDynamicsCompressor();
     this.limiter.threshold.value = -1.5;
-    this.limiter.knee.value = 0;
+    // Soft knee, 4 ms attack, 160 ms release. At knee 0 / 1 ms / 50 ms it
+    // snapped the gain on every peak, and once the mids were brought forward
+    // it was grabbing often enough to be heard as clicks (V6: 2.1/s, all of
+    // them gone with the limiter bypassed; 0.5/s with these settings).
+    this.limiter.knee.value = 4;
     this.limiter.ratio.value = 20;
-    this.limiter.attack.value = 0.001;
-    this.limiter.release.value = 0.05;
+    this.limiter.attack.value = 0.004;
+    this.limiter.release.value = 0.16;
     // The compressor adds its own makeup (+0.86 dB here); take it back out
     // so the limiter never raises anything. See compressorMakeupDb.
     this.limiterTrim = ctx.createGain();
-    this.limiterTrim.gain.value = Math.pow(10, -compressorMakeupDb(-1.5, 20, 0) / 20);
+    this.limiterTrim.gain.value = Math.pow(10, -compressorMakeupDb(-1.5, 20, 4) / 20);
     // And behind everything, a soft clipper: the limiter has look-ahead and a
     // finite attack, so a bang on top of a full-scale note can overshoot it.
     this.safety = new SafetyClipper(ctx);
@@ -726,7 +725,6 @@ export class EngineSim {
     if (brightness != null) {
       this._brightness = clamp(Number(brightness) || 0, 0, 2);
       this.airCut.gain.setTargetAtTime(-6 * (2 - this._brightness), now, 0.05);
-      if (this.exciter) this.exciter.level = this._brightness;
     }
     if (punch != null) {
       this._punch = clamp(Number(punch) || 0, 0, 2);
@@ -958,7 +956,6 @@ export class EngineSim {
     }
 
     for (const m of this._modules()) m.update(p);
-    if (this.exciter) this.exciter.update(p.overrun > 0.5 ? 0 : p.load, now);
   }
 
   /**

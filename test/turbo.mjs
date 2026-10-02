@@ -40,11 +40,11 @@ await page.goto(`http://localhost:${server.address().port}/test/render.html`);
 await page.waitForFunction(() => window.ready === true, null, { timeout: 30000 });
 const TURBO = ['i3', 'boxer4', 'i5', 'i6', 'i6diesel', 'v6tt', 'v8tt'];
 const list = process.argv.slice(2).length ? process.argv.slice(2) : TURBO;
-console.log('engine    whine Hz / dB vs mix (3 pulls)         | lift: rpm spool surge depth dB-vs-mix(before/during)');
+console.log('engine    whine Hz / dB vs mix (3 pulls)         | lift: rpm spool surge tail depth dB-vs-mix(before/during)');
 for (const e of list) {
   const r = await page.evaluate(([e, tweak]) => window.runTurbo(e, { tweak }), [e, process.env.EXTRA || '']);
   const w = r.whine.map(x => `${x.hz.toFixed(0).padStart(5)}/${x.rel.toFixed(0).padStart(3)}`).join(' ');
-  const l = r.lifts.map(x => `${String(x.rpm).padStart(5)} ${x.spool.toFixed(2)} ${x.surge.toFixed(2)} ${x.depth.toFixed(2)} ${x.rel.toFixed(0).padStart(3)}/${x.relLift.toFixed(0).padStart(3)}`).join(' |');
+  const l = r.lifts.map(x => `${String(x.rpm).padStart(5)} ${x.spool.toFixed(2)} ${x.surge.toFixed(2)} ${x.tail.toFixed(2)}s ${x.depth.toFixed(2)} ${x.rel.toFixed(0).padStart(3)}/${x.relLift.toFixed(0).padStart(3)}`).join(' |');
   console.log(`${e.padEnd(9)} ${w}  |${l}`);
 }
 await browser.close();

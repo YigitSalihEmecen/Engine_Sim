@@ -543,7 +543,11 @@ await suite('dynamics — the three-band crossover sums flat', async () => {
     const auto = compressorMakeupDb(b.spec.threshold, b.spec.ratio, b.spec.knee);
     return 20 * Math.log10(b.makeup.gain.value) + auto;
   });
-  ok(unity.every(u => u < 1.0), 'no band boosts below its threshold', unity.map(u => u.toFixed(2) + ' dB').join(' / '));
+  // The low and HIGH bands must not boost (the treble band is where the
+  // whistles lived). The mid band carries a deliberate lift — 220 Hz-2 kHz is
+  // where the revs are heard (ledger #56) — bounded so it cannot creep.
+  ok(unity[0] < 1.0 && unity[2] < 1.0 && unity[1] < 7.0,
+     'no band boosts below its threshold beyond the intended mid lift', unity.map(u => u.toFixed(2) + ' dB').join(' / '));
 });
 
 await suite('turbo — spool, whine sweep and compressor surge', async () => {

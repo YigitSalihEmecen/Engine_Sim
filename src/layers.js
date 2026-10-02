@@ -599,6 +599,8 @@ export class TransmissionLayer {
  * valve leaves pressure standing and the compressor stalls anyway. Cars that do
  * both, a soft chiu with a chatter behind it, are the ones in between.
  */
+const closedNow = (throttle) => throttle < 0.10;
+
 export class TurboLayer {
   /** True if this profile has a turbo at all. */
   static supports(profile) { return !!(profile && profile.turbo); }
@@ -944,7 +946,7 @@ export class TurboLayer {
     const coasting = throttle < 0.12;
     const tau = drive > this.spool
       ? this.inertia * 1.1
-      : this.inertia * (coasting ? 0.75 : 1.9);
+      : this.inertia * (coasting ? 0.45 : 1.3);   // was 0.75 / 1.9: the whine and rush hung on after a lift
     const alpha = dt > 0 ? (1 - Math.exp(-dt / Math.max(1e-3, tau))) : 0;
     this.spool += (drive - this.spool) * alpha;
     // Windmilling floor: the shaft never stops while gas flows through it.
@@ -1057,7 +1059,10 @@ export class TurboLayer {
   _stepSurge(now, dt, throttle, rpmNorm, shifting, p) {
     // The plenum drains as the surge cycles vent it, so the stall weakens even
     // if the throttle stays shut. ~0.55 s to fall to a third.
-    this._surge *= Math.exp(-dt / 0.65);
+    // 0.42 → 0.65 → 0.26: long enough for a few clear "stu"s, short enough
+    // that the flutter is a response to the lift, not a tail that hangs on.
+    this._surge *= Math.exp(-dt / 0.26);
+    this._closedT = closedNow(throttle) ? (this._closedT || 0) + dt : 0;
     if (this._surge < 1e-3) this._surge = 0;
 
     const closed = throttle < 0.10;
@@ -1119,14 +1124,20 @@ export class TurboLayer {
     }
     // While the throttle stays shut and boost is still up, surge sustains
     // rather than decaying away — a long lift keeps chattering.
-    if (closed && stall > 0.06) {
+    // Sustain only for the first moments of a lift: the plenum empties in
+    // well under a second, and holding it longer read as lingering.
+    if (closed && stall > 0.06 && this._closedT < 0.35) {
       this._surge = Math.max(this._surge, stall * 0.8);
     }
     if (limiter && stall > 0.06) {
       this._surge = Math.max(this._surge, stall * 0.7);
     }
-    if (!closed && !shifting && !limiter && !(throttle < 0.5 && this._surge > 0.3)) {
-      this._surge *= 0.25;   // reopening kills it at once
+    // Reopening kills it at once — but only an actual reopening (the pedal
+    // coming back UP, or past half). A partial lift held at 0.3 is still a
+    // lift, and lets the flutter play out over its own short decay.
+    const reopening = throttle > 0.5 || throttle > this._prevThrottle + 0.05;
+    if (!closed && !shifting && !limiter && reopening) {
+      this._surge *= 0.25;
     }
 
     const s = clamp(this._surge, 0, 1);
