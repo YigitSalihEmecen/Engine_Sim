@@ -266,6 +266,7 @@ node test/render.mjs  # REAL browser render (Playwright + Chromium): peaks, clip
                       # band shares, A-weighted harshness and level, mids, tonal peaks
                       # per engine; WAV=dir/ also counts clicks (test/clicks.mjs)
 node test/turbo.mjs   # turbo whine pitch/level and flutter on three lifts per engine
+node test/chain.mjs   # octave response: the voices, what the output chain does, the result
 ```
 
 ```

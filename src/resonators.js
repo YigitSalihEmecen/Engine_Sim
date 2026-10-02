@@ -174,7 +174,7 @@ const CURVE_CACHE = new Map();
  * kp > kn means the compression (positive) half saturates harder than the
  * rarefaction half, matching the direction the real steepening goes.
  */
-function shockCurve(kp, kn, n = 4096, head = SHOCK_HEADROOM) {
+function shockCurve(kp, kn, n = 4096, head = shockHead()) {
   const key = kp + ':' + kn + ':' + n + ':' + head;
   const hit = CURVE_CACHE.get(key);
   if (hit) return hit;
@@ -204,7 +204,7 @@ function shockCurve(kp, kn, n = 4096, head = SHOCK_HEADROOM) {
 }
 
 /** Input range the shock curve covers before the shaper's own hard clamp. */
-const SHOCK_HEADROOM = 6;
+const shockHead = () => 6;
 
 // ---------------------------------------------------------------------------
 // Waveguide — one pipe
@@ -911,7 +911,10 @@ export class Nonlinearity {
     // 4.5 → 2.6. With the old curve the drive was mostly moving the signal
     // into the clamp; with a curve that has real headroom, 2.6 at full load
     // gives the same audible rasp onset without squaring the waveform.
-    this.maxDrive = clamp(num(opts.maxDrive, 2.6), 1, 40);
+    // 2.6 → 4.5 (the original): with the soft ±6 curve the stage no longer
+    // flat-tops, and at 2.6 it was nearly linear — the harmonic grit of the
+    // pulses went with it and the engine sounded "underwater" (test/chain.mjs).
+    this.maxDrive = clamp(num(opts.maxDrive, 4.5), 1, 40);
     this.idleDrive = clamp(num(opts.idleDrive, 1.0), 0.1, 10);
     const kp = clamp(num(opts.kp, 3.2), 0.5, 12);
     const kn = clamp(num(opts.kn, 2.0), 0.5, 12);
@@ -927,7 +930,7 @@ export class Nonlinearity {
     this.shaper.oversample = '4x';
     // The curve spans ±SHOCK_HEADROOM; scale into its domain.
     this.span = ctx.createGain();
-    this.span.gain.value = 1 / SHOCK_HEADROOM;
+    this.span.gain.value = 1 / shockHead();
 
     // Asymmetric shaping of a symmetric signal produces a load-dependent DC
     // offset. Without this highpass, rolling on throttle would thump.
@@ -1232,8 +1235,11 @@ export class ExhaustSystem {
       // reflects far less cleanly than a header's open end. Modelled as a
       // second strong comb it lined its peaks up with the header's and made the
       // rpm-local spikes described at MODE_SURVIVAL.
-      reflection: clamp(num(ex.reflection, 0.5) * 0.5, 0, MAX_FEEDBACK),
-      damping: clamp(num(ex.damping, 0.4) * 2.0, 0.05, 2),
+      // ×0.5 / ×2.0 killed the rpm-local spikes and the pipe's mid-range
+      // character with them; ×0.7 / ×1.5 keeps the spikes down (tone metric)
+      // and gives the mids back.
+      reflection: clamp(num(ex.reflection, 0.5) * 0.7, 0, MAX_FEEDBACK),
+      damping: clamp(num(ex.damping, 0.4) * 1.5, 0.05, 2),
     }, opts.collectorOpts));
     this.collectorNode.connect(this.collector.input);
 
