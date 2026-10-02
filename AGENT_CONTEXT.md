@@ -984,6 +984,7 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 50 | **rpm-local scream, again** | header×collector series combs; 20-26 dB spikes the 1000-rpm grid missed | collector 0.5/2.0, MODE_SURVIVAL 1.8, `spikes()` test |
 | 51 | Whines were pure tones | 35-43 dB prominence | levels down, sines not triangles |
 | 52 | Low end inaudible yet dominant | 40-80 Hz sub sine = most of the power | infrasonic HPF, RumbleLayer, BassEnhancer |
+| 53 | Crackle under every engine, every sound | RumbleLayer applied its firing-pulse AM AFTER its low-pass filters: each 1 ms pulse attack was a broadband edge on the output, and the band-limited sawtooth's reset ripple, mapped through the steep pulse front, added spike chatter. `test/clicks.mjs` measured 50-78 clicks/s, 100 % from this layer | AM before the filters (noise → AM → HP → LP → body); raised-cosine attack, rise 0.16. 0-0.9 clicks/s, below the old main build (0.7-6.7). `WAV=dir STRICT=1 node test/render.mjs` now fails above 2 clicks/s |
 | 47 | The generated console read pipe lengths as percentages | first pass formatted any unitless row as `v×100`, so a 1.75 m header showed "175" and a 4.4 decay showed "440" | `unit` became a display CONTRACT — real unit = suffix formatted by `step`, `%` = ×100, `''` = bare number |
 
 ### #31 in detail — it will come back if the constant moves
