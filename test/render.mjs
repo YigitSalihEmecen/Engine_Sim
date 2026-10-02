@@ -5,6 +5,7 @@
  *   node test/render.mjs v12 i4          just those
  *   WAV=out/ node test/render.mjs v8cross   also write a .wav per engine
  *   STRICT=1 node test/render.mjs        exit non-zero if any bar is missed
+ *                                        (with WAV= set, > 2 clicks/s fails too)
  *
  * Needs Playwright + Chromium (not a dependency of this project — it looks for
  * a global install, or PLAYWRIGHT_PATH). spectrum.mjs is the analytic check of
@@ -16,6 +17,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { readWav, findClicks } from './clicks.mjs';
 
 const ROOT = normalize(join(fileURLToPath(new URL('.', import.meta.url)), '..'));
 const require = createRequire(import.meta.url);
@@ -76,8 +78,14 @@ for (const e of list) {
     `${(s.tone||0).toFixed(1)}@${(s.toneF||0).toFixed(0)}(${(s.toneRpm||0).toFixed(0)})`.padStart(17),
     s.toneHiMean.toFixed(1).padStart(7), String(Math.round(s.maxRpm)).padStart(6), pct(s.harsh), pct(s.harshHi), pct(s.harshMax), '@' + s.harshMaxT.toFixed(1) + 's',
   ].join(' ');
-  console.log(line);
-  if (s.clips > 0 || s.peak > 0.98) fail++;
+  // Crackle: sample-scale discontinuities per second (clicks.mjs). Needs the
+  // WAV; a clean engine is 0-1/s, the rumble-layer crackle was 50-78/s.
+  let clickRate = 0;
+  if (wavDir && s.wav) {
+    clickRate = findClicks(readWav(join(wavDir, e + (process.env.SOLO ? '.' + process.env.SOLO : '') + '.wav'))).rate;
+  }
+  console.log(line + (wavDir ? `  clicks ${clickRate.toFixed(1)}/s` : ''));
+  if (s.clips > 0 || s.peak > 0.98 || clickRate > 2) fail++;
 }
 await browser.close();
 server.close();
