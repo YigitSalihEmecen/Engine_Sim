@@ -255,6 +255,20 @@ export class ShiftController {
       this.request(d, d.gear + 1);
       return;
     }
+    // Floored and past the power peak: change up as soon as the next gear
+    // makes more power at this road speed. That is the fastest way down the
+    // road, and it is what stops a car whose engine peaks well below its
+    // limiter (a diesel, a heavy car on a small engine) sitting on a plateau
+    // under the fixed upshift point with gears to spare.
+    const P = typeof d.wotTorque === 'function' ? (x) => d.wotTorque(x) * x : null;
+    if (P && thr >= this.kickdownThrottle && d.gear < this.gearCount
+        && rpm > this.redlineRpm * 0.6) {
+      const next = d.gearedRpm(d.gear + 1);
+      if (next > this.idleRpm * 1.5 && P(next) >= P(rpm)) {
+        this.request(d, d.gear + 1);
+        return;
+      }
+    }
     if (d.gear > 1) {
       const lower = d.gear - 1;
       const lowerRpm = d.gearedRpm(lower);
@@ -263,8 +277,10 @@ export class ShiftController {
       if (lowerRpm >= up) return;
       if (rpm <= this.downshiftRpm(thr)) { this.request(d, lower); return; }
       // Kickdown: floor it at low rpm in a tall gear and the box drops one.
+      // ...and only when the lower gear actually makes more power, or the
+      // power upshift above and this would hand the car back and forth.
       if (thr >= this.kickdownThrottle && rpm < this.redlineRpm * 0.55
-          && lowerRpm < this.redlineRpm * 0.92) {
+          && lowerRpm < this.redlineRpm * 0.92 && (!P || P(lowerRpm) > P(rpm))) {
         this.request(d, lower);
       }
     }

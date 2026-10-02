@@ -35,12 +35,26 @@ await page.goto(`http://localhost:${server.address().port}/test/render.html`);
 await page.waitForFunction(() => window.ready === true, null, { timeout: 30000 });
 const list = process.argv.slice(2).length ? process.argv.slice(2) : ['i4', 'v8cross', 'v12', 'v8tt'];
 let hdr = false;
+const outs = [];
 for (const e of list) {
   const r = await page.evaluate(([e, tweak]) => window.chainResponse(e, { tweak }), [e, process.env.EXTRA || '']);
   if (!hdr) { console.log('engine    row     ' + r.octs.map(f => (f >= 1000 ? f / 1000 + 'k' : String(f)).padStart(6)).join('')); hdr = true; }
+  outs.push(r.out);
+  if (process.env.QUIET) continue;
   for (const k of ['voices', 'chain', 'output']) {
     const v = k === 'voices' ? r.bus : k === 'output' ? r.out : r.chain;
     console.log(`${(k === 'voices' ? e : '').padEnd(9)} ${k.padEnd(7)} ` + v.map(x => x.toFixed(1).padStart(6)).join(''));
   }
+}
+// Spread across engines: the std, per octave, of the engines' output curves,
+// averaged over 63 Hz-4 kHz. Engines pushed toward one tonal balance (by a
+// compressor, or by shared layers) have a small number here.
+if (outs.length > 2) {
+  let acc = 0, n = 0;
+  for (let o = 1; o <= 7; o++) {
+    const v = outs.map(r => r[o]), m = v.reduce((a, b) => a + b, 0) / v.length;
+    acc += Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length); n++;
+  }
+  console.log(`\ntonal-balance spread across ${outs.length} engines: ${(acc / n).toFixed(1)} dB (std per octave, 63 Hz-4 kHz)`);
 }
 await browser.close(); server.close();

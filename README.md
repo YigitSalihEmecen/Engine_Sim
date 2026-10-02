@@ -134,6 +134,15 @@ plus any drivetrain override (`autoShift`, `launchFlareRpm`, `driveline`, …).
 | --- | --- |
 | `setEngineType(id)` | Hot-swappable while driving. |
 | `setVehicle(id)` | Road speed is preserved across the swap. |
+| `setVehicleProfile(obj)` | A host-described vehicle (preset fields + optional `gravity`). |
+
+The gearbox is **designed for the engine fitted** (`src/gearbox.js`): each engine
+carries its own gear count (`gears` — 5 on the rotary, 8 on the V12 and the
+big turbos), and the ratios come from its torque curve and the vehicle's mass,
+wheels and drag, with top speed just past peak power. `gearing: 'stock'` in the
+constructor keeps the vehicle preset's own table. At full throttle the
+automatic changes up when the next gear makes more power at that road speed, so
+an engine that peaks well below its limiter never sits on a plateau.
 | `EngineSim.engines()` | `[{id, label, cylinders, turbo, idleRpm, redlineRpm, peakTorque, banks}]` |
 | `EngineSim.vehicles()` | `[{id, label, mass, gears, gearbox, finalDrive}]` |
 
@@ -156,7 +165,7 @@ is the driveline clunk, `pop` an exhaust bang, `engage` the clutch biting.
 | | |
 | --- | --- |
 | `setVolume(0..1)` | |
-| `setMix({exhaust, intake, transmission, turbo, transients, sub, rumble})` | Per-voice balance, 0..2. |
+| `setMix({exhaust, intake, transmission, turbo, transients, sub})` | Per-voice balance, 0..2. |
 | `setTone({rumble, brightness, punch})` | 0..2 each, 1 = default. `punch` is the psychoacoustic bass enhancer. |
 | `setDynamics(0..1)` | Three-band compressor amount. 0 ≈ bypass. |
 | `setEQ([5 gains])` · `setEQBand(i, dB)` · `resetEQ()` | ±18 dB at 60 / 200 / 800 / 2.5k / 8k. |
@@ -267,16 +276,22 @@ node test/render.mjs  # REAL browser render (Playwright + Chromium): peaks, clip
                       # per engine; WAV=dir/ also counts clicks (test/clicks.mjs)
 node test/turbo.mjs   # turbo whine pitch/level and flutter on three lifts per engine
 node test/chain.mjs   # octave response: the voices, what the output chain does, the result
+node test/character.mjs  # engine dyno: tonal share (how much is ENGINE vs noise), order
+                         # profile per engine, and how distinct the engines are
 ```
 
 ```
 index.html          the tuning console
 tools/serve.mjs     zero-dependency dev server
 src/profiles.js     engine + vehicle data — firing order, bank layout, pipe geometry
-src/pulse.js        firing geometry → band-limited PeriodicWave tables
+src/pulse.js        firing geometry → band-limited PeriodicWave tables (fallback)
+                    + combustionSpec, the event source's calibrated description
+src/combustion-worklet.js  THE SOURCE: one combustion event per cylinder per
+                    cycle, each with its own strength, timing and burn
+src/gearbox.js      gear ratios designed for the engine fitted to the vehicle
 src/resonators.js   exhaust waveguides, muffler, Helmholtz intake, shock rasp, cabin
 src/layers.js       gear whine, turbo, transient bank
-src/character.js    exhaust flow noise, sub layer, rumble layer, imperfection modulator
+src/character.js    exhaust flow noise, sub layer, imperfection modulator
 src/fx.js           EQ, reverb, stereo widener, three-band compressor, bass enhancer,
                     tunnel space, safety clipper
 src/inputs.js       live-input table (strain, valve, roughness, distance, enclosure)

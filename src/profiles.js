@@ -17,6 +17,9 @@
  *   exhaust       waveguide geometry, metres. bank = header/downpipe length,
  *                 collector = shared pipe after the banks merge
  *   intake        Helmholtz resonance of the airbox/plenum, Hz
+ *   gears         forward gears this engine is built with. The ratios are not
+ *                 stored: gearbox.js designs them for the engine AND the vehicle
+ *                 it is fitted to, so swapping engines never strands a car
  *   turbo         null, or { inertia, maxBoost, whineOrder, bov, surge }.
  *                 `bov` is the blow-off valve's CAPACITY, 0..1, and it is the
  *                 one number that decides whether a car goes "chiu" or
@@ -39,6 +42,7 @@ export const ENGINE_PROFILES = {
     cylinders: 2, firingOrder: [1, 2], banks: [[1], [2]],
     pinOffsets: { 2: -90 },
     idleRpm: 1150, redlineRpm: 9500, peakTorque: 125, peakTorqueRpm: 8000,
+    gears: 6,
     // A tiny rotating assembly is why a big twin snaps to the limiter.
     engineInertia: 0.055, gasTempFactor: 1.34,
     pulse: { attack: 40, decay: 6.5, hardness: 0.72, jitter: 2.0 },
@@ -54,6 +58,7 @@ export const ENGINE_PROFILES = {
     label: 'Inline-3 1.0 turbo',
     cylinders: 3, firingOrder: [1, 2, 3], banks: [[1, 2, 3]],
     idleRpm: 850, redlineRpm: 6500, peakTorque: 200, peakTorqueRpm: 2200,
+    gears: 5,
     engineInertia: 0.16, gasTempFactor: 1.30,
     pulse: { attack: 34, decay: 5.5, hardness: 0.62, jitter: 1.6 },
     exhaust: { bank: 1.45, collector: 1.10, reflection: 0.55, damping: 0.42, muffler: [0.32, 0.21, 0.14] },
@@ -76,6 +81,7 @@ export const ENGINE_PROFILES = {
     // continuous where a piston engine sounds like separate events.
     cylinders: 4, firingOrder: [1, 2, 3, 4], banks: [[1, 2, 3, 4]],
     idleRpm: 900, redlineRpm: 9000, peakTorque: 220, peakTorqueRpm: 5500,
+    gears: 5,
     engineInertia: 0.14, gasTempFactor: 1.40,   // famously hot exhaust
     pulse: { attack: 18, decay: 3.0, hardness: 0.70, jitter: 1.2 },
     exhaust: { bank: 1.05, collector: 0.80, reflection: 0.52, damping: 0.30, muffler: [0.20, 0.13, 0.09] },
@@ -88,6 +94,7 @@ export const ENGINE_PROFILES = {
     label: 'Inline-4 2.0',
     cylinders: 4, firingOrder: [1, 3, 4, 2], banks: [[1, 2, 3, 4]],
     idleRpm: 800, redlineRpm: 7200, peakTorque: 240, peakTorqueRpm: 3900,
+    gears: 6,
     engineInertia: 0.19, gasTempFactor: 1.28,
     pulse: { attack: 38, decay: 6.2, hardness: 0.66, jitter: 1.1 },
     exhaust: { bank: 1.30, collector: 1.05, reflection: 0.52, damping: 0.44, muffler: [0.30, 0.19, 0.12] },
@@ -102,6 +109,7 @@ export const ENGINE_PROFILES = {
     // The famous rumble is a header-length mismatch, not the firing order.
     pinOffsets: { 3: 6, 4: -6 },
     idleRpm: 800, redlineRpm: 6800, peakTorque: 300, peakTorqueRpm: 3200,
+    gears: 6,
     engineInertia: 0.20, gasTempFactor: 1.27,
     pulse: { attack: 32, decay: 5.4, hardness: 0.60, jitter: 2.2 },
     exhaust: { bank: 1.62, bankB: 0.98, collector: 1.15, reflection: 0.58, damping: 0.40, muffler: [0.34, 0.22, 0.15] },
@@ -114,6 +122,7 @@ export const ENGINE_PROFILES = {
     label: 'Inline-5 2.5',
     cylinders: 5, firingOrder: [1, 2, 4, 5, 3], banks: [[1, 2, 3, 4, 5]],
     idleRpm: 820, redlineRpm: 7000, peakTorque: 360, peakTorqueRpm: 3200,
+    gears: 6,
     engineInertia: 0.24, gasTempFactor: 1.29,
     pulse: { attack: 33, decay: 5.6, hardness: 0.64, jitter: 1.5 },
     exhaust: { bank: 1.38, collector: 1.08, reflection: 0.56, damping: 0.41, muffler: [0.31, 0.20, 0.13] },
@@ -126,6 +135,7 @@ export const ENGINE_PROFILES = {
     label: 'Inline-6 3.0',
     cylinders: 6, firingOrder: [1, 5, 3, 6, 2, 4], banks: [[1, 2, 3, 4, 5, 6]],
     idleRpm: 750, redlineRpm: 7000, peakTorque: 420, peakTorqueRpm: 3000,
+    gears: 7,
     engineInertia: 0.27, gasTempFactor: 1.28,
     pulse: { attack: 30, decay: 5.0, hardness: 0.58, jitter: 0.7 },   // inherently balanced
     exhaust: { bank: 1.55, collector: 1.20, reflection: 0.54, damping: 0.38, muffler: [0.33, 0.21, 0.14] },
@@ -138,6 +148,7 @@ export const ENGINE_PROFILES = {
     label: 'Inline-6 turbo-diesel 6.7',
     cylinders: 6, firingOrder: [1, 5, 3, 6, 2, 4], banks: [[1, 2, 3, 4, 5, 6]],
     idleRpm: 640, redlineRpm: 4600, peakTorque: 950, peakTorqueRpm: 1900,
+    gears: 8,
     engineInertia: 0.62,          // heavy iron, and it is why it lugs
     gasTempFactor: 1.16,          // diesel exhaust is much cooler than petrol
     // Compression ignition is not a flame front travelling across a chamber, it
@@ -158,6 +169,7 @@ export const ENGINE_PROFILES = {
     label: 'V6 60°',
     cylinders: 6, firingOrder: [1, 4, 2, 5, 3, 6], banks: [[1, 2, 3], [4, 5, 6]],
     idleRpm: 780, redlineRpm: 6800, peakTorque: 380, peakTorqueRpm: 3600,
+    gears: 6,
     engineInertia: 0.26, gasTempFactor: 1.28,
     pulse: { attack: 31, decay: 5.2, hardness: 0.61, jitter: 1.3 },
     exhaust: { bank: 1.20, collector: 1.05, reflection: 0.56, damping: 0.40, muffler: [0.30, 0.20, 0.13] },
@@ -170,6 +182,7 @@ export const ENGINE_PROFILES = {
     label: 'V6 twin-turbo 3.8',
     cylinders: 6, firingOrder: [1, 4, 2, 5, 3, 6], banks: [[1, 2, 3], [4, 5, 6]],
     idleRpm: 750, redlineRpm: 7100, peakTorque: 640, peakTorqueRpm: 3600,
+    gears: 7,
     engineInertia: 0.29,
     // A turbine sits in the exhaust stream and takes energy out of it, so the
     // gas leaving the turbo is markedly cooler than a naturally aspirated
@@ -190,6 +203,7 @@ export const ENGINE_PROFILES = {
     label: 'Flat-6 3.8',
     cylinders: 6, firingOrder: [1, 6, 2, 4, 3, 5], banks: [[1, 2, 3], [4, 5, 6]],
     idleRpm: 800, redlineRpm: 8500, peakTorque: 420, peakTorqueRpm: 5000,
+    gears: 7,
     engineInertia: 0.22, gasTempFactor: 1.31,
     pulse: { attack: 44, decay: 7.0, hardness: 0.74, jitter: 0.9 },
     exhaust: { bank: 0.85, collector: 0.72, reflection: 0.48, damping: 0.30, muffler: [0.22, 0.15, 0.10] },
@@ -206,6 +220,7 @@ export const ENGINE_PROFILES = {
     // bank while the engine as a whole fires every 90°. That asymmetry, heard
     // through two separate pipes, IS the burble.
     idleRpm: 700, redlineRpm: 7000, peakTorque: 540, peakTorqueRpm: 4200,
+    gears: 6,
     engineInertia: 0.38, gasTempFactor: 1.26,
     pulse: { attack: 26, decay: 4.4, hardness: 0.55, jitter: 2.6 },
     exhaust: { bank: 1.75, collector: 1.35, reflection: 0.63, damping: 0.34, muffler: [0.40, 0.26, 0.17] },
@@ -223,6 +238,7 @@ export const ENGINE_PROFILES = {
     // muffled thud rather than a bark. Same firing order, completely different
     // voice, and none of that is hand-tuned: it falls out of the pipe data.
     idleRpm: 660, redlineRpm: 6800, peakTorque: 800, peakTorqueRpm: 3000,
+    gears: 8,
     engineInertia: 0.42, gasTempFactor: 1.21,
     pulse: { attack: 24, decay: 4.2, hardness: 0.54, jitter: 2.4 },
     exhaust: { bank: 1.10, collector: 1.55, reflection: 0.58, damping: 0.55, muffler: [0.42, 0.28, 0.18] },
@@ -238,6 +254,7 @@ export const ENGINE_PROFILES = {
     // Banks alternate perfectly → each bank fires every 180° → no half-orders,
     // no burble, just a flat high-order scream.
     idleRpm: 900, redlineRpm: 9000, peakTorque: 460, peakTorqueRpm: 6000,
+    gears: 7,
     engineInertia: 0.25, gasTempFactor: 1.33,
     pulse: { attack: 52, decay: 8.4, hardness: 0.82, jitter: 0.6 },
     exhaust: { bank: 0.78, collector: 0.62, reflection: 0.44, damping: 0.26, muffler: [0.18, 0.12, 0.08] },
@@ -251,6 +268,7 @@ export const ENGINE_PROFILES = {
     cylinders: 10, firingOrder: [1, 6, 5, 10, 2, 7, 3, 8, 4, 9],
     banks: [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]],
     idleRpm: 900, redlineRpm: 8700, peakTorque: 560, peakTorqueRpm: 6500,
+    gears: 7,
     engineInertia: 0.30, gasTempFactor: 1.32,
     pulse: { attack: 48, decay: 7.8, hardness: 0.80, jitter: 0.8 },
     exhaust: { bank: 0.82, collector: 0.66, reflection: 0.46, damping: 0.27, muffler: [0.19, 0.13, 0.09] },
@@ -264,6 +282,7 @@ export const ENGINE_PROFILES = {
     cylinders: 12, firingOrder: [1, 7, 5, 11, 3, 9, 6, 12, 2, 8, 4, 10],
     banks: [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]],
     idleRpm: 850, redlineRpm: 8500, peakTorque: 690, peakTorqueRpm: 5800,
+    gears: 8,
     engineInertia: 0.36, gasTempFactor: 1.31,
     pulse: { attack: 46, decay: 7.4, hardness: 0.78, jitter: 0.5 },
     exhaust: { bank: 0.90, collector: 0.70, reflection: 0.47, damping: 0.28, muffler: [0.20, 0.14, 0.09] },

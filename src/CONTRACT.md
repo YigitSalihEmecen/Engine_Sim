@@ -1,8 +1,12 @@
 # Module contract — read this before editing anything in `src/`
 
 Pure Web Audio API + ES6 modules. **No external libraries. No samples.** Target
-< 5% CPU: no per-frame node allocation, no per-frame `new`, no AudioWorklet
-(we stay on the main-thread node graph so this runs everywhere).
+< 5% CPU: no per-frame node allocation, no per-frame `new`. ONE AudioWorklet is
+allowed — the combustion source (`combustion-worklet.js`), because a strictly
+periodic wavetable cannot carry cycle-to-cycle variation — and it MUST keep its
+wavetable fallback: with no `audioWorklet` (old browsers, the Node mock) or
+`wavetables: true`, `pulse.js`'s PeriodicWave path runs instead. Everything
+else stays on the main-thread node graph.
 
 ## Files and ownership
 
@@ -10,12 +14,14 @@ Pure Web Audio API + ES6 modules. **No external libraries. No samples.** Target
 | --- | --- | --- |
 | `profiles.js` | orchestrator | engine + vehicle data, firing geometry helpers. **Do not edit.** |
 | `presets.js` | orchestrator | the sound file format: schema, defaults, validation. **Add a schema row for every profile field**, or `run.mjs` fails on the orphan check. |
-| `pulse.js` | orchestrator | firing geometry → `PeriodicWave` tables. **Do not edit.** |
+| `pulse.js` | orchestrator | firing geometry → `PeriodicWave` tables (fallback) and `combustionSpec` (event source). **Do not edit.** |
+| `combustion-worklet.js` | orchestrator | the source: per-cylinder combustion events with cycle-to-cycle variation |
+| `gearbox.js` | agent C | gear ratios designed for the engine × vehicle pair (pure maths) |
 | `resonators.js` | agent A | exhaust waveguides, muffler, intake Helmholtz, nonlinearity, cabin |
 | `layers.js` | agent B | transmission, turbo, noise beds, transients |
 | `physics.js` | agent C | drivetrain, driveline compliance, clutch |
 | `shift.js` | agent C | gear-shift state machine |
-| `character.js` | agent A | exhaust flow noise, sub layer, imperfection modulator |
+| `character.js` | agent A | exhaust flow noise, sub layer, imperfection modulator (vibrato off under the event source) |
 | `fx.js` | orchestrator | EQ, reverb, stereo widener, three-band compressor |
 | `engine-sim.js` | orchestrator | public API, wires everything together |
 

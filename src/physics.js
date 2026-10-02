@@ -475,6 +475,17 @@ export class Drivetrain {
   }
 
   /**
+   * Net torque with the throttle wide open at `rpm`, on the boost the turbo has
+   * right now. The shift controller compares this across gears: at full
+   * throttle the right moment to change up is when the next gear makes more
+   * POWER at the same road speed, not at a fixed fraction of the redline.
+   */
+  wotTorque(rpm) {
+    return this.engine.peakTorque * this.torqueFactor(rpm) * this._boostMult()
+      - this.frictionTorque(rpm, 1);
+  }
+
+  /**
    * Internal friction + pumping losses, N.m. v1's formula, unchanged: the
    * quadratic term is what dominates up top and makes a free-revving engine
    * drop back to idle in about a second. Scaling by (1 - 0.62*throttle) is the

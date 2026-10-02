@@ -48,7 +48,9 @@ engine_sim/
 ├── src/
 │   ├── profiles.js                engine + vehicle DATA, firing-geometry helpers
 │   ├── presets.js                 THE SOUND FILE FORMAT — schema, defaults, validation
-│   ├── pulse.js                   firing geometry → band-limited PeriodicWave
+│   ├── pulse.js                   firing geometry → PeriodicWave (fallback) + combustionSpec
+│   ├── combustion-worklet.js      THE SOURCE: per-cylinder combustion events (AudioWorklet)
+│   ├── gearbox.js                 ratios designed per engine × vehicle
 │   ├── resonators.js              exhaust waveguides, muffler, intake, rasp, cabin
 │   ├── layers.js                  gearbox, turbo, transient bank
 │   ├── character.js               exhaust noise, sub layer, imperfection modulator
@@ -930,6 +932,50 @@ resource (font/stylesheet) load errors — the web fonts are optional.
 
 ---
 
+## 8c. v4 source pass — the engine as a sequence of combustion events (read with §9 #60-63)
+
+Driven by: "a white-noise-like feature is ruining the engines; the early
+builds had more ENGINE in them; the engines are homogenised; we might be too
+loyal to the original implementation." Measured with a NEW tool,
+`test/character.mjs` (`runDyno` in `test/render.html`): the crank pinned at 60 %
+of redline, full load, 3 s; reports the TONAL share (energy within ±1.5 Hz of
+the half-order harmonics — what is engine rather than noise), the same
+A-weighted, the 48-half-order profile, and the DISTINCTIVENESS (mean pairwise
+RMS difference of the order profiles across engines).
+
+| build | tonal (A-wtd) | distinctiveness |
+| --- | --- | --- |
+| original (df74989) | 63 % | 15.0 dB |
+| before this pass | 66 % (V8s 23 %) | 13.5 dB |
+| noise layers removed, wavetables | 77 % | 15.9 dB |
+| event source | **87 %** | **16.1 dB** |
+
+The design flaws found, at the core rather than in a constant:
+
+1. **A strictly periodic source.** pulse.js renders ONE 720° cycle and loops it:
+   every cycle identical to the sample. Real engines vary cycle to cycle (COV
+   of IMEP 1-3 % at full load, 5-15 % at idle / lumpy cams), and that variation
+   is sidebands AROUND the engine's own orders — tied to the firing, unlike any
+   noise bed. Replaced by `combustion-worklet.js`: per-cylinder pulses fired at
+   their true crank angles, each with its own strength, timing jitter and burn
+   rate, misfires under `rough`, load hardening the shape continuously.
+2. **LFO vibrato/tremolo as "variability".** `CharacterModulator` wobbled the
+   WHOLE engine; with the event source its vibrato is off and tremolo ×0.2
+   (`setEventSource`).
+3. **Soft/hard crossfade of ±3-cent detuned oscillators** — a chorus, i.e. a
+   beating, homogenising every engine. Gone with the event source (one pulse,
+   shape interpolated by load).
+4. **Intake on evenly spaced angles** — it now uses the real firing angles +360°.
+5. **Noise beds standing in for detail.** `RumbleLayer` and `MechanicalLayer`
+   (#52, #59) added firing-gated noise to every engine: the "white noise" the
+   user heard, the same on every engine. Removed.
+6. **A fixed gearbox per car** while engines are swappable. See #63.
+
+The calibration gains (`combustionSpec`) render the worklet law in the phase
+domain at five loads so each output matches the 0.25 RMS the wavetables had —
+nothing downstream needed retuning. The wavetable path is the fallback (Node
+mock, no `audioWorklet`, `wavetables: true`).
+
 ## 9. Complete bug ledger
 
 Every one of these was found by measurement, and several are counter-intuitive.
@@ -991,6 +1037,10 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 57 | Turbo flutter lingered | surge decay τ 0.65 s, sustained for as long as the pedal stayed shut; spool-down τ 0.75× inertia coasting | τ 0.26 s, sustain only for the first 0.35 s of a lift, killed only by a real re-open (so a partial lift still flutters); spool-down 0.45×/1.3×. Flutter now lasts 0.33-0.63 s after a lift (was > 0.8 s) |
 | 58 | Too rumbly and deep, tiring on headphones; flutter a little dull | the low end had collected boosts from three passes (shelf +9, body bump +5.5, rumble layer 0.85, sub 0.55, bass enhancer 0.32) | shelf +4.5, bump +3, rumble 0.45, sub 0.38, enhancer 0.2, infrasonic guard 36 Hz, bus 0.95 to hold loudness; `mid` up 1.5-5.5 dB. Surge "tu" band 760-1660 Hz (was 520-1170), "st" 2.4-3.4 kHz; turbo mix 0.49 → 0.40 so the flutter keeps its level over the lighter engine |
 | 59 | Still muffled / "underwater", no mechanical grit; still too much bass | `test/chain.mjs` (octave response of voices, chain and output vs the original build): the VOICES were 4-10 dB darker in 500 Hz-2 kHz — the soft ±6 shock curve at maxDrive 2.6 was nearly linear, and collector reflection ×0.5 / damping ×2 flattened the pipe — and the CHAIN cut ~10 dB above 2 kHz (shelf −6, presence −4.5, set against the old implicit boost). Nothing at all made the 1-4 kHz combustion/valvetrain noise | maxDrive 4.5, collector ×0.7 / ×1.5, shelf −2, presence −1.5; new `MechanicalLayer` (noise pulsed per firing, AM before band-passes at ~1.5 and ~3 kHz, `mix.mech` 0.22); low end again (shelf +2, bump +1.5, sub 0.25, rumble 0.3, enhancer 0.15). Output 1-4 kHz back to the original's level, 63 Hz below it on every engine, worst narrow tone ≤ 27 dB (original up to 36), ≤ 0.1 clicks/s |
+| 60 | White noise over every engine; engines homogenised | `test/character.mjs`: V8s only 37 % tonal (23 % A-weighted) — `RumbleLayer` and `MechanicalLayer` (#52, #59) were noise gated by the firing, identical in kind on every engine | both layers removed, `mix.rumble`/`mix.mech` gone. Tonal 66 → 77 %, distinctiveness 13.5 → 15.9 dB |
+| 61 | Too clean, organ-like; "the early builds had more engine" | the source repeated one wavetable cycle forever; variety was faked by LFO vibrato and two detuned oscillators crossfaded by load (a chorus) | `combustion-worklet.js`: events per cylinder with cycle-to-cycle variation, timing jitter, misfires; vibrato off. Tonal 87 %, distinctiveness 16.1 dB. Wavetables stay as the fallback |
+| 62 | Intake fired on even angles | it took `i/n` of the cycle, not the firing angles | real angles + 360° (the intake stroke) |
+| 63 | Some engines could never get past 4th | the ratio table belonged to the CAR, and the automatic needed 93.6 % of redline to change up: an engine that peaks low, or a weak one in a heavy car, sat on a drag plateau below that, gears to spare (HighRoads `probe/gears.mjs`: 20 of 153 pairs stuck) | `gearbox.js` designs the box per engine × vehicle (top speed just past peak power, launch-limited first, progressive steps); gear count per engine (`gears`, 5-8); at WOT the automatic also changes up when the next gear makes more power, and kickdown only when the lower gear does. 0 of 153 stuck |
 | 47 | The generated console read pipe lengths as percentages | first pass formatted any unitless row as `v×100`, so a 1.75 m header showed "175" and a 4.4 decay showed "440" | `unit` became a display CONTRACT — real unit = suffix formatted by `step`, `%` = ×100, `''` = bare number |
 
 ### #31 in detail — it will come back if the constant moves
