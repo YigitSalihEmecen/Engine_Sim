@@ -263,7 +263,9 @@ converter slip.
 npm test           # 384 checks + a driving-behaviour suite
 npm run spectrum   # analytic harshness + rpm-local resonance-spike table
 node test/render.mjs  # REAL browser render (Playwright + Chromium): peaks, clipping,
-                      # band shares, A-weighted harshness, tonal peaks per engine
+                      # band shares, A-weighted harshness, tonal peaks, crispness
+                      # per engine; WAV=dir/ also counts clicks (test/clicks.mjs)
+node test/turbo.mjs   # turbo whine pitch/level and flutter on three lifts per engine
 ```
 
 ```

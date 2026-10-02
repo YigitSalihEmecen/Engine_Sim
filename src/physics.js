@@ -1259,6 +1259,9 @@ export class Drivetrain {
     this.prevRpm = rpm;
 
     p.throttle = this.throttle;
+    // Bouncing off the limiter with the pedal down: the fuel cut closes the
+    // flow against a spooled compressor many times a second (turbo flutter).
+    p.limiter = ((this.limiterActive || rpm > eng.redlineRpm - 120) && this.throttle > 0.5) ? 1 : 0;
 
     // Combustion load: what the engine is actually burning, not the pedal.
     // Includes the rev-match blip, which is why a downshift sounds loaded even

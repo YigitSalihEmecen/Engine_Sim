@@ -68,7 +68,7 @@ console.log('\nOffline render — pull in 3rd to the limiter, lift, blip. Output
 console.log('engine     peak dBFS clips  shaperPk  busPk   rms dB  cent  centHi  <40  40-80 80-160 160-320 1.3-2.6k 2.6-5k  tone dB@Hz(rpm)  toneHi  maxRpm  Aharsh% hi% max%');
 let fail = 0;
 for (const e of list) {
-  const s = await page.evaluate(([e, w, secs, solo, dyn]) => window.runOne(e, { wav: w, seconds: secs, solo: solo, dyn }), [e, !!wavDir, +(process.env.SECS || 11), process.env.SOLO || '', process.env.DYN ?? '']);
+  const s = await page.evaluate(([e, w, secs, solo, dyn, tweak]) => window.runOne(e, { wav: w, seconds: secs, solo: solo, dyn, tweak }), [e, !!wavDir, +(process.env.SECS || 11), process.env.SOLO || '', process.env.DYN ?? '', process.env.EXTRA || '']);
   if (wavDir && s.wav) await writeFile(join(wavDir, e + (process.env.SOLO ? '.' + process.env.SOLO : '') + '.wav'), Buffer.from(s.wav, 'base64'));
   const line = [
     e.padEnd(10), db(s.peak), String(s.clips).padStart(6), s.shaperPeak.toFixed(2).padStart(8),
@@ -77,6 +77,7 @@ for (const e of list) {
     pct(s.bands[0]), pct(s.bands[1]), pct(s.bands[2]), pct(s.bands[3]), pct(s.bandsHi[6]), pct(s.bandsHi[7]),
     `${(s.tone||0).toFixed(1)}@${(s.toneF||0).toFixed(0)}(${(s.toneRpm||0).toFixed(0)})`.padStart(17),
     s.toneHiMean.toFixed(1).padStart(7), String(Math.round(s.maxRpm)).padStart(6), pct(s.harsh), pct(s.harshHi), pct(s.harshMax), '@' + s.harshMaxT.toFixed(1) + 's',
+    'crisp', s.crisp.toFixed(1).padStart(6), s.crispHi.toFixed(1).padStart(6),
   ].join(' ');
   // Crackle: sample-scale discontinuities per second (clicks.mjs). Needs the
   // WAV; a clean engine is 0-1/s, the rumble-layer crackle was 50-78/s.
