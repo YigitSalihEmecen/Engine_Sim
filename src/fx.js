@@ -354,7 +354,14 @@ export class Dynamics {
   static BANDS = [
     // f = upper edge of the band, Hz (the last band is open-ended).
     { name: 'low', f: 220, threshold: -16, ratio: 2.6, attack: 0.018, release: 0.26, knee: 10, makeup: 1.10 },
-    { name: 'mid', f: 2000, threshold: -18, ratio: 2.0, attack: 0.022, release: 0.20, knee: 14, makeup: 1.06 },
+    // Mid makeup 1.06 → 2.12 (+6 dB). 220 Hz-2 kHz is where an engine's revs
+    // are HEARD: with the old implicit makeup gone the engine measured 3-10 dB
+    // quieter A-weighted than the original and read as muffled. Lifting this
+    // band alone restores that loudness and puts the mids 1-8 dB further
+    // forward than the original, while the treble band — where the whistling
+    // resonances lived — stays as it is. (An exciter tried first added the
+    // edge back as distortion, and was heard as crackle.)
+    { name: 'mid', f: 2000, threshold: -18, ratio: 2.0, attack: 0.022, release: 0.20, knee: 14, makeup: 2.12 },
     { name: 'high', f: 0, threshold: -24, ratio: 3.0, attack: 0.003, release: 0.12, knee: 8, makeup: 0.90 },
   ];
 
@@ -573,78 +580,6 @@ export class BassEnhancer {
   dispose() {
     for (const n of [this.inGain, this.lp1, this.lp2, this.drive, this.span,
                      this.shaper, this.hp, this.lp3, this.amount]) n.disconnect();
-  }
-}
-
-/**
- * Exciter — the crisp edge of a roaring engine, made from the engine note.
- *
- * Measured (test/render.mjs `crisp`, 1-5 kHz against 80-400 Hz): taking the
- * compressors' automatic makeup out (ledger #48) removed a +12 dB treble boost,
- * and with it 8-16 dB of everything above 1 kHz. Putting the boost back
- * restores the crispness AND the whistling pipe resonances, because at high
- * rpm most of the source's energy up there WAS those narrow resonances.
- *
- * A real engine's bite is not a resonance; it is the dense upper harmonics of
- * sharp exhaust pulses — the note itself, distorted. So that is what this
- * makes, the way a mixing engineer's exciter does:
- *
- *   in ─► HP 150 ─► LP 900 ─► drive ─► soft saturator ─► HP 1.3k (LR4) ─► LP 7k ─► amount ─► out
- *
- * The band-pass keeps the firing note and its first few orders and nothing of
- * the 1.2-2 kHz pipe modes, so the saturator only ever generates HARMONICS OF
- * THE NOTE: they follow its pitch and spread over many orders instead of
- * piling up at one frequency. The high-pass keeps only what was generated.
- * Driven by load, so the edge is a roar under throttle and fades on a lift.
- */
-export class Exciter {
-  constructor(ctx) {
-    this.ctx = ctx;
-    const mk = (type, f, q) => {
-      const b = ctx.createBiquadFilter();
-      b.type = type; b.frequency.value = f; b.Q.value = q;
-      return b;
-    };
-    this.inGain = ctx.createGain();
-    this.hp1 = mk('highpass', 150, 0.6);
-    this.lp1 = mk('lowpass', 900, 0.6);
-    this.drive = ctx.createGain();
-    this.drive.gain.value = 22;
-    this.shaper = ctx.createWaveShaper();
-    const n = 2048, c = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      const x = (i / (n - 1)) * 2 - 1;
-      // spans ±4 at the input (drive is applied before), saturates smoothly;
-      // a touch of asymmetry adds the even orders a pipe produces.
-      const u = x * 4;
-      c[i] = Math.tanh(u * 0.9) * 0.82 + 0.06 * Math.tanh(u * u * 0.25);
-    }
-    this.shaper.curve = c;
-    this.shaper.oversample = '4x';
-    this.span = ctx.createGain();
-    this.span.gain.value = 0.25;      // input ±4 maps onto the curve's ±1
-    this.hp2 = mk('highpass', 1300, 0.7071);
-    this.hp3 = mk('highpass', 1300, 0.7071);
-    this.lp2 = mk('lowpass', 7000, 0.6);
-    this.amount = ctx.createGain();
-    this.amount.gain.value = 0;
-    this.inGain.connect(this.hp1); this.hp1.connect(this.lp1); this.lp1.connect(this.drive);
-    this.drive.connect(this.span); this.span.connect(this.shaper);
-    this.shaper.connect(this.hp2); this.hp2.connect(this.hp3); this.hp3.connect(this.lp2);
-    this.lp2.connect(this.amount);
-    this.base = 0.25;
-    this.level = 1;
-  }
-  get input() { return this.inGain; }
-  get output() { return this.amount; }
-  /** load 0..1, `level` is the user's brightness/crispness scale. */
-  update(load, now) {
-    const g = this.base * this.level * (0.35 + 0.65 * clamp(fin(load, 0), 0, 1));
-    this.amount.gain.setTargetAtTime(g, now, 0.04);
-  }
-  dispose() {
-    for (const n of [this.inGain, this.hp1, this.lp1, this.drive, this.span, this.shaper,
-                     this.hp2, this.hp3, this.lp2, this.amount]) n.disconnect();
   }
 }
 
