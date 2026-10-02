@@ -134,7 +134,7 @@ export class EngineSim {
     // to full scale that the compressor was working continuously and any
     // transient pushed it hard. Backing the bus off leaves room for a bang to
     // be loud without the gain stage reacting to it.
-    this.mixBus.gain.value = 0.74;   // 0.42 → 0.52 when the dynamics makeup went; → 0.74 (the limiter has the headroom)
+    this.mixBus.gain.value = 0.95;   // 0.42 → 0.52 → 0.74 → 0.95 with the lighter low end (see the tone stage)
 
     // --- tone stage --------------------------------------------------------
     // The wavetable's radiation shelf is expressed in engine ORDERS, so it
@@ -145,13 +145,18 @@ export class EngineSim {
     this.rumbleShelf = ctx.createBiquadFilter();
     this.rumbleShelf.type = 'lowshelf';
     this.rumbleShelf.frequency.value = 145;
-    this.rumbleShelf.gain.value = 9;
+    // Low end pulled back (shelf +9 → +4.5 dB, body bump +5.5 → +3 dB,
+    // rumble layer 0.85 → 0.45, sub 0.55 → 0.38, bass enhancer 0.32 → 0.2,
+    // infrasonic guard 28 → 36 Hz): on headphones it was rumbly and tiring.
+    // test/render.mjs `mid` (300-2k vs 40-300 Hz) up 1.5-5.5 dB; the bus
+    // is raised to hold A-weighted loudness within ~1 dB.
+    this.rumbleShelf.gain.value = 4.5;
 
     this.bodyBump = ctx.createBiquadFilter();
     this.bodyBump.type = 'peaking';
     this.bodyBump.frequency.value = 78;      // tailpipe/cabin boom region
     this.bodyBump.Q.value = 1.0;
-    this.bodyBump.gain.value = 5.5;
+    this.bodyBump.gain.value = 3;
 
     // Presence dip. A systemic guard rather than a chase: human hearing peaks
     // around 3-4 kHz, and ANY resonance that lands there reads as harsh no
@@ -177,7 +182,7 @@ export class EngineSim {
     this.infra = [0, 1].map(() => {
       const f = ctx.createBiquadFilter();
       f.type = 'highpass';
-      f.frequency.value = 28;
+      f.frequency.value = 36;
       f.Q.value = -3.0103;      // Butterworth, in Web Audio's dB convention
       return f;
     });
@@ -719,8 +724,8 @@ export class EngineSim {
     const now = this.ctx.currentTime;
     if (rumble != null) {
       this._rumble = clamp(Number(rumble) || 0, 0, 2);
-      this.rumbleShelf.gain.setTargetAtTime(9 * this._rumble, now, 0.05);
-      this.bodyBump.gain.setTargetAtTime(5.5 * this._rumble, now, 0.05);
+      this.rumbleShelf.gain.setTargetAtTime(4.5 * this._rumble, now, 0.05);
+      this.bodyBump.gain.setTargetAtTime(3 * this._rumble, now, 0.05);
     }
     if (brightness != null) {
       this._brightness = clamp(Number(brightness) || 0, 0, 2);
@@ -728,7 +733,7 @@ export class EngineSim {
     }
     if (punch != null) {
       this._punch = clamp(Number(punch) || 0, 0, 2);
-      this.bass.setAmount(0.32 * this._punch);
+      this.bass.setAmount(0.2 * this._punch);
     }
     return { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1, punch: this._punch ?? 1 };
   }

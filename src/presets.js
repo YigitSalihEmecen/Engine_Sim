@@ -64,13 +64,13 @@ export const DEFAULT_SOUND = Object.freeze({
     // Down 30 % from 0.7: the turbo is the one voice that always sits in the
     // band the ear is most sensitive to, so it wins the mix long before it is
     // loud. See TurboLayer's tone stage.
-    turbo: 0.49,
+    turbo: 0.40,
     transients: 0.42,
     // 0.9 → 0.55. The sub sine was most of the power in the whole mix (see
     // test/render.mjs) and almost none of what is audible; the rumble layer and
     // the bass enhancer carry the low end now.
-    sub: 0.55,
-    rumble: 0.85,
+    sub: 0.38,
+    rumble: 0.45,
   }),
   tone: Object.freeze({ rumble: 1, brightness: 1, punch: 1 }),
   /** dB per band: [sub 60, body 200, honk 800, rasp 2.5 k, air 8 k]. */
