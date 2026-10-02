@@ -312,6 +312,27 @@ function summarise(engine, res) {
   };
 }
 
+/**
+ * The output chain's transfer, per octave: final output vs the raw voice sum
+ * (the mix bus, channel 3), dB, averaged over the WOT pull — what the tone
+ * stage, cabin, EQ, room and dynamics add or take away. Also the bus's own
+ * octave balance (the voices themselves), relative to its 125 Hz octave.
+ */
+window.chainResponse = async (engine, opts = {}) => {
+  const res = await render(engine, opts.vehicle || 'sports', 11, opts);
+  const L = res.buf.getChannelData(0), Bus = res.buf.getChannelData(3);
+  const N = 8192, bin = SR / N, octs = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000];
+  const acc = (x) => { const e = octs.map(() => 0);
+    for (let at = Math.floor(1.2 * SR); at + N < 8.3 * SR; at += N / 2) {
+      const p = spectrum(x, at, N);
+      octs.forEach((fc, i) => { for (let k = Math.ceil(fc / 1.414 / bin); k < fc * 1.414 / bin; k++) e[i] += p[k]; });
+    }
+    return e.map(v => 10 * Math.log10(v + 1e-20)); };
+  const o = acc(L), b = acc(Bus);
+  const ref = 2;   // 125 Hz
+  return { octs, chain: o.map((v, i) => v - b[i] - (o[ref] - b[ref])), bus: b.map(v => v - b[ref]), out: o.map(v => v - o[ref]) };
+};
+
 window.runOne = async (engine, opts = {}) => {
   const t0 = performance.now();
   const res = await render(engine, opts.vehicle || 'sports', opts.seconds || 11, opts);

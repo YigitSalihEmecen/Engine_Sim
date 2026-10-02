@@ -26,7 +26,7 @@ import {
 import { buildEngineWaves } from './pulse.js';
 import { ExhaustSystem, IntakeResonator, CabinFilter } from './resonators.js';
 import { TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
-import { ExhaustNoise, SubLayer, CharacterModulator, RumbleLayer } from './character.js';
+import { ExhaustNoise, SubLayer, CharacterModulator, RumbleLayer, MechanicalLayer } from './character.js';
 import { INPUT_SCHEMA, DEFAULT_INPUTS } from './inputs.js';
 import { Drivetrain } from './physics.js';
 import { EQ, Reverb, Stereoizer, Dynamics, SafetyClipper, BassEnhancer, Space, compressorMakeupDb } from './fx.js';
@@ -150,13 +150,16 @@ export class EngineSim {
     // infrasonic guard 28 → 36 Hz): on headphones it was rumbly and tiring.
     // test/render.mjs `mid` (300-2k vs 40-300 Hz) up 1.5-5.5 dB; the bus
     // is raised to hold A-weighted loudness within ~1 dB.
-    this.rumbleShelf.gain.value = 4.5;
+    // And again (+4.5 → +2, bump +3 → +1.5, sub 0.38 → 0.25, rumble 0.45 →
+    // 0.3, enhancer 0.2 → 0.15): it still read as inside the car, hearing the
+    // air outside. 63 Hz now sits below the original on every engine.
+    this.rumbleShelf.gain.value = 2;
 
     this.bodyBump = ctx.createBiquadFilter();
     this.bodyBump.type = 'peaking';
     this.bodyBump.frequency.value = 78;      // tailpipe/cabin boom region
     this.bodyBump.Q.value = 1.0;
-    this.bodyBump.gain.value = 3;
+    this.bodyBump.gain.value = 1.5;
 
     // Presence dip. A systemic guard rather than a chase: human hearing peaks
     // around 3-4 kHz, and ANY resonance that lands there reads as harsh no
@@ -167,12 +170,14 @@ export class EngineSim {
     this.presence.type = 'peaking';
     this.presence.frequency.value = 3000;
     this.presence.Q.value = 0.85;
-    this.presence.gain.value = -4.5;
+    // −4.5 → −1.5 and the shelf −6 → −2: both were set to counter the old
+    // implicit treble boost (#48) and, with it gone, cut ~10 dB above 2 kHz.
+    this.presence.gain.value = -1.5;
 
     this.airCut = ctx.createBiquadFilter();
     this.airCut.type = 'highshelf';
     this.airCut.frequency.value = 2900;
-    this.airCut.gain.value = -6;
+    this.airCut.gain.value = -2;
 
     // Infrasonic guard. Below ~28 Hz nothing reproduces it, nothing hears it,
     // and it was a real share of the mix: the offline render put 5-34 % of the
@@ -341,6 +346,10 @@ export class EngineSim {
     this.rumble = new RumbleLayer(ctx, p);
     this.rumble.output.connect(this.busses.rumble);
 
+    // Combustion and mechanical noise, 1-4 kHz, from the block (not the pipe).
+    this.mech = new MechanicalLayer(ctx, p);
+    this.mech.output.connect(this.busses.mech);
+
     // Slow, non-repeating wander in pitch and level.
     this.character = new CharacterModulator(ctx, p);
     this.character.tremolo.connect(this.exhaustTrem.gain);
@@ -451,7 +460,7 @@ export class EngineSim {
 
   _modules() {
     return [this.exhaust, this.intake, this.transmission,
-            this.turbo, this.transients, this.exhaustNoise, this.sub, this.rumble,
+            this.turbo, this.transients, this.exhaustNoise, this.sub, this.rumble, this.mech,
             this.character, this.cabin].filter(Boolean);
   }
 
@@ -724,16 +733,16 @@ export class EngineSim {
     const now = this.ctx.currentTime;
     if (rumble != null) {
       this._rumble = clamp(Number(rumble) || 0, 0, 2);
-      this.rumbleShelf.gain.setTargetAtTime(4.5 * this._rumble, now, 0.05);
-      this.bodyBump.gain.setTargetAtTime(3 * this._rumble, now, 0.05);
+      this.rumbleShelf.gain.setTargetAtTime(2 * this._rumble, now, 0.05);
+      this.bodyBump.gain.setTargetAtTime(1.5 * this._rumble, now, 0.05);
     }
     if (brightness != null) {
       this._brightness = clamp(Number(brightness) || 0, 0, 2);
-      this.airCut.gain.setTargetAtTime(-6 * (2 - this._brightness), now, 0.05);
+      this.airCut.gain.setTargetAtTime(-2 * (2 - this._brightness), now, 0.05);
     }
     if (punch != null) {
       this._punch = clamp(Number(punch) || 0, 0, 2);
-      this.bass.setAmount(0.2 * this._punch);
+      this.bass.setAmount(0.15 * this._punch);
     }
     return { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1, punch: this._punch ?? 1 };
   }

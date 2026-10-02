@@ -534,3 +534,106 @@ export class RumbleLayer {
     }
   }
 }
+
+/**
+ * Mechanical — the combustion and mechanical noise in the 1-4 kHz band.
+ *
+ * Measured (test/chain.mjs): the voices put almost nothing between 1 and
+ * 4 kHz — 25-35 dB under the 125 Hz octave — and that is the band where a real
+ * engine's combustion knock, valvetrain clatter, injector tick and piston
+ * slap live. Without it an engine reads as a filtered tone heard through a
+ * wall: "underwater". The exhaust pipe cannot make it (it is a lowpass); it
+ * radiates from the block.
+ *
+ *   white noise ─► AM (firing pulses + steady floor) ─┬► BP ~1.5 kHz "clack" ─┬► HP 700 ─► out
+ *                                                     └► BP ~3 kHz  "tick"  ─┘
+ *
+ * The envelope modulates the noise BEFORE the band-passes, the structure the
+ * rumble layer's crackle fix established (see RumbleLayer): no envelope edge
+ * reaches the output unfiltered, and the raised-cosine pulse has no corner
+ * for the sawtooth's band-limit ripple to fold into spikes.
+ */
+export class MechanicalLayer {
+  constructor(ctx, profile) {
+    this.ctx = ctx;
+    this.cyl = Math.max(1, profile.cylinders || 4);
+    this.src = ctx.createBufferSource();
+    this.src.buffer = noiseBuffer(ctx, 2.71, false);
+    this.src.loop = true;
+
+    this.level = ctx.createGain();
+    this.level.gain.value = 0;
+    this.fire = ctx.createOscillator();
+    this.fire.type = 'sawtooth';
+    this.fire.frequency.value = 30;
+    this.fireShape = ctx.createWaveShaper();
+    this.fireShape.curve = firePulseCurve(1024, 0.14, 7);
+    this.fireDepth = ctx.createGain();
+    this.fireDepth.gain.value = 0;
+
+    const bp = (f, q) => { const b = ctx.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = f; b.Q.value = q; return b; };
+    this.clack = bp(1500, 1.1);
+    this.tick = bp(3000, 1.5);
+    this.tickGain = ctx.createGain();
+    this.tickGain.gain.value = 0.42;
+    this.hp = ctx.createBiquadFilter();
+    this.hp.type = 'highpass';
+    this.hp.frequency.value = 700;
+    this.hp.Q.value = 0.6;
+    this.out = ctx.createGain();
+    this.out.gain.value = 1;
+
+    this.src.connect(this.level);
+    this.fire.connect(this.fireShape);
+    this.fireShape.connect(this.fireDepth);
+    this.fireDepth.connect(this.level.gain);
+    this.level.connect(this.clack);
+    this.level.connect(this.tick);
+    this.tick.connect(this.tickGain);
+    this.clack.connect(this.hp);
+    this.tickGain.connect(this.hp);
+    this.hp.connect(this.out);
+    this.started = false;
+  }
+
+  get input() { return null; }
+  get output() { return this.out; }
+
+  start(t) {
+    if (this.started) return;
+    this.started = true;
+    for (const s of [this.src, this.fire]) { try { s.start(t); } catch (e) { /* started */ } }
+  }
+
+  stop(t) {
+    for (const s of [this.src, this.fire]) { try { s.stop(t); } catch (e) { /* not started */ } }
+    this.started = false;
+  }
+
+  update(p) {
+    const now = fin(p.now, 0);
+    const f0 = clamp(fin(p.f0, 10), 0.05, 4000);
+    const load = clamp(fin(p.load, 0), 0, 1);
+    const rpmNorm = clamp(fin(p.rpmNorm, 0), 0, 1);
+    const overrun = clamp(fin(p.overrun, 0), 0, 1);
+    const strain = clamp(fin(p.strain, 0), 0, 1);
+    // Combustion noise rises with cylinder pressure (load) and with rpm; on a
+    // trailing throttle there is no combustion, only the valvetrain.
+    const lvl = 0.5 * (0.22 + 0.78 * load) * (0.35 + 0.65 * rpmNorm)
+              * (1 - 0.65 * overrun) * (1 + 0.5 * strain);
+    // Distinct ticks at low rpm; by the limiter they fuse into a rasp.
+    const pulse = clamp(0.9 - 0.6 * rpmNorm, 0.25, 0.9);
+    setT(this.level.gain, lvl * (1 - pulse), now);
+    setT(this.fireDepth.gain, lvl * pulse * 1.6, now);
+    setT(this.fire.frequency, clamp(f0 * this.cyl, 4, 2000), now);
+    setT(this.clack.frequency, 1300 + 700 * rpmNorm + 300 * load, now);
+    setT(this.tick.frequency, 2600 + 900 * rpmNorm, now);
+  }
+
+  dispose() {
+    for (const n of [this.src, this.level, this.fire, this.fireShape, this.fireDepth,
+                     this.clack, this.tick, this.tickGain, this.hp, this.out]) {
+      if (n && n.disconnect) n.disconnect();
+    }
+  }
+}
