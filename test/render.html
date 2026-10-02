@@ -91,6 +91,10 @@ function analyse(ch, rpm, opts = {}) {
       if (f >= 300 && f < 2000) eMid += p[k]; else if (f >= 40 && f < 300) eLow += p[k];
     }
     const mid = 10 * Math.log10((eMid + 1e-20) / (eLow + 1e-20));
+    // Low end: 20-150 Hz share of everything, dB. "Too rumbly" is this high.
+    let eSub = 0, eAll = 0;
+    for (let k = 1; k < p.length; k++) { const f = k * bin; eAll += p[k]; if (f >= 20 && f < 150) eSub += p[k]; }
+    const low = 10 * Math.log10((eSub + 1e-20) / (eAll + 1e-20));
     let cen = 0; for (let k = 1; k < p.length; k++) cen += k * bin * p[k]; cen /= (tot || 1);
     // Tonal prominence above 1.2 kHz: a bin vs the median of its 1/3-octave
     // neighbourhood. A narrow resonance stands out; a harmonic series of a
@@ -119,7 +123,7 @@ function analyse(ch, rpm, opts = {}) {
       peaks = pk.slice(0, 5).map(([d, f]) => f.toFixed(0) + ':' + d.toFixed(0)).join(' ');
     }
     const t = (at + N / 2) / SR;
-    frames.push({ t, rpm: rpm(t), bands, cen, harsh, crisp, mid, aLvl: 10 * Math.log10(aTot + 1e-30), tone: worst, toneF: worstF, peaks });
+    frames.push({ t, rpm: rpm(t), bands, cen, harsh, crisp, mid, low, aLvl: 10 * Math.log10(aTot + 1e-30), tone: worst, toneF: worstF, peaks });
   }
   return frames;
 }
@@ -304,6 +308,7 @@ function summarise(engine, res) {
     crispHi: mean(hi.filter(f => f.t < 8.4), f => f.crisp),
     mid: mean(fr.filter(f => f.t > 1 && f.t < 8.4), f => f.mid),
     aLvl: mean(fr.filter(f => f.t > 1 && f.t < 8.4), f => f.aLvl),
+    low: mean(fr.filter(f => f.t > 1 && f.t < 8.4), f => f.low),
   };
 }
 

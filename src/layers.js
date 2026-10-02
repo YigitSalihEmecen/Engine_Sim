@@ -1154,8 +1154,10 @@ export class TurboLayer {
     // higher the jet velocity and the brighter the chuff.
     // Lower than it was (700-1900 Hz): the "tu" of a flutter is a chuff, not
     // a hiss. The edge stays up where the "st" is.
-    setF(this.surgeBody.frequency, 520 + 650 * s, now, 0.04, 800);
-    setF(this.surgeEdge.frequency, 2000 + 900 * s, now, 0.04, 2400);
+    // 520-1170 → 760-1660 Hz: a brighter, higher "tu" — still a chuff, not
+    // the hiss it was at 700-1900 with Q 3.5 — and a crisper "st".
+    setF(this.surgeBody.frequency, 760 + 900 * s, now, 0.04, 1100);
+    setF(this.surgeEdge.frequency, 2400 + 1000 * s, now, 0.04, 2900);
 
     const amp = this.surgeLevel * this.surgeTrim;
     // The bandpasses cost most of the noise that goes through them, so these
@@ -1163,10 +1165,10 @@ export class TurboLayer {
     // The flutter is the turbo's main event: test/turbo.mjs puts it 9-20 dB
     // under the WHOLE mix during a lift (it was 22-33 dB under, i.e. inaudible
     // behind the engine). With the whistle down it has the space.
-    setT(this.surgeBodyLvl.gain, 6.6 * amp * s, now, 0.03);
+    setT(this.surgeBodyLvl.gain, 5.6 * amp * s, now, 0.03);
     // The edge band is gated on s^2 so a gentle stall is all body and only a
     // hard one gets the click. Level-matched by ear-safety, not by energy.
-    setT(this.surgeEdgeLvl.gain, 1.6 * amp * s, now, 0.03);
+    setT(this.surgeEdgeLvl.gain, 1.8 * amp * s, now, 0.03);
   }
 
   /**

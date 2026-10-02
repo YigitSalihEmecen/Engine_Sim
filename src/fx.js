@@ -566,7 +566,7 @@ export class BassEnhancer {
     this.hp = mk('highpass', 90, 0.7);
     this.lp3 = mk('lowpass', 420, 0.6);
     this.amount = ctx.createGain();
-    this.amount.gain.value = clamp(fin(opts.amount, 0.32), 0, 2);
+    this.amount.gain.value = clamp(fin(opts.amount, 0.2), 0, 2);
     this.inGain.connect(this.lp1); this.lp1.connect(this.lp2);
     this.lp2.connect(this.drive); this.drive.connect(this.span);
     this.span.connect(this.shaper); this.shaper.connect(this.hp);
