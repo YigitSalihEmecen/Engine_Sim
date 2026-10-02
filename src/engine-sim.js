@@ -23,12 +23,13 @@ import {
   builtinPreset, builtinPresets, normalisePreset, presetToJSON, presetFromJSON,
   getPath, setPath, schemaFor,
 } from './presets.js';
-import { buildEngineWaves } from './pulse.js';
+import { buildEngineWaves, combustionSpec } from './pulse.js';
 import { ExhaustSystem, IntakeResonator, CabinFilter } from './resonators.js';
 import { TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
-import { ExhaustNoise, SubLayer, CharacterModulator, RumbleLayer, MechanicalLayer } from './character.js';
+import { ExhaustNoise, SubLayer, CharacterModulator } from './character.js';
 import { INPUT_SCHEMA, DEFAULT_INPUTS } from './inputs.js';
 import { Drivetrain } from './physics.js';
+import { gearVehicle } from './gearbox.js';
 import { EQ, Reverb, Stereoizer, Dynamics, SafetyClipper, BassEnhancer, Space, compressorMakeupDb } from './fx.js';
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -42,7 +43,28 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
  */
 export const DEFAULT_MIX = { ...DEFAULT_SOUND.mix };
 
+/** Audio contexts that have the combustion worklet module loaded. */
+const WORKLET_READY = new WeakSet();
+const WORKLET_LOADING = new WeakMap();
+
 export class EngineSim {
+  /**
+   * Load the event-driven combustion source (combustion-worklet.js) into
+   * `ctx`. `start()` does this itself; a host can call it earlier to have the
+   * first sound already come from it. Resolves false where AudioWorklet is
+   * unavailable — the wavetable source is then used.
+   */
+  static preload(ctx) {
+    if (WORKLET_READY.has(ctx)) return Promise.resolve(true);
+    if (!ctx || !ctx.audioWorklet || typeof AudioWorkletNode === 'undefined') return Promise.resolve(false);
+    if (!WORKLET_LOADING.has(ctx)) {
+      WORKLET_LOADING.set(ctx, ctx.audioWorklet.addModule(new URL('./combustion-worklet.js', import.meta.url))
+        .then(() => { WORKLET_READY.add(ctx); return true; })
+        .catch((e) => { console.warn('[engine-sim] combustion worklet unavailable, using wavetables', e); return false; }));
+    }
+    return WORKLET_LOADING.get(ctx);
+  }
+
   /**
    * @param {AudioContext|null} audioContext share a context, or null to make one
    * @param {object} opts { engine, vehicle, volume, perspective, mix, ...overrides }
@@ -50,6 +72,8 @@ export class EngineSim {
   constructor(audioContext = null, opts = {}) {
     this.ctx = audioContext || new (window.AudioContext || window.webkitAudioContext)();
     this.ownsContext = !audioContext;
+    /** `opts.wavetables: true` forces the original PeriodicWave source. */
+    this.opts = opts;
 
     this.engineId = opts.engine in ENGINE_PROFILES ? opts.engine : 'v8cross';
     this.vehicleId = opts.vehicle in VEHICLE_PRESETS ? opts.vehicle : 'sports';
@@ -59,6 +83,11 @@ export class EngineSim {
     // afterwards.
     this.profile = builtinPreset(this.engineId).engine;
     this.vehicle = VEHICLE_PRESETS[this.vehicleId];
+    // The gearbox is designed for the engine fitted (gearbox.js), so swapping
+    // engines never leaves a car that cannot pull its own top gears.
+    // `gearing: 'stock'` keeps the vehicle preset's own ratio table.
+    this.stockGearing = opts.gearing === 'stock';
+    this.geared = this._gearedVehicle();
 
     this.mix = { ...DEFAULT_MIX, ...(opts.mix || {}) };
     this._volume = opts.volume ?? DEFAULT_SOUND.volume;
@@ -95,7 +124,7 @@ export class EngineSim {
     // physics.js now controls the launch by SLIP rather than by holding an rpm
     // setpoint at all, so there is nothing here to override — see
     // Drivetrain._launchClutch().
-    this.physics = new Drivetrain(this.profile, this.vehicle, { ...opts });
+    this.physics = new Drivetrain(this.profile, this.geared, { ...opts });
 
     this._buildGraph();
     this._buildVoices();
@@ -290,7 +319,7 @@ export class EngineSim {
     this.intake = new IntakeResonator(ctx, p);
     this.intake.output.connect(this.busses.intake);
 
-    this.transmission = new TransmissionLayer(ctx, p, this.vehicle);
+    this.transmission = new TransmissionLayer(ctx, p, this.geared);
     this.transmission.output.connect(this.busses.transmission);
 
     this.turbo = p.turbo ? new TurboLayer(ctx, p) : null;
@@ -343,12 +372,12 @@ export class EngineSim {
     this.sub = new SubLayer(ctx, p);
     this.sub.output.connect(this.busses.sub);
 
-    this.rumble = new RumbleLayer(ctx, p);
-    this.rumble.output.connect(this.busses.rumble);
-
-    // Combustion and mechanical noise, 1-4 kHz, from the block (not the pipe).
-    this.mech = new MechanicalLayer(ctx, p);
-    this.mech.output.connect(this.busses.mech);
+    // (The RumbleLayer — brown noise pulsed at the firing rate — and the
+    // MechanicalLayer — white noise at 1-4 kHz — are gone. Both were noise
+    // beds standing in for the variability a strictly periodic source lacks;
+    // test/character.mjs measured them taking the V8s' A-weighted tonality
+    // from 66 % to 37 % and pulling every engine toward the same hiss. The
+    // event-driven source puts that variability in the firing itself.)
 
     // Slow, non-repeating wander in pitch and level.
     this.character = new CharacterModulator(ctx, p);
@@ -359,6 +388,19 @@ export class EngineSim {
     // same frequency. The banks' relative phase is what encodes the firing
     // pattern; if they drift apart, a cross-plane V8 stops burbling.
     this.oscs = [];
+
+    // THE SOURCE. Where the combustion worklet is loaded, every firing event
+    // is generated on the audio thread with its own cycle-to-cycle variation
+    // (combustion-worklet.js); otherwise the original wavetable pairs.
+    if (this.combustion) { try { this.combustion.port.postMessage('stop'); this.combustion.disconnect(); } catch (e) { /* gone */ } }
+    this.combustion = null;
+    if (WORKLET_READY.has(ctx) && !this.opts?.wavetables) {
+      const spec = combustionSpec(p, bankAngles);
+      this.combustion = new AudioWorkletNode(ctx, 'engine-combustion', {
+        numberOfInputs: 0, numberOfOutputs: spec.outputs,
+        outputChannelCount: new Array(spec.outputs).fill(1), processorOptions: spec,
+      });
+    }
 
     // One gate per bank between the combustion wavetable and the pipe. A
     // misfire (the `roughness` input) drops one firing event here and leaves
@@ -371,10 +413,16 @@ export class EngineSim {
       gate.gain.value = 1;
       gate.connect(this.exhaust.inputs[i]);
       this.gates.push(gate);
-      this.oscs.push(this._makeWavePair(bank.soft, bank.hard, gate, 'bank' + i));
+      if (this.combustion) this.combustion.connect(gate, i);
+      else this.oscs.push(this._makeWavePair(bank.soft, bank.hard, gate, 'bank' + i));
     });
-    this.oscs.push(this._makeWavePair(
+    if (this.combustion) this.combustion.connect(this.intake.input, this.waves.banks.length);
+    else this.oscs.push(this._makeWavePair(
       this.waves.intake.soft, this.waves.intake.hard, this.intake.input, 'intake'));
+    // The worklet varies every event itself; the slow whole-engine vibrato and
+    // tremolo were the wavetable source's stand-in for that, and read as
+    // synthetic wobble on top of it.
+    if (this.character) this.character.setEventSource(!!this.combustion);
   }
 
   /** A soft/hard wavetable pair sharing one frequency, crossfaded by load. */
@@ -406,6 +454,14 @@ export class EngineSim {
   async start() {
     if (this.running) return;
     if (this.ctx.state === 'suspended') await this.ctx.resume();
+    // First start in this context: load the combustion worklet and rebuild
+    // the voices on it (the constructor ran before it could load).
+    // (Only awaited where AudioWorklet exists, so start() stays synchronous
+    // in contexts without it — hosts and tests that do not await it.)
+    if (!this.opts?.wavetables && !WORKLET_READY.has(this.ctx)
+        && this.ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+      if (await EngineSim.preload(this.ctx)) this._needsRebuild = true;
+    }
 
     // An OscillatorNode is single-use: once stopped it can never restart, so a
     // previous stop() means the whole voice set has to be rebuilt.
@@ -442,6 +498,10 @@ export class EngineSim {
       try { pair.soft.osc.stop(at); } catch (e) { /* already stopped */ }
       try { pair.hard.osc.stop(at); } catch (e) { /* already stopped */ }
     }
+    if (this.combustion) {
+      const node = this.combustion;
+      setTimeout(() => { try { node.port.postMessage('stop'); node.disconnect(); } catch (e) { /* gone */ } }, 320);
+    }
     for (const m of this._modules()) if (m.stop) m.stop(at);
     this.running = false;
     this._needsRebuild = true;
@@ -460,7 +520,7 @@ export class EngineSim {
 
   _modules() {
     return [this.exhaust, this.intake, this.transmission,
-            this.turbo, this.transients, this.exhaustNoise, this.sub, this.rumble, this.mech,
+            this.turbo, this.transients, this.exhaustNoise, this.sub,
             this.character, this.cabin].filter(Boolean);
   }
 
@@ -497,6 +557,9 @@ export class EngineSim {
 
     this.profile = engine;
     this.physics.setEngine(this.profile);
+    // New engine, new box: the transmission layer is rebuilt below from it.
+    this.geared = this._gearedVehicle();
+    this.physics.setVehicle(this.geared);
 
     for (const m of this._modules()) {
       if (m !== this.cabin && m.dispose) m.dispose();
@@ -662,6 +725,10 @@ export class EngineSim {
 
   _hardStopVoices() {
     const at = this.ctx.currentTime + 0.05;
+    if (this.combustion) {
+      try { this.combustion.port.postMessage('stop'); this.combustion.disconnect(); } catch (e) { /* gone */ }
+      this.combustion = null;
+    }
     for (const pair of this.oscs) {
       try { pair.soft.osc.stop(at); } catch (e) { /* noop */ }
       try { pair.hard.osc.stop(at); } catch (e) { /* noop */ }
@@ -672,10 +739,25 @@ export class EngineSim {
   setVehicle(id) {
     if (!(id in VEHICLE_PRESETS) || id === this.vehicleId) return false;
     this.vehicleId = id;
-    this.vehicle = VEHICLE_PRESETS[id];
-    if (this.physics.setVehicle) this.physics.setVehicle(this.vehicle);
-    if (this.transmission.setVehicle) this.transmission.setVehicle(this.vehicle);
+    this.setVehicleProfile(VEHICLE_PRESETS[id]);
     return true;
+  }
+
+  /**
+   * Fit a host-described vehicle (same fields as a VEHICLE_PRESETS entry, plus
+   * an optional `gravity`). Its gearbox is redesigned for the current engine
+   * unless the sim was built with `gearing: 'stock'`.
+   */
+  setVehicleProfile(vehicle) {
+    this.vehicle = vehicle;
+    this.geared = this._gearedVehicle();
+    if (this.physics.setVehicle) this.physics.setVehicle(this.geared);
+    if (this.transmission.setVehicle) this.transmission.setVehicle(this.geared);
+    return this.geared;
+  }
+
+  _gearedVehicle() {
+    return this.stockGearing ? this.vehicle : gearVehicle(this.profile, this.vehicle);
   }
 
   // -------------------------------------------------------------------------
@@ -845,6 +927,7 @@ export class EngineSim {
       vehicle: this.vehicleId,
       vehicleLabel: this.vehicle.label,
       gearbox: this.vehicle.gearbox,
+      gearRatios: this.geared.gearRatios.slice(),
       auto: this.physics.shift ? this.physics.shift.autoShift : true,
       perspective: this._perspective,
       volume: this._volume,
@@ -962,6 +1045,13 @@ export class EngineSim {
     const gSoft = Math.cos(x * Math.PI / 2) * ampl;
     const gHard = Math.sin(x * Math.PI / 2) * ampl;
 
+    if (this.combustion) {
+      const P = this.combustion.parameters;
+      P.get('f0').setTargetAtTime(f0, now, tc);
+      P.get('load').setTargetAtTime(x, now, tc);
+      P.get('amp').setTargetAtTime(ampl, now, tc);
+      P.get('rough').setTargetAtTime(clamp(this.inputs.roughness || 0, 0, 1), now, 0.05);
+    }
     for (const pair of this.oscs) {
       pair.soft.osc.frequency.setTargetAtTime(f0, now, tc);
       pair.hard.osc.frequency.setTargetAtTime(f0, now, tc);
@@ -1001,7 +1091,7 @@ export class EngineSim {
     // Roughness: misfires. Each firing event has a small chance of not
     // happening; the gate drops for one firing period. Deterministic PRNG so
     // a recorded run replays identically.
-    if (rough > 0 && this.gates && this.running) {
+    if (rough > 0 && this.gates && this.running && !this.combustion) {
       const fire = Math.max(1, (raw.f0 || 0) * (this.profile.cylinders || 4));
       const dt = this._lastNow != null ? Math.max(0, now - this._lastNow) : 0;
       const pMiss = 1 - Math.pow(1 - 0.06 * rough * rough, fire * dt);

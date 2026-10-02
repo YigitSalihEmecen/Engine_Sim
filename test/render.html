@@ -159,7 +159,7 @@ async function render(engine, vehicle = 'sports', seconds = 11, extra = {}) {
   ctx.destination.channelCount = 4;
   ctx.destination.channelInterpretation = 'discrete';
 
-  const sim = new EngineSim(ctx, { engine, vehicle, destination: merger, volume: extra.volume ?? 0.8 });
+  const sim = new EngineSim(ctx, { engine, vehicle, destination: merger, volume: extra.volume ?? 0.8, wavetables: !!extra.wavetables });
   if (extra.preset) sim.loadPreset(extra.preset);
   // Experiments: EXTRA='sim.airCut.gain.value = 0' etc. (render.mjs passes it)
   if (extra.tweak) new Function('sim', 'ctx', extra.tweak)(sim, ctx);
@@ -331,6 +331,65 @@ window.chainResponse = async (engine, opts = {}) => {
   const o = acc(L), b = acc(Bus);
   const ref = 2;   // 125 Hz
   return { octs, chain: o.map((v, i) => v - b[i] - (o[ref] - b[ref])), bus: b.map(v => v - b[ref]), out: o.map(v => v - o[ref]) };
+};
+
+/**
+ * DYNO: full throttle with the crank PINNED at `rpm` (60 % of redline by
+ * default), so the engine sits at steady full load. Returns the analysis of the last 3 s:
+ *   tonal    fraction of the 20 Hz-6 kHz energy within ±1.5 Hz of a half-order
+ *            harmonic of the held rpm (1 = pure tones, 0 = pure noise)
+ *   tonalA   the same, A-weighted (what the ear weighs)
+ *   orders   level of half-orders 1..48 (orders 0.5..24), dB re the strongest
+ */
+window.runDyno = async (engine, opts = {}) => {
+  const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: SR * 7, sampleRate: SR });
+  const realResume = ctx.resume.bind(ctx);
+  ctx.resume = async () => {};
+  const sim = new EngineSim(ctx, { engine, vehicle: 'sports', destination: ctx.destination, volume: 0.8, wavetables: !!opts.wavetables });
+  if (opts.tweak) new Function('sim', 'ctx', opts.tweak)(sim, ctx);
+  sim.setAutoShift(false);
+  await sim.start();
+  sim.setGear(0);
+  const target = opts.rpm || 0.6 * sim.profile.redlineRpm;
+  // Pin the crank: after every physics sub-step the flywheel is put back at
+  // the target speed, so the engine sits EXACTLY at `target` at full throttle.
+  const ph = sim.physics, sub = ph._substep.bind(ph), wT = target * Math.PI / 30;
+  ph._substep = (h) => { sub(h); ph.we = wT; };
+  ph.we = wT;
+  const rpmSeen = [];
+  const dt = 1 / 60;
+  for (let i = 1; i < 7 * 60 - 1; i++) {
+    const t = i * dt;
+    ctx.suspend(Math.round(t * SR / 128) * 128 / SR).then(() => {
+      sim.setThrottle(opts.throttle ?? 1);
+      sim.update(dt);
+      if (t > 4) rpmSeen.push(sim.getState().rpm);
+      realResume();
+    });
+  }
+  const buf = await ctx.startRendering();
+  const x = buf.getChannelData(0);
+  const rpm = rpmSeen.reduce((a, b) => a + b, 0) / Math.max(1, rpmSeen.length);
+  const N = 65536, bin = SR / N;
+  const p = spectrum(x, Math.floor(4 * SR), N);
+  const f0 = rpm / 120;                          // half-order spacing, Hz
+  const aw = (f) => { const f2 = f * f;
+    const ra = (12194 ** 2 * f2 * f2) / ((f2 + 20.6 ** 2) * Math.sqrt((f2 + 107.7 ** 2) * (f2 + 737.9 ** 2)) * (f2 + 12194 ** 2));
+    return ra * ra; };
+  let tot = 0, ton = 0, totA = 0, tonA = 0;
+  for (let k = Math.ceil(20 / bin); k < 6000 / bin; k++) {
+    const f = k * bin, h = f / f0, near = Math.abs(h - Math.round(h)) * f0 <= 1.5;
+    tot += p[k]; totA += p[k] * aw(f);
+    if (near && Math.round(h) >= 1) { ton += p[k]; tonA += p[k] * aw(f); }
+  }
+  const orders = [];
+  for (let h = 1; h <= 48; h++) {
+    let e = 0; for (let k = Math.round((h * f0 - 1.5) / bin); k <= Math.round((h * f0 + 1.5) / bin); k++) e += p[k] || 0;
+    orders.push(10 * Math.log10(e + 1e-20));
+  }
+  const mx = Math.max(...orders);
+  return { engine, source: sim.combustion ? 'events' : 'wavetable', rpm: Math.round(rpm), target: Math.round(target), tonal: ton / tot, tonalA: tonA / totA,
+           orders: orders.map(v => +(v - mx).toFixed(1)) };
 };
 
 window.runOne = async (engine, opts = {}) => {

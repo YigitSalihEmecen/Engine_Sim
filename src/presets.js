@@ -67,11 +67,9 @@ export const DEFAULT_SOUND = Object.freeze({
     turbo: 0.40,
     transients: 0.42,
     // 0.9 → 0.55. The sub sine was most of the power in the whole mix (see
-    // test/render.mjs) and almost none of what is audible; the rumble layer and
-    // the bass enhancer carry the low end now.
+    // test/render.mjs) and almost none of what is audible; the bass enhancer and
+    // the pipe's own low orders carry the low end now.
     sub: 0.25,
-    rumble: 0.3,
-    mech: 0.22,
   }),
   tone: Object.freeze({ rumble: 1, brightness: 1, punch: 1 }),
   /** dB per band: [sub 60, body 200, honk 800, rasp 2.5 k, air 8 k]. */
@@ -116,6 +114,7 @@ export const PRESET_SCHEMA = Object.freeze([
   { path: 'engine.redlineRpm', label: 'Redline', min: 3000, max: 12000, step: 100, unit: 'rpm', group: 'engine', rebuild: false },
   { path: 'engine.peakTorque', label: 'Peak torque', min: 40, max: 1400, step: 5, unit: 'N·m', group: 'engine', rebuild: false },
   { path: 'engine.peakTorqueRpm', label: 'Torque peak at', min: 1200, max: 9000, step: 100, unit: 'rpm', group: 'engine', rebuild: false },
+  { path: 'engine.gears', label: 'Gears', min: 3, max: 10, step: 1, unit: '', group: 'engine', rebuild: true },
   { path: 'engine.engineInertia', label: 'Rotating inertia', min: 0.02, max: 1.2, step: 0.005, unit: 'kg·m²', group: 'engine', rebuild: false },
   { path: 'engine.gasTempFactor', label: 'Gas temperature', min: 0.8, max: 1.8, step: 0.01, unit: '×c', group: 'engine', rebuild: true },
   { path: 'engine.voice', label: 'Voice level', min: 0.2, max: 2, step: 0.01, unit: '%', group: 'engine', rebuild: false },
@@ -154,9 +153,6 @@ export const PRESET_SCHEMA = Object.freeze([
   { path: 'mix.turbo', label: 'Turbo', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
   { path: 'mix.transients', label: 'Pops', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
   { path: 'mix.sub', label: 'Sub', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
-  { path: 'mix.rumble', label: 'Rumble', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
-  { path: 'mix.mech', label: 'Mechanical', min: 0, max: 2, step: 0.01, unit: '%', group: 'mix', rebuild: false,
-    note: 'Combustion and valvetrain noise, 1-4 kHz, pulsed with the firing order. The mid-range grit that makes it sound like an engine rather than a tone.' },
 
   // --- tone + fx ----------------------------------------------------------
   { path: 'tone.rumble', label: 'Rumble', min: 0, max: 2, step: 0.01, unit: '%', group: 'tone', rebuild: false },

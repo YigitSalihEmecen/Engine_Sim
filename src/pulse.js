@@ -267,3 +267,90 @@ export function orderSpectrum(profile, angles, hard = 0.5, maxOrder = 16) {
 }
 
 export { TABLE_SIZE, MAX_HARMONICS };
+
+// ---------------------------------------------------------------------------
+// Event-driven source (combustion-worklet.js)
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything the combustion worklet needs for one engine: every firing event
+ * (which output, crank angle, the cylinder's fixed trims), the pulse law, the
+ * cycle-to-cycle variation, and calibration gains so each output radiates at
+ * the level the wavetables did (0.25 RMS) across load.
+ *
+ * Outputs: one per exhaust bank, then the intake (every cylinder, 360° before
+ * its power stroke — at its REAL firing angle, where the wavetable intake used
+ * evenly spaced angles).
+ *
+ * Variation scales with the profile's `pulse.jitter` (its static per-cylinder
+ * spread, 0.5-2.6 %): COV of pulse amplitude at full load 1.8-4.3 % (rising
+ * ~3x at light load in the worklet), ignition timing σ 0.65-1.7°. Per-profile
+ * `pulse.ccv` / `pulse.jitterDeg` override.
+ */
+export function combustionSpec(profile, bankAnglesFn) {
+  const P = profile.pulse;
+  const jit = (P.jitter || 0) / 100;
+  const rnd = seeded(profile.cylinders * 2654435761 + Math.round(P.attack * 97) + 7);
+  const events = [];
+  const nBanks = profile.banks.length;
+  const intakeAngles = [];
+  for (let b = 0; b < nBanks; b++) {
+    for (const angle of bankAnglesFn(profile, b)) {
+      const ampTrim = 1 + (rnd() * 2 - 1) * jit * 2.5;
+      const angTrim = (rnd() * 2 - 1) * jit * 6;
+      const decayTrim = 1 + (rnd() * 2 - 1) * jit * 1.5;
+      const u = ((((angle + angTrim) % 720) + 720) % 720) / 720;
+      events.push({ out: b, angle: u, ampTrim, decayTrim });
+      intakeAngles.push({ angle: angle + angTrim + 360, ampTrim, decayTrim });
+    }
+  }
+  for (const c of intakeAngles) {
+    events.push({ out: nBanks, angle: ((((c.angle) % 720) + 720) % 720) / 720, ampTrim: c.ampTrim, decayTrim: c.decayTrim });
+  }
+  const hardness = Math.max(0, Math.min(1.5, (typeof P.hardness === 'number' && isFinite(P.hardness))
+    ? P.hardness : 0.65)) / 0.65;
+
+  // Calibration: render one nominal cycle per output at five loads with the
+  // worklet's own law (gradient per unit phase, one-pole radiation lowpass in
+  // the phase domain), and scale each to the wavetables' 0.25 RMS.
+  const N = TABLE_SIZE, KNEE = 2 * RADIATION_KNEE_ORDER;
+  const k = 1 - Math.exp(-2 * Math.PI * KNEE / N);
+  const gains = [];
+  for (let o = 0; o <= nBanks; o++) {
+    const row = [];
+    for (let L = 0; L <= 4; L++) {
+      const load = L / 4, h = hardness * load;
+      const a = P.attack * (0.55 + 0.85 * h);
+      const b0 = P.decay * (1.25 - 0.35 * h);
+      const cyc = new Float64Array(N);
+      for (const e of events) {
+        if (e.out !== o) continue;
+        for (let i = 0; i < N; i++) {
+          let d = i / N - e.angle; if (d < 0) d += 1;
+          cyc[i] += e.ampTrim * pulseAt(d, a, b0 * e.decayTrim);
+        }
+      }
+      // two passes so the lowpass starts in its steady state
+      let lp = 0, ss = 0;
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < N; i++) {
+          const g = (cyc[i] - cyc[(i + N - 1) % N]) * N;
+          lp += k * (g - lp);
+          if (pass) ss += lp * lp;
+        }
+      }
+      const rms = Math.sqrt(ss / N) || 1;
+      row.push(0.25 / rms);
+    }
+    gains.push(row);
+  }
+  return {
+    events: events.sort((x, y) => x.angle - y.angle),
+    outputs: nBanks + 1,
+    attack: P.attack, decay: P.decay, hardness,
+    ccv: typeof P.ccv === 'number' ? P.ccv : 0.012 + 0.012 * (P.jitter || 1),
+    jitterDeg: typeof P.jitterDeg === 'number' ? P.jitterDeg : 0.4 + 0.5 * (P.jitter || 1),
+    gains,
+    seed: (profile.cylinders * 40503 + Math.round(P.attack * 131)) >>> 0,
+  };
+}
