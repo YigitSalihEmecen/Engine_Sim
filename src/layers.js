@@ -48,7 +48,7 @@
  * attack while removing the hiss above them; the shelf then tilts what is left
  * so the whistle reads as bright without being sharp.
  */
-const TURBO_AIR_HZ = 4600;
+const TURBO_AIR_HZ = 3800;
 const TURBO_AIR_DB = -5.5;
 
 /**
@@ -61,7 +61,7 @@ const TURBO_AIR_DB = -5.5;
  * under the ear's peak and lets the wavetable's harmonics (rolled off by the
  * tone stage) carry the brightness.
  */
-const TURBO_WHINE_MAX_HZ = 2200;
+const TURBO_WHINE_MAX_HZ = 1150;
 
 const TC = 0.02;              // default smoothing time constant, seconds
 const FMIN = 10;              // contract frequency clamp
@@ -761,6 +761,41 @@ export class TurboLayer {
     this.hissBP.connect(this.hissGain);
     this.hissGain.connect(this.bus);
 
+    // Whine AIR: a narrow noise band riding on the blade tone. Half of what
+    // the ear hears of a real turbo whistle is turbulent flow through the
+    // wheel at the blade-passing rate, not the tone itself — a pure partial
+    // is what made it sound like a sine wave.
+    this.whineNoiseBP = keep(ctx.createBiquadFilter());
+    this.whineNoiseBP.type = 'bandpass';
+    this.whineNoiseBP.frequency.value = 800;
+    this.whineNoiseBP.Q.value = 6;
+    this.whineNoiseGain = keep(ctx.createGain());
+    this.whineNoiseGain.gain.value = 0;
+    white.connect(this.whineNoiseBP);
+    this.whineNoiseBP.connect(this.whineNoiseGain);
+    this.whineNoiseGain.connect(this.bus);
+
+    // AIRFLOW: the intake rush. A big low-mid band of pink noise — air being
+    // pulled through the filter and pushed through the intercooler — that
+    // swells with boost and flow. This, not the whistle, is the body of a
+    // turbo you hear from outside the car.
+    const airNoise = noiseSource(ctx, 'pink', 1.31);
+    this._srcs.push(airNoise);
+    this.airflowHP = keep(ctx.createBiquadFilter());
+    this.airflowHP.type = 'highpass';
+    this.airflowHP.frequency.value = 280;
+    this.airflowHP.Q.value = 0.5;
+    this.airflowLP = keep(ctx.createBiquadFilter());
+    this.airflowLP.type = 'lowpass';
+    this.airflowLP.frequency.value = 1400;
+    this.airflowLP.Q.value = 0.5;
+    this.airflowGain = keep(ctx.createGain());
+    this.airflowGain.gain.value = 0;
+    airNoise.connect(this.airflowHP);
+    this.airflowHP.connect(this.airflowLP);
+    this.airflowLP.connect(this.airflowGain);
+    this.airflowGain.connect(this.bus);
+
     // --- blow-off valve -----------------------------------------------------
     // One shared filter+gain pair, retriggered by scheduling — no allocation.
     this.bovBP = keep(ctx.createBiquadFilter());
@@ -818,7 +853,7 @@ export class TurboLayer {
     this.surgeBody = keep(ctx.createBiquadFilter());
     this.surgeBody.type = 'bandpass';
     this.surgeBody.frequency.value = 1200;
-    this.surgeBody.Q.value = 3.5;
+    this.surgeBody.Q.value = 2.4;
     this.surgeBodyAM = keep(ctx.createGain());
     this.surgeBodyAM.gain.value = 0;
     this.surgeBodyLvl = keep(ctx.createGain());
@@ -879,7 +914,11 @@ export class TurboLayer {
     this.bovLevel = clamp(fin(t && t.bov, 0.5), 0, 2);
     this.surgeTrim = clamp(fin(t && t.surge, 1), 0, 3);
     const redline = fin(profile && profile.redlineRpm, 7000);
-    const order = fin(t && t.whineOrder, 70);
+    // ×0.5: the profiles' blade orders put a spooled whistle at 1.6-2.2 kHz,
+    // right in the ear's most sensitive band, where a near-pure tone reads as
+    // a sine generator rather than a turbo. An octave down it sits under the
+    // engine as a hum-whistle instead of on top of it.
+    const order = 0.5 * fin(t && t.whineOrder, 70);
     // Whine of a fully spooled turbo at redline, Hz. See TURBO_WHINE_MAX_HZ.
     this.whineRef = clamp((redline / 120) * order, 200, TURBO_WHINE_MAX_HZ);
   }
@@ -936,7 +975,8 @@ export class TurboLayer {
     setF(this.whineOsc.frequency, whineHz, now, TC, 1000);
     // The formant sits a little above the blade tone so the 2nd harmonic is
     // what the cavity emphasises — that is the "eeee" in a turbo whistle.
-    setF(this.whineBP.frequency, whineHz * 1.6, now, TC, 1600);
+    setF(this.whineBP.frequency, whineHz * 1.25, now, TC, 1600);
+    setF(this.whineNoiseBP.frequency, whineHz, now, TC, 800);
 
     // Radiation rises steeply with tip speed. Exponent 2.0 rather than 2.5 so
     // the whistle stays present across the range instead of only at full boost.
@@ -945,8 +985,16 @@ export class TurboLayer {
     // Weighted toward tip speed, NOT throttle: closing the throttle for a shift
     // must not collapse the whistle. The turbine is still spinning; it is still
     // whistling. What changes is that it is no longer being driven, so it sags.
-    const whineLvl = 0.27 * aero * (0.62 + 0.38 * flow);   // was 0.40: 36 dB tone, see render.mjs
+    // 0.40 → 0.27 → 0.085: test/turbo.mjs had the spooled tone 15-20 dB
+    // under the whole engine, which for a near-pure partial is loud. Now it is
+    // a texture under the engine, with the noise band carrying the rest.
+    const whineLvl = 0.085 * aero * (0.62 + 0.38 * flow);
     setT(this.whineGain.gain, whineLvl, now, TC);
+    setT(this.whineNoiseGain.gain, 0.30 * aero * (0.5 + 0.5 * flow), now, TC);
+    // Airflow: tracks how much air is moving (boost × flow), and opens up in
+    // pitch as it does.
+    setT(this.airflowGain.gain, 0.20 * (0.15 + 0.85 * this.spool) * this.spool * (0.25 + 0.75 * flow), now, 0.05);
+    setF(this.airflowLP.frequency, 900 + 1300 * this.spool, now, TC, 1400);
 
     // Bearing wander, in cents. Deepest off-boost where the rotor is least
     // loaded and the oil film is thickest; a fully spooled turbo runs true.
@@ -984,7 +1032,7 @@ export class TurboLayer {
     setF(this.wgOsc.frequency, 26 + 30 * nearCeiling + 8 * Math.sin(now * 3.1), now, 0.05, 34);
     setF(this.wgBP.frequency, 1200 + 1100 * this.spool, now, TC, 1500);
     setT(this.wgLevel.gain, 0.34 * chatter, now, TC);
-    setT(this.hissGain.gain, 0.22 * aero * (0.45 + 0.55 * flow), now, TC);
+    setT(this.hissGain.gain, 0.10 * aero * (0.45 + 0.55 * flow), now, TC);
 
     // --- blow-off valve -----------------------------------------------------
     const bov = clamp(fin(p.evBov, 0), 0, 1);
@@ -992,6 +1040,7 @@ export class TurboLayer {
 
     // --- compressor surge ---------------------------------------------------
     this._stepSurge(now, dt, throttle, rpmNorm, shifting, p);
+    this._prevLimiter = !!p.limiter;
 
     this._prevThrottle = throttle;
     this._prevShifting = shifting;
@@ -1008,7 +1057,7 @@ export class TurboLayer {
   _stepSurge(now, dt, throttle, rpmNorm, shifting, p) {
     // The plenum drains as the surge cycles vent it, so the stall weakens even
     // if the throttle stays shut. ~0.55 s to fall to a third.
-    this._surge *= Math.exp(-dt / 0.42);
+    this._surge *= Math.exp(-dt / 0.65);
     if (this._surge < 1e-3) this._surge = 0;
 
     const closed = throttle < 0.10;
@@ -1020,7 +1069,10 @@ export class TurboLayer {
     // produced it on 0 of 8 for every one of the seven turbo profiles. What
     // stalls the wheel is the flow COLLAPSING, not the pedal reaching a
     // particular number, so a fast large closure arms it wherever it lands.
-    const dropped = (this._prevThrottle - throttle) > 0.28 && throttle < 0.42;
+    const dropped = (this._prevThrottle - throttle) > 0.2 && throttle < 0.5;
+    // The rev limiter's fuel cut closes the flow against a spooled wheel too,
+    // so a boosted engine bouncing off the limiter flutters.
+    const limiter = !!p.limiter;
     const shiftCut = shifting && !this._prevShifting;
     const allow = this.flutterMode === false ? 0 : 1;
 
@@ -1037,7 +1089,12 @@ export class TurboLayer {
     // Note this reads the state BEFORE the valve has vented on the trigger
     // frame, which is right: what stalls the compressor is what was standing in
     // the plenum at the instant the throttle shut.
-    const head = clamp((this.spool - 0.22) / 0.38, 0, 1);
+    //
+    // 0.22/0.38 → 0.12/0.28: measured with test/turbo.mjs, a lift at the end
+    // of a pull reached surge 0.05-0.3 on most engines and next to nothing on
+    // some, because the shaft sags at the limiter and on partial load. The
+    // flutter is THE turbo sound; it should come easily.
+    const head = clamp((this.spool - 0.12) / 0.28, 0, 1);
 
     // What the valve relieves cannot reverse through the wheel. This is the
     // one place the valve's capacity decides the sound, and it has to be
@@ -1051,7 +1108,9 @@ export class TurboLayer {
     // 0.8 valve left 0.32 of authority and it barely chattered at all even
     // flat out. The trade survives (0.32 of relief still separates the biggest
     // valve from the smallest); it just no longer silences anything.
-    const relief = clamp(1 - 0.55 * this.bovLevel, 0.30, 1);
+    // 0.55/0.30 → 0.5/0.55: the trade survives (> 3 dB between the biggest
+    // valve and the smallest, test/run.mjs), but no valve silences the flutter.
+    const relief = clamp(1 - 0.5 * this.bovLevel, 0.55, 1);
     const stall = head * relief * allow;
 
     if (stall > 0 && (justClosed || dropped || shiftCut)) {
@@ -1061,9 +1120,14 @@ export class TurboLayer {
     // While the throttle stays shut and boost is still up, surge sustains
     // rather than decaying away — a long lift keeps chattering.
     if (closed && stall > 0.06) {
-      this._surge = Math.max(this._surge, stall * 0.55);
+      this._surge = Math.max(this._surge, stall * 0.8);
     }
-    if (!closed && !shifting) this._surge *= 0.25;   // reopening kills it at once
+    if (limiter && stall > 0.06) {
+      this._surge = Math.max(this._surge, stall * 0.7);
+    }
+    if (!closed && !shifting && !limiter && !(throttle < 0.5 && this._surge > 0.3)) {
+      this._surge *= 0.25;   // reopening kills it at once
+    }
 
     const s = clamp(this._surge, 0, 1);
 
@@ -1077,16 +1141,21 @@ export class TurboLayer {
 
     // Each reversal drags gas back across the wheel; the harder the stall, the
     // higher the jet velocity and the brighter the chuff.
-    setF(this.surgeBody.frequency, 700 + 1200 * s, now, 0.04, 1200);
-    setF(this.surgeEdge.frequency, 2200 + 1200 * s, now, 0.04, 2600);
+    // Lower than it was (700-1900 Hz): the "tu" of a flutter is a chuff, not
+    // a hiss. The edge stays up where the "st" is.
+    setF(this.surgeBody.frequency, 520 + 650 * s, now, 0.04, 800);
+    setF(this.surgeEdge.frequency, 2000 + 900 * s, now, 0.04, 2400);
 
     const amp = this.surgeLevel * this.surgeTrim;
     // The bandpasses cost most of the noise that goes through them, so these
     // levels are well above what they look like relative to the whine.
-    setT(this.surgeBodyLvl.gain, 0.62 * amp * s, now, 0.03);
+    // The flutter is the turbo's main event: test/turbo.mjs puts it 9-20 dB
+    // under the WHOLE mix during a lift (it was 22-33 dB under, i.e. inaudible
+    // behind the engine). With the whistle down it has the space.
+    setT(this.surgeBodyLvl.gain, 6.6 * amp * s, now, 0.03);
     // The edge band is gated on s^2 so a gentle stall is all body and only a
     // hard one gets the click. Level-matched by ear-safety, not by energy.
-    setT(this.surgeEdgeLvl.gain, 0.20 * amp * s * s, now, 0.03);
+    setT(this.surgeEdgeLvl.gain, 1.6 * amp * s, now, 0.03);
   }
 
   /**
@@ -1221,11 +1290,15 @@ function grainCurve(n = 1024, bias = 0.55) {
 
 function surgePulseCurve(n = 1024) {
   const c = new Float32Array(n);
-  const RISE = 0.06;
+  const RISE = 0.07;
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);                 // maps input -1..+1 onto 0..1
-    const a = t < RISE ? t / RISE : 1;
-    c[i] = a * Math.exp(-5.5 * Math.max(0, t - RISE));
+    // Raised-cosine rise: still a fast onset (the "st"), but with no corner
+    // for the sawtooth's band-limit ripple to fold into clicks.
+    const a = t < RISE ? 0.5 - 0.5 * Math.cos(Math.PI * t / RISE) : 1;
+    // Steeper tail and a true gap before the next burst: separate "stu"s,
+    // not a continuous rattle.
+    c[i] = a * Math.exp(-7.5 * Math.max(0, t - RISE));
   }
   return c;
 }
