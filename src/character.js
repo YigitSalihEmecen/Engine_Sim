@@ -381,11 +381,13 @@ export class CharacterModulator {
 
 /** Attack/decay pulse curve for a WaveShaper fed a sawtooth (trap #14): the
  *  saw sweeps the curve once per cycle, so the curve IS the envelope. */
-function firePulseCurve(n = 1024, rise = 0.07, tail = 5.5) {
+function firePulseCurve(n = 1024, rise = 0.16, tail = 5.5) {
   const c = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const u = i / (n - 1);                   // 0..1 across one firing period
-    const e = u < rise ? Math.sin((u / rise) * Math.PI / 2)
+    // Raised-cosine attack: zero slope at both ends, so the curve has no
+    // corner for the oscillator's band-limit ripple to fold into spikes.
+    const e = u < rise ? 0.5 - 0.5 * Math.cos((u / rise) * Math.PI)
                        : Math.exp(-tail * (u - rise));
     c[i] = e;
   }
@@ -470,11 +472,18 @@ export class RumbleLayer {
     this.out = ctx.createGain();
     this.out.gain.value = clamp(fin(opts.gain, 1), 0, 4);
 
-    this.src.connect(this.hp);
+    // The firing envelope modulates the noise BEFORE the filters. Applied
+    // after them (as it first was), every pulse's attack is a broadband edge
+    // laid straight onto the output — and the band-limited sawtooth's ringing
+    // at its reset, mapped through the steep front of the pulse curve, adds a
+    // chatter of spikes on top. That was the crackle under every engine
+    // (test/clicks.mjs: 50-78 clicks/s, all from this layer). Filtered after
+    // the modulation, no edge survives above ~360 Hz.
+    this.src.connect(this.level);
+    this.level.connect(this.hp);
     this.hp.connect(this.lp);
     this.lp.connect(this.body);
-    this.body.connect(this.level);
-    this.level.connect(this.out);
+    this.body.connect(this.out);
     this.fire.connect(this.fireShape);
     this.fireShape.connect(this.fireDepth);
     this.fireDepth.connect(this.level.gain);
