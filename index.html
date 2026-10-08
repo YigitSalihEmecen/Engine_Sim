@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#07080d">
+  <meta name="theme-color" content="#060504">
   <title>Engine Sim — procedural engine sound</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -14,12 +14,12 @@
        DESIGN LANGUAGE
        Dark, glass and light. Panels are frosted glass floating over a living
        background that is drawn from the engine's own output — the low band
-       swells the light, the revs shift its colour from cold blue to hot
+       swells the light, the revs shift its colour from dim amber to hot
        orange, the top end sparkles. One accent gradient, generous radii,
        soft depth, motion that eases rather than snaps.
        ===================================================================== */
     :root {
-      --bg: #07080d;
+      --bg: #060504;
       --glass: rgba(255, 255, 255, .055);
       --glass2: rgba(255, 255, 255, .085);
       --glass3: rgba(255, 255, 255, .13);
@@ -29,16 +29,16 @@
       --ink2: rgba(236, 240, 250, .74);
       --ink3: rgba(226, 232, 245, .50);
       --ink4: rgba(220, 226, 240, .32);
-      --hot: #ff5a36;
+      --hot: #ff4d00;
       --hot2: #ffb347;
-      --cool: #42c6ff;
-      --vio: #8b6bff;
+      --cool: #ffb347;
+      --vio: #ff7a1a;
       --ok: #3ee08f;
       --warn: #ffc24a;
       /* live, written by the frame loop from the audio */
       --heat: 0;
       --pulse: 0;
-      --accent: linear-gradient(120deg, #42c6ff, #8b6bff 45%, #ff5a36);
+      --accent: linear-gradient(120deg, #ffb347, #ff7a1a 45%, #ff4d00);
       --r: 22px;
       --r2: 14px;
       --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -168,7 +168,7 @@
     select:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible {
       outline: 2px solid var(--cool); outline-offset: 2px;
     }
-    option, optgroup { background: #12141c; color: var(--ink); }
+    option, optgroup { background: #120e0b; color: var(--ink); }
 
     .acts { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     .btn {
@@ -186,7 +186,7 @@
     .btn svg { width: 15px; height: 15px; }
     .ign {
       padding: 10px 20px 10px 14px; font-weight: 700;
-      background: var(--accent); border: 0; color: #fff;
+      background: var(--accent); border: 0; color: #0b0d14;
       box-shadow: 0 8px 30px -8px rgba(255, 90, 54, .65);
     }
     .ign:hover { filter: brightness(1.1); background: var(--accent); }
@@ -247,8 +247,8 @@
     .meter .k { font-size: 11.5px; color: var(--ink3); font-weight: 600; }
     .meter .tr { height: 8px; border-radius: 99px; background: rgba(255, 255, 255, .07); overflow: hidden; }
     .meter .tr i { display: block; height: 100%; width: 0; border-radius: inherit; transition: width .06s linear; }
-    .meter.a i { background: linear-gradient(90deg, #42c6ff, #8b6bff); box-shadow: 0 0 12px rgba(120, 140, 255, .7); }
-    .meter.b i { background: linear-gradient(90deg, #ff8a5c, #ff3b3b); box-shadow: 0 0 12px rgba(255, 70, 60, .7); }
+    .meter.a i { background: linear-gradient(90deg, #ffb347, #ff7a1a); box-shadow: 0 0 12px rgba(255, 160, 60, .7); }
+    .meter.b i { background: linear-gradient(90deg, #ff9a4d, #d94a00); box-shadow: 0 0 12px rgba(255, 90, 20, .7); }
     .meter.y i { background: linear-gradient(90deg, #ffd166, #ff9f1c); box-shadow: 0 0 12px rgba(255, 190, 60, .7); }
     .meter .pc { font: 600 12px var(--mono); text-align: right; color: var(--ink2); }
 
@@ -266,8 +266,8 @@
       user-select: none; -webkit-user-select: none; touch-action: none;
     }
     .hold .fillh { position: absolute; inset: 0; transform-origin: left; transform: scaleX(0); transition: transform .08s linear; opacity: .9; }
-    .hold.gas .fillh { background: linear-gradient(90deg, rgba(66, 198, 255, .45), rgba(139, 107, 255, .6)); }
-    .hold.brk .fillh { background: linear-gradient(90deg, rgba(255, 138, 92, .45), rgba(255, 59, 59, .6)); }
+    .hold.gas .fillh { background: linear-gradient(90deg, rgba(255, 179, 71, .45), rgba(255, 122, 26, .6)); }
+    .hold.brk .fillh { background: linear-gradient(90deg, rgba(255, 154, 77, .45), rgba(217, 74, 0, .6)); }
     .hold span { position: relative; }
     .hold small { position: relative; display: block; font: 500 10.5px var(--mono); color: var(--ink3); margin-top: 1px; }
     .hold.down { border-color: var(--edge2); }
@@ -283,7 +283,7 @@
     }
     .nav button:hover { background: rgba(255, 255, 255, .06); color: var(--ink); }
     .nav button.on { background: rgba(255, 255, 255, .11); border-color: var(--edge); color: var(--ink); }
-    .nav button.on .ic { background: var(--accent); color: #fff; }
+    .nav button.on .ic { background: var(--accent); color: #0b0d14; }
     .nav .ic {
       width: 30px; height: 30px; border-radius: 10px; flex: none; display: grid; place-items: center;
       background: rgba(255, 255, 255, .07); transition: background .2s var(--ease);
@@ -328,17 +328,17 @@
     }
     input[type=range]::-webkit-slider-runnable-track {
       height: 6px; border-radius: 99px;
-      background: linear-gradient(90deg, #42c6ff, #8b6bff var(--p), rgba(255, 255, 255, .1) var(--p));
+      background: linear-gradient(90deg, #ffb347, #ff7a1a var(--p), rgba(255, 255, 255, .1) var(--p));
     }
     input[type=range]::-moz-range-track { height: 6px; border-radius: 99px; background: rgba(255, 255, 255, .1); }
-    input[type=range]::-moz-range-progress { height: 6px; border-radius: 99px; background: linear-gradient(90deg, #42c6ff, #8b6bff); }
+    input[type=range]::-moz-range-progress { height: 6px; border-radius: 99px; background: linear-gradient(90deg, #ffb347, #ff7a1a); }
     input[type=range]::-webkit-slider-thumb {
       -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; margin-top: -6px;
-      background: #fff; border: 0; box-shadow: 0 0 0 4px rgba(139, 107, 255, .28), 0 2px 8px rgba(0, 0, 0, .5);
+      background: #fff; border: 0; box-shadow: 0 0 0 4px rgba(255, 122, 26, .28), 0 2px 8px rgba(0, 0, 0, .5);
       transition: box-shadow .2s var(--ease);
     }
-    input[type=range]:active::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(139, 107, 255, .35), 0 2px 8px rgba(0, 0, 0, .5); }
-    input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 0 0 4px rgba(139, 107, 255, .28); }
+    input[type=range]:active::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(255, 122, 26, .35), 0 2px 8px rgba(0, 0, 0, .5); }
+    input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 0; box-shadow: 0 0 0 4px rgba(255, 122, 26, .28); }
 
     /* live inputs — larger, they are performance controls */
     .inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
@@ -379,13 +379,13 @@
     .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .toast {
       margin-top: 12px; padding: 10px 12px; border-radius: 12px; font-size: 12.5px; color: var(--ink2);
-      background: rgba(66, 198, 255, .08); border: 1px solid rgba(66, 198, 255, .2);
+      background: rgba(255, 179, 71, .08); border: 1px solid rgba(255, 179, 71, .2);
     }
 
     /* ---- boot guard ---- */
     #boot { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--bg); }
     #boot[hidden] { display: none; }
-    .boot-card { max-width: 620px; width: 100%; padding: 26px 28px; border-radius: var(--r); background: #12141c; border: 1px solid var(--edge); }
+    .boot-card { max-width: 620px; width: 100%; padding: 26px 28px; border-radius: var(--r); background: #120e0b; border: 1px solid var(--edge); }
     .boot-card h1 { margin: 0 0 14px; font-size: 18px; color: var(--hot); }
     .boot-card p { margin: 0 0 14px; color: var(--ink2); }
     .boot-card pre { margin: 0 0 14px; padding: 14px 16px; overflow-x: auto; background: rgba(0, 0, 0, .4); border-radius: 12px; font: 12px/1.6 var(--mono); }
@@ -397,7 +397,7 @@
        ===================================================================== */
     #drive {
       position: fixed; inset: 0; z-index: 900; display: none;
-      background: radial-gradient(120% 120% at 50% 0%, rgba(20, 24, 40, .55), rgba(5, 6, 10, .85));
+      background: radial-gradient(120% 120% at 50% 0%, rgba(30, 20, 14, .55), rgba(6, 5, 4, .85));
       backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
       padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
       touch-action: none; overscroll-behavior: none; user-select: none; -webkit-user-select: none;
@@ -422,7 +422,7 @@
       cursor: pointer; touch-action: manipulation; white-space: nowrap;
     }
     .dv-btn.on { background: rgba(255, 255, 255, .92); color: #0b0d14; }
-    .dv-btn.pri { background: var(--accent); border-color: transparent; color: #fff; }
+    .dv-btn.pri { background: var(--accent); border-color: transparent; color: #0b0d14; }
     .dv-spacer { flex: 1; }
     .dv-tag { font: 600 clamp(9px, 1.5vmin, 12px)/1 var(--mono); color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     .dv-read {
@@ -452,8 +452,8 @@
     .gate.refuse .knob { fill: var(--warn); }
     .pedal { flex: 1; position: relative; border-radius: var(--r); background: rgba(255, 255, 255, .05); border: 1px solid var(--edge); overflow: hidden; cursor: pointer; touch-action: none; min-width: 0; }
     .pedal .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 0%; transition: height .05s linear; }
-    .pedal.gas .fill { background: linear-gradient(0deg, #8b6bff, #42c6ff); }
-    .pedal.brk .fill { background: linear-gradient(0deg, #ff3b3b, #ff8a5c); }
+    .pedal.gas .fill { background: linear-gradient(0deg, #ff7a1a, #ffb347); }
+    .pedal.brk .fill { background: linear-gradient(0deg, #d94a00, #ff9a4d); }
     .pedal .cap {
       position: absolute; top: 0; left: 0; right: 0; height: 100%; display: flex; align-items: center; justify-content: flex-start;
       padding: clamp(8px, 1.8vmin, 14px) 2px; font: 700 clamp(9px, 1.8vmin, 13px)/1 var(--sans); letter-spacing: .16em; text-transform: uppercase;
@@ -565,10 +565,10 @@
     <header class="top glass">
       <div class="brand">
         <div class="logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#0b0d14" stroke-width="1.8" stroke-linecap="round">
             <path d="M4 15a8 8 0 1 1 16 0" />
             <path d="M12 15l4.5-5" />
-            <circle cx="12" cy="15" r="1.4" fill="#fff" />
+            <circle cx="12" cy="15" r="1.4" fill="#0b0d14" />
           </svg>
         </div>
         <div>
@@ -1345,8 +1345,8 @@
     let tBg = 0, heat = 0;
     const lerp = (a, b, t) => a + (b - a) * t;
     function hueFor(h, shift) {
-      // cold blue (210) → violet (270) → hot orange (20, via 380) as the revs climb
-      return (lerp(205, 375, h) + shift) % 360;
+      // dim amber-brown → hot orange as the revs climb
+      return (lerp(24, 14, h) + shift) % 360;
     }
     function drawBg(dt, s) {
       const W = bg.width, H = bg.height;
@@ -1363,7 +1363,7 @@
         const x = W * (0.5 + 0.42 * Math.sin(tBg * o.fx * 6 + o.ph));
         const y = H * (0.5 + 0.38 * Math.cos(tBg * o.fy * 6 + o.ph * 1.3));
         const r = Math.max(W, H) * o.r * (0.7 + 0.55 * e + 0.12 * audio.level);
-        const hue = hueFor(heat, o.band * 38 - 30);
+        const hue = hueFor(heat, o.band * 12 - 12);
         const g = bctx.createRadialGradient(x, y, 0, x, y, r);
         g.addColorStop(0, `hsla(${hue}, 90%, ${30 + 16 * e}%, ${0.13 + 0.30 * e})`);
         g.addColorStop(0.45, `hsla(${hue + 20}, 85%, 26%, ${0.05 + 0.12 * e})`);
@@ -1422,13 +1422,13 @@
       tc.strokeStyle = 'rgba(255,255,255,.07)';
       tc.beginPath(); tc.arc(cx, cy, R, A0, A0 + SPAN); tc.stroke();
       // red zone
-      tc.strokeStyle = 'rgba(255,80,60,.28)';
+      tc.strokeStyle = 'rgba(255,90,20,.28)';
       tc.beginPath(); tc.arc(cx, cy, R, ang(s.redline), A0 + SPAN); tc.stroke();
       // live sweep with glow
       const g = tc.createLinearGradient(cx - R, cy, cx + R, cy - R);
-      g.addColorStop(0, '#42c6ff'); g.addColorStop(0.55, '#8b6bff'); g.addColorStop(1, '#ff5a36');
+      g.addColorStop(0, '#ffb347'); g.addColorStop(0.55, '#ff7a1a'); g.addColorStop(1, '#ff4d00');
       tc.save();
-      tc.shadowColor = hot ? 'rgba(255,90,54,.95)' : 'rgba(139,107,255,.9)';
+      tc.shadowColor = hot ? 'rgba(255,90,0,.95)' : 'rgba(255,122,26,.9)';
       tc.shadowBlur = 18 + 30 * audio.lowS;
       tc.strokeStyle = g;
       tc.beginPath(); tc.arc(cx, cy, R, A0, ang(Math.max(needle, 1))); tc.stroke();
@@ -1442,7 +1442,7 @@
         tc.lineWidth = major ? 2 : 1;
         tc.beginPath(); tc.moveTo(cx + c * r1, cy + sn * r1); tc.lineTo(cx + c * r2, cy + sn * r2); tc.stroke();
         if (major) {
-          tc.fillStyle = red ? '#ff8a6a' : 'rgba(240,244,255,.8)';
+          tc.fillStyle = red ? '#ff9a5c' : 'rgba(240,244,255,.8)';
           tc.font = `600 ${Math.round(R * 0.085)}px "JetBrains Mono", ui-monospace, monospace`;
           tc.textAlign = 'center'; tc.textBaseline = 'middle';
           tc.fillText(k / 1000, cx + c * R * 0.66, cy + sn * R * 0.66);
@@ -1484,9 +1484,9 @@
       const hz = sim.ctx.sampleRate / analyser.fftSize;
       const f0 = 25, f1 = 12000, bw = W / N;
       const grad = sc.createLinearGradient(0, H, 0, 0);
-      grad.addColorStop(0, 'rgba(66,198,255,.9)'); grad.addColorStop(0.55, 'rgba(139,107,255,.95)'); grad.addColorStop(1, 'rgba(255,90,54,1)');
+      grad.addColorStop(0, 'rgba(255,179,71,.9)'); grad.addColorStop(0.55, 'rgba(255,122,26,.95)'); grad.addColorStop(1, 'rgba(255,90,54,1)');
       sc.fillStyle = grad;
-      sc.shadowColor = 'rgba(139,107,255,.8)'; sc.shadowBlur = 10;
+      sc.shadowColor = 'rgba(255,122,26,.8)'; sc.shadowBlur = 10;
       for (let i = 0; i < N; i++) {
         const lo = f0 * Math.pow(f1 / f0, i / N), hi = f0 * Math.pow(f1 / f0, (i + 1) / N);
         let m = 0;
@@ -1526,8 +1526,8 @@
         const h = Math.max(1, (s.mag / max) * (base - 12));
         const x = padL + i * bw, w = Math.max(2.5, bw - 4);
         const g = oc.createLinearGradient(0, base - h, 0, base);
-        if (half) { g.addColorStop(0, '#ffb347'); g.addColorStop(1, '#ff5a36'); }
-        else { g.addColorStop(0, 'rgba(200,210,235,.75)'); g.addColorStop(1, 'rgba(120,130,160,.45)'); }
+        if (half) { g.addColorStop(0, '#ffb347'); g.addColorStop(1, '#ff4d00'); }
+        else { g.addColorStop(0, 'rgba(220,208,196,.75)'); g.addColorStop(1, 'rgba(130,118,108,.45)'); }
         oc.fillStyle = g;
         oc.beginPath();
         oc.roundRect ? oc.roundRect(x, base - h, w, h, 3) : oc.rect(x, base - h, w, h);
