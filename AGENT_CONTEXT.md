@@ -611,6 +611,7 @@ sim.setThrottle(1); sim.update(dt);   // per frame
 | `update(dt)` · `start()` · `stop()` · `dispose()` | `update` is chainable |
 | `getState()` | full telemetry — see below |
 | `getEvents()` | `{lash, pop, cut, engage, bov, shiftDone}` one-frame impulses |
+| `takePops()` | `[{time, amp}]` every bang/crackle scheduled since the last call (audio clock) |
 | `EngineSim.engines()` / `EngineSim.vehicles()` | **static** UI-ready listings |
 | `EngineSim.schema()` / `EngineSim.groups()` / `EngineSim.presets()` | **static** — every adjustable parameter with range/step/unit/group, and all 16 built-ins as full presets |
 | `sim.output` · `sim.connect(node)` · `opts.destination` | route into a host graph |

@@ -1444,6 +1444,7 @@ export class TransientBank {
 
     this.stolen = 0;          // diagnostics: how many times the pool overflowed
     this.fired = 0;
+    this.pops = [];           // combustion reports scheduled since the host took them: { time, amp }
     this._next = 0;           // round-robin cursor
     this._nextPop = 0;        // next scheduled overrun crackle, audio clock
     this._prevPhase = '';
@@ -1597,6 +1598,7 @@ export class TransientBank {
 
     v.busyUntil = end;
     this.fired++;
+    if (bus === 'combustion' && this.pops.length < 64) this.pops.push({ time: t, amp: clamp(fin(amp, 0), 0, 1) });
     return idx;
   }
 

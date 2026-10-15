@@ -155,6 +155,7 @@ build a picker.
 | --- | --- |
 | `getState()` | `rpm`, `speed`, `speedKmh`, `gear`, `gearRatio`, `clutchSlip`, `load`, `rpmNorm`, `dRpm`, `boost`, `shiftPhase`, `redline`, `idle`, `gearCount`, `throttle`, `brake`, `auto`, `perspective`, `volume`, `mix`, engine/vehicle ids and labels. |
 | `getEvents()` | One-frame impulses, 0..1: `lash`, `pop`, `cut`, `engage`, `bov`, `shiftDone`. |
+| `takePops()` | Every exhaust report (bang/crackle) scheduled since the last call: `[{ time, amp }]`, audio clock. For exhaust flames. |
 | `getReduction()` | Live compressor gain reduction per band, in dB. |
 
 `getEvents()` is what you hang camera shake, particles and haptics off — `lash`

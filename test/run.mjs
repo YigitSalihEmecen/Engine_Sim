@@ -359,6 +359,12 @@ await suite('public API — what a host project actually needs', async () => {
   ok(['lash', 'pop', 'cut', 'engage', 'bov', 'shiftDone'].every(k => k in ev),
      'getEvents() exposes every one-frame impulse', Object.keys(ev).join(','));
 
+  sim.transients.trigger('bang', mk.ctx.currentTime, 0.8);
+  sim.transients.trigger('clunk', mk.ctx.currentTime, 0.8);
+  const pops = sim.takePops();
+  ok(pops.length === 1 && pops[0].amp === 0.8 && pops[0].time >= mk.ctx.currentTime && sim.takePops().length === 0,
+     'takePops() hands over each exhaust report once, clunks excluded', JSON.stringify(pops));
+
   ok(sim.setPosition(0.5) === 0.5 && sim.getState().perspective === 'interior',
      'setPosition() gives a continuous exterior↔cabin blend');
   ok(sim.update(1 / 60) === sim, 'update() is chainable');

@@ -962,6 +962,20 @@ export class EngineSim {
     };
   }
 
+  /**
+   * Every exhaust report (bang or crackle) scheduled since the last call, on
+   * the audio clock: `ctx.currentTime` reaches `time` as it is heard. Hang
+   * exhaust flames off these. Each report is returned once.
+   * @returns {{time: number, amp: number}[]}
+   */
+  takePops() {
+    const tb = this.transients;
+    if (!tb || !tb.pops.length) return [];
+    const out = tb.pops;
+    tb.pops = [];
+    return out;
+  }
+
   /** The node the whole simulator comes out of. */
   get output() { return this.safety.output; }
 
