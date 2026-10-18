@@ -825,28 +825,55 @@ export class TurboLayer {
     this.bovBP.connect(this.bovGain);
     this.bovGain.connect(this.bus);
 
-    // --- wastegate chatter --------------------------------------------------
-    // Once boost reaches the wastegate spring pressure the valve hunts, opening
-    // and closing many times a second. Owners describe it as "FftFftFft, not
-    // ShuShuShu" — a fast dry chatter, quite distinct from the BOV's single
-    // whoosh, and it happens WHILE you are on boost rather than when you lift.
-    this.wgOsc = ctx.createOscillator();
-    this.wgOsc.type = 'square';
-    this.wgOsc.frequency.value = 34;
-    this._srcs.push(this.wgOsc);
+    // --- wastegate rush ------------------------------------------------------
+    // At the boost ceiling the wastegate opens and exhaust gas bypasses the
+    // turbine. Routed back into the exhaust it is a quiet whoosh; vented to
+    // air through a SCREAMER PIPE it is a loud white-noise rush — the sound
+    // of a big-turbo car on boost. (It used to be a square-wave "fft-fft"
+    // chatter; that is forum folklore, not what a wastegate sounds like.)
     this.wgBP = keep(ctx.createBiquadFilter());
     this.wgBP.type = 'bandpass';
     this.wgBP.frequency.value = 1500;
-    this.wgBP.Q.value = 2.2;
-    this.wgAM = keep(ctx.createGain());
-    this.wgAM.gain.value = 0;
+    this.wgBP.Q.value = 0.6;
     this.wgLevel = keep(ctx.createGain());
     this.wgLevel.gain.value = 0;
     white.connect(this.wgBP);
-    this.wgBP.connect(this.wgAM);
-    this.wgAM.connect(this.wgLevel);
+    this.wgBP.connect(this.wgLevel);
     this.wgLevel.connect(this.bus);
-    keep(amDrive(ctx, this.wgOsc, 0.85, this.wgAM.gain));
+    this.wgGrain = keep(ctx.createGain());
+    this.wgGrain.gain.value = 0;
+    this.grainBP.connect(this.wgGrain);
+    this.wgGrain.connect(this.wgLevel.gain);
+
+    // --- buzz-saw -----------------------------------------------------------
+    // Near top speed the blade tips go supersonic and every blade's shock is a
+    // little different, so the wheel radiates the whole comb of SHAFT orders,
+    // not just the blade tone: a rasp under the whistle, only at full chat.
+    this.buzzOsc = ctx.createOscillator();
+    this.buzzOsc.type = 'sawtooth';
+    this.buzzOsc.frequency.value = 60;
+    this._srcs.push(this.buzzOsc);
+    this.buzzBP = keep(ctx.createBiquadFilter());
+    this.buzzBP.type = 'bandpass';
+    this.buzzBP.frequency.value = 1500;
+    this.buzzBP.Q.value = 1.2;
+    this.buzzGain = keep(ctx.createGain());
+    this.buzzGain.gain.value = 0;
+    this.buzzOsc.connect(this.buzzBP);
+    this.buzzBP.connect(this.buzzGain);
+    this.buzzGain.connect(this.bus);
+
+    // --- atmospheric BOV hiss -----------------------------------------------
+    // The "pssh" under the "chiu": a valve venting to air is a broadband jet.
+    this.bovHissHP = keep(ctx.createBiquadFilter());
+    this.bovHissHP.type = 'highpass';
+    this.bovHissHP.frequency.value = 1800;
+    this.bovHissHP.Q.value = -3.01;
+    this.bovHissGain = keep(ctx.createGain());
+    this.bovHissGain.gain.value = 0;
+    white.connect(this.bovHissHP);
+    this.bovHissHP.connect(this.bovHissGain);
+    this.bovHissGain.connect(this.bus);
 
     // --- compressor surge: the "stu-stu-stu" --------------------------------
     // One sawtooth through a pulse curve gives the burst train; both bands
@@ -876,6 +903,24 @@ export class TurboLayer {
     this.surgeLP.Q.value = -3.01;
     this.surgeBus.connect(this.surgeLP);
     this.surgeLP.connect(this.out);
+
+    // WHOOSH: broadband 4-8 kHz from a compressor running close to its surge
+    // line — high boost with little air moving through it, i.e. flooring it
+    // at low revs, and while the wheel is still spooling. Through the
+    // flutter's dry path, since the tone stage would remove it.
+    this.whooshBP = keep(ctx.createBiquadFilter());
+    this.whooshBP.type = 'bandpass';
+    this.whooshBP.frequency.value = 5000;
+    this.whooshBP.Q.value = 0.7;
+    this.whooshGain = keep(ctx.createGain());
+    this.whooshGain.gain.value = 0;
+    white.connect(this.whooshBP);
+    this.whooshBP.connect(this.whooshGain);
+    this.whooshGain.connect(this.surgeLP);
+    this.whooshGrain = keep(ctx.createGain());
+    this.whooshGrain.gain.value = 0;
+    this.grainBP.connect(this.whooshGrain);
+    this.whooshGrain.connect(this.whooshGain.gain);
     this.surgeSend = keep(ctx.createGain());
     this.surgeSend.gain.value = 0.55;
 
@@ -959,6 +1004,10 @@ export class TurboLayer {
     this.maxBoost = clamp(fin(t && t.maxBoost, 1), 0, 5);
     this.bovLevel = clamp(fin(t && t.bov, 0.5), 0, 2);
     this.surgeTrim = clamp(fin(t && t.surge, 1), 0, 3);
+    this.valve = Math.round(clamp(fin(t && t.valve, 1), 0, 2));   // 0 none, 1 atmos, 2 recirc
+    this.flutterHz = clamp(fin(t && t.flutterHz, 13), 3, 30);
+    this.screamer = fin(t && t.screamer, 0) >= 0.5;
+    this.antiLag = fin(t && t.antiLag, 0) >= 0.5;
     const redline = fin(profile && profile.redlineRpm, 7000);
     // ×0.5: the profiles' blade orders put a spooled whistle at 1.6-2.2 kHz,
     // right in the ear's most sensitive band, where a near-pure tone reads as
@@ -982,7 +1031,9 @@ export class TurboLayer {
     // Exhaust enthalpy flow ≈ mass flow (rpm) × energy per unit mass (load).
     // Exhaust mass flow is close to linear in rpm, and at low rpm there really
     // is almost nothing driving the turbine.
-    const drive = clamp(load * (0.10 + 0.90 * rpmNorm), 0, 1);
+    this._als = this.antiLag && throttle < 0.12 && rpmNorm > 0.15;
+    const drive = this._als ? 0.7 * (0.3 + 0.7 * rpmNorm)
+      : clamp(load * (0.10 + 0.90 * rpmNorm), 0, 1);
     // With the fuel cut there is no exhaust enthalpy at all, so the turbine
     // coasts on bearing drag and slows markedly faster than it does on a
     // trailing throttle. That difference is what gives each upshift its own
@@ -1076,17 +1127,29 @@ export class TurboLayer {
     setF(this.shaftOsc.frequency, clamp(whineHz / BLADES, 4, 400), now, TC, 180);
     setT(this.shaftDepth.gain, whineLvl * (0.52 - 0.28 * this.spool), now, TC);
 
-    // Wastegate chatter: only near the boost ceiling, only on throttle.
+    // Wastegate: only near the boost ceiling, only on throttle.
     const nearCeiling = clamp((this.boost - 0.62) / 0.30, 0, 1);
-    const chatter = nearCeiling * clamp(throttle, 0, 1) * (0.35 + 0.65 * rpmNorm);
-    setF(this.wgOsc.frequency, 26 + 30 * nearCeiling + 8 * Math.sin(now * 3.1), now, 0.05, 34);
-    setF(this.wgBP.frequency, 1200 + 1100 * this.spool, now, TC, 1500);
-    setT(this.wgLevel.gain, 0.34 * chatter, now, TC);
-    const rush = 0.10 * aero * (0.45 + 0.55 * flow)
-               + 0.22 * this._climb * Math.sqrt(this.spool) * (0.4 + 0.6 * flow);
+    const gate = nearCeiling * throttle * (0.35 + 0.65 * rpmNorm) * (this.screamer ? 0.55 : 0.06);
+    setF(this.wgBP.frequency, (this.screamer ? 900 : 1400) + 1300 * this.spool, now, TC, 1500);
+    setT(this.wgLevel.gain, gate, now, 0.05);
+    setT(this.wgGrain.gain, gate * 0.5, now, 0.05);
+
+    const rush = 0.10 * aero * (0.45 + 0.55 * flow);
     setT(this.hissGain.gain, rush, now, TC);
     setT(this.hissGrain.gain, rush * 0.65, now, 0.05);
     setF(this.hissBP.frequency, clamp(whineHz * 2.2, 900, 4200), now, TC, 2000);
+
+    // Close to the surge line: boost up, airflow (revs) low, pedal down.
+    const nearSurge = clamp((this.boost - 0.12) / 0.45, 0, 1) * throttle * (1 - 0.75 * rpmNorm);
+    const whoosh = 0.18 * (nearSurge + 0.6 * this._climb * Math.sqrt(this.spool));
+    setT(this.whooshGain.gain, whoosh, now, 0.04);
+    setT(this.whooshGrain.gain, whoosh * 0.6, now, 0.05);
+    setF(this.whooshBP.frequency, clamp(4000 + 3500 * this.spool, 3000, 8000), now, TC, 5000);
+
+    const buzz = 0.05 * clamp((this.spool - 0.78) / 0.2, 0, 1) * flow;
+    setF(this.buzzOsc.frequency, clamp(whineHz / BLADES, 20, 400), now, TC, 60);
+    setF(this.buzzBP.frequency, clamp(whineHz * 1.5, 400, 6000), now, TC, 1500);
+    setT(this.buzzGain.gain, buzz, now, TC);
 
     // --- blow-off valve -----------------------------------------------------
     const bov = clamp(fin(p.evBov, 0), 0, 1);
@@ -1131,7 +1194,9 @@ export class TurboLayer {
     // The rev limiter's fuel cut closes the flow against a spooled wheel too,
     // so a boosted engine bouncing off the limiter flutters.
     const shiftCut = shifting && !this._prevShifting;
-    const allow = this.flutterMode === false ? 0 : 1;
+    // Anti-lag holds a bypass open whenever the throttle closes, so nothing
+    // stalls — on a lift or on a shift.
+    const allow = this.flutterMode === false || this.antiLag ? 0 : 1;
 
     // Pressure available to reverse through the wheel, taken from SHAFT SPEED
     // rather than from boost.
@@ -1167,12 +1232,21 @@ export class TurboLayer {
     // valve from the smallest); it just no longer silences anything.
     // 0.55/0.30 → 0.5/0.55: the trade survives (> 3 dB between the biggest
     // valve and the smallest, test/run.mjs), but no valve silences the flutter.
-    const relief = clamp(1 - 0.5 * this.bovLevel, 0.55, 1);
+    // With a VALVE TYPE now: no valve, nothing relieves the plenum and it
+    // flutters hard; a correctly sized valve prevents most of it (research:
+    // flutter is what you get with no valve, or one too small or too slow).
+    const relief = this.valve === 0 ? 1 : clamp(1 - 0.9 * this.bovLevel, 0.15, 1);
     const stall = head * relief * allow;
 
-    if (stall > 0 && (justClosed || dropped || shiftCut)) {
+    // A shift only stalls the compressor if the THROTTLE closes. A manual
+    // change (or an automated manual) lifts; a dual-clutch or automatic with
+    // the pedal held mostly cuts ignition and keeps the plate open. A driver
+    // lift during any shift is caught by justClosed/dropped regardless.
+    const shiftArm = p.gearbox === 'dct' ? 0.35 : p.gearbox === 'auto' ? 0.15 : 1;
+    const arm = (justClosed || dropped) ? stall : shiftCut ? stall * shiftArm : 0;
+    if (arm > 0) {
       // A snap-shut from full boost stalls harder than an easing-off.
-      this._surge = Math.max(this._surge, stall);
+      this._surge = Math.max(this._surge, arm);
     }
     // While the throttle stays shut and boost is still up, surge sustains
     // rather than decaying away — a long lift keeps chattering.
@@ -1208,7 +1282,10 @@ export class TurboLayer {
     // Tied harder to the engine: higher revs push more air through the
     // compressor, so the flutter runs faster and higher as the revs fall
     // from higher up.
-    const rate = 9 + 13 * s + 10 * rpmNorm;
+    // A fixed rate per car — the Helmholtz frequency of its intake pipework,
+    // measured at 5-21 Hz for mild surge — that SLOWS as the trapped pressure
+    // bleeds off: "stu-stu-stu…tu…tu". It used to speed up with s and rpm.
+    const rate = this.flutterHz * (0.7 + 0.45 * s);
     setF(this.surgeOsc.frequency, rate, now, 0.03, 16);
 
     // Each reversal drags gas back across the wheel; the harder the stall, the
@@ -1266,11 +1343,15 @@ export class TurboLayer {
    * so its broadband peak drops roughly an octave and a half over the event.
    */
   _fireBov(now, strength) {
+    if (this.valve === 0) return;
+    const recirc = this.valve === 2;
     const stored = clamp(this.boost, 0, 1);
     // Narrowing the band to Q 7 costs about 8 dB of the noise that gets through
     // it, so the level is compensated to keep the chirp as loud as the old
     // broadband dump.
-    const amp = clamp(this.bovLevel * 1.35 * strength * (0.15 + 0.85 * stored), 0.0005, 2.5);
+    // A recirculating valve dumps back into the intake: a quiet, dull whoosh.
+    const amp = clamp(this.bovLevel * 1.35 * strength * (0.15 + 0.85 * stored)
+                      * (recirc ? 0.3 : 1), 0.0005, 2.5);
     const dur = clamp(0.11 + 0.26 * stored, 0.05, 0.5);
     const t = fin(now, 0) + LOOKAHEAD;
 
@@ -1279,13 +1360,22 @@ export class TurboLayer {
     // which is what makes it read as "chiu" rather than a filter sweep.
     const f = this.bovBP.frequency;
     f.cancelScheduledValues(t);
-    f.setValueAtTime(hzOf(2600 + 1800 * stored, 2800), t);
-    f.exponentialRampToValueAtTime(hzOf(520 + 180 * stored, 620), t + dur * 0.8);
+    f.setValueAtTime(hzOf((recirc ? 1300 : 2600) + 1800 * stored, 2800), t);
+    f.exponentialRampToValueAtTime(hzOf((recirc ? 300 : 520) + 180 * stored, 620), t + dur * 0.8);
 
     const q = this.bovBP.Q;
     q.cancelScheduledValues(t);
-    q.setValueAtTime(4.5, t);
-    q.linearRampToValueAtTime(11, t + dur * 0.6);
+    q.setValueAtTime(recirc ? 1.5 : 4.5, t);
+    q.linearRampToValueAtTime(recirc ? 3 : 11, t + dur * 0.6);
+
+    const h = this.bovHissGain.gain;
+    h.cancelScheduledValues(t);
+    if (!recirc) {
+      h.setValueAtTime(0.0004, t);
+      h.linearRampToValueAtTime(amp * 0.45, t + 0.008);
+      h.exponentialRampToValueAtTime(0.0004, t + dur * 0.9);
+      h.setValueAtTime(0, t + dur);
+    }
 
     const g = this.bovGain.gain;
     g.cancelScheduledValues(t);

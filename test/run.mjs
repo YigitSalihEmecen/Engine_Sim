@@ -569,21 +569,26 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
   const TURBOS = ['i3', 'boxer4', 'i6', 'i6diesel', 'v6', 'v8cross', 'v12'];
 
   /** Drive one engine through gear pulls with periodic lifts. */
-  const run = (engine, { lift = true, shift = true, throttle = 1, bov } = {}) => {
+  const run = (engine, { lift = true, shift = true, throttle = 1, bov, valve, antiLag } = {}) => {
     const mk = createMockContext();
     installGlobals(mk.ctx);
     const sim = new EngineSim(mk.ctx, { engine, vehicle: 'sports', turbo: true });
     if (bov != null) sim.setParam('turbo.bov', bov);
+    if (valve != null) sim.setParam('turbo.valve', valve);
+    if (antiLag != null) sim.setParam('turbo.antiLag', antiLag);
     sim.start();
     const T = sim.turbo;
     const r = { peakSurge: 0, peakBody: 0, surgeFrames: 0, bov: 0,
-                whineMin: Infinity, whineMax: 0, spoolMin: Infinity, spoolMax: 0 };
+                whineMin: Infinity, whineMax: 0, spoolMin: Infinity, spoolMax: 0, pops: 0, shelf: 0, liftSpool: 1 };
     for (let i = 0; i < 60 * 10; i++) {
       const closed = lift && (i % 180 >= 150);
       sim.setThrottle(closed ? 0 : throttle);
       mk.advance(1 / 60);
       sim.update(1 / 60);
       if (sim._lastParams.evBov > 0) r.bov++;
+      if (sim._lastParams.evPop > 0) r.pops++;
+      r.shelf = Math.min(r.shelf, sim.turbineShelf.gain.value);
+      if (closed && i > 180) r.liftSpool = Math.min(r.liftSpool, T.spool);
       r.peakSurge = Math.max(r.peakSurge, T._surge);
       const body = T.surgeBodyLvl.gain.value;
       r.peakBody = Math.max(r.peakBody, body);
@@ -643,8 +648,21 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
   const dB = 20 * Math.log10(small.peakBody / Math.max(1e-6, big.peakBody));
   ok(dB > 3, 'a large blow-off valve still trades flutter away',
      `bov 0.25 ${small.peakBody.toFixed(3)} vs bov 0.80 ${big.peakBody.toFixed(3)} = ${dB.toFixed(1)} dB`);
-  ok(big.peakSurge > 0.3, '...but never silences it — every turbo flutters',
-     `bov 0.80 peak ${big.peakSurge.toFixed(2)}`);
+  // Valve TYPE: no valve flutters hardest and never dumps; recirculating
+  // still dumps (quietly) — the event is there for the host either way.
+  const none = run('i6', { valve: 0 }), recirc = run('i6', { valve: 2 });
+  ok(none.peakSurge > 0.6 && none.bov === 0, 'no blow-off valve: full flutter, no dump',
+     `peak ${none.peakSurge.toFixed(2)}, ${none.bov} BOV events`);
+  ok(recirc.bov > 0 && none.peakSurge > big.peakSurge * 2, 'a big valve prevents most of the flutter',
+     `none ${none.peakSurge.toFixed(2)} vs bov 0.80 ${big.peakSurge.toFixed(2)}`);
+  // Anti-lag: lifts keep the shaft lit and bang; nothing stalls.
+  const als = run('i6', { antiLag: 1 });
+  ok(als.pops > 5 && als.peakSurge < 0.05 && als.liftSpool > 0.3 && als.liftSpool > small.liftSpool + 0.1,
+     'anti-lag holds spool, bangs, no flutter',
+     `${als.pops} pop frames, surge ${als.peakSurge.toFixed(2)}, spool on lifts ${als.liftSpool.toFixed(2)} vs ${small.liftSpool.toFixed(2)}`);
+  // A turbo changes the engine's own voice: the turbine muffles the top.
+  ok(small.shelf < -4, 'the turbine muffles the exhaust when the turbo is on',
+     `shelf ${small.shelf.toFixed(1)} dB`);
 
   // The layer's own tone stage. The turbo is the only voice that lives in the
   // 2-6 kHz band the whole synth is otherwise measured for staying out of (see

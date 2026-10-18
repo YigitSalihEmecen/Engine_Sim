@@ -89,7 +89,8 @@ export const DEFAULT_SOUND = Object.freeze({
    * reverse through the compressor. `surge` is a taste trim on the flutter.
    */
   turbo: Object.freeze({
-    enabled: 0, inertia: 0.42, maxBoost: 1.1, whineOrder: 52, bov: 0.40, surge: 1.0,
+    enabled: 0, inertia: 0.42, maxBoost: 1.1, whineOrder: 52,
+    valve: 1, bov: 0.40, surge: 1.0, flutterHz: 13, screamer: 0, antiLag: 0,
   }),
   /** 0 = standing outside the car, 1 = sitting in it. Continuous. */
   position: 0,
@@ -109,7 +110,7 @@ export const DEFAULT_SOUND = Object.freeze({
  *   unit   how to read the number out. A real unit ('m', 'Hz', 'rpm', 'dB') is
  *          a suffix; '%' means the value is a 0..1-ish proportion and should be
  *          shown x100; '' means a plain number formatted by `step`; 'bool' is a
- *          0/1 switch.
+ *          0/1 switch; 'enum' is an index into the row's `options`.
  *   group  which panel it belongs to
  *   rebuild  true if changing it needs the voice graph rebuilt (wavetables,
  *            pipe lengths). Continuous params write to AudioParams instead.
@@ -154,8 +155,12 @@ export const PRESET_SCHEMA = Object.freeze([
   { path: 'turbo.inertia', label: 'Turbo inertia', min: 0.05, max: 2, step: 0.01, unit: 's', group: 'turbo', rebuild: false, needs: 'turbo' },
   { path: 'turbo.maxBoost', label: 'Max boost', min: 0.2, max: 3, step: 0.05, unit: 'bar', group: 'turbo', rebuild: false, needs: 'turbo' },
   { path: 'turbo.whineOrder', label: 'Blade order', min: 10, max: 120, step: 1, unit: '', group: 'turbo', rebuild: false, needs: 'turbo' },
-  { path: 'turbo.bov', label: 'Blow-off capacity', min: 0, max: 1, step: 0.01, unit: '%', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.valve', label: 'Blow-off valve', min: 0, max: 2, step: 1, unit: 'enum', options: ['None', 'Atmos', 'Recirc'], group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.bov', label: 'Valve size', min: 0, max: 1, step: 0.01, unit: '%', group: 'turbo', rebuild: false, needs: 'turbo' },
   { path: 'turbo.surge', label: 'Flutter trim', min: 0, max: 2, step: 0.01, unit: '%', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.flutterHz', label: 'Flutter rate', min: 5, max: 25, step: 0.5, unit: 'Hz', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.screamer', label: 'Screamer pipe', min: 0, max: 1, step: 1, unit: 'bool', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.antiLag', label: 'Anti-lag', min: 0, max: 1, step: 1, unit: 'bool', group: 'turbo', rebuild: false, needs: 'turbo' },
 
   // --- mix ----------------------------------------------------------------
   { path: 'mix.exhaust', label: 'Exhaust', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
@@ -192,7 +197,7 @@ export const PRESET_GROUPS = Object.freeze([
   { id: 'pulse', label: 'Combustion pulse', note: 'The shape of one cylinder blowing down. Attack is the crack, decay is the tail, hardening is how much both sharpen under load.' },
   { id: 'exhaust', label: 'Exhaust', note: 'Waveguide geometry in metres. Header and collector lengths set the resonances; reflection and damping set how many survive.' },
   { id: 'intake', label: 'Intake', note: 'Airbox Helmholtz resonance. It does not track rpm — what tracks rpm is how hard it is excited.' },
-  { id: 'turbo', label: 'Turbo', note: 'Bolts onto any engine. Inertia is lag. Blow-off capacity trades the "chiu" against the "stu-stu-stu": a big valve empties the plenum so less can reverse through the wheel.' },
+  { id: 'turbo', label: 'Turbo', note: 'Bolts onto any engine. Inertia is lag. No blow-off valve = full "stu-stu-stu"; an atmospheric valve goes "pssh", a recirculating one is quiet — the bigger the valve, the less is left to flutter. A screamer pipe vents the wastegate to air; anti-lag keeps the turbo spooled off-throttle, with bangs.' },
   { id: 'mix', label: 'Voice mix', note: 'Balance between the voices.' },
   { id: 'tone', label: 'Tone', note: 'The fixed-frequency part of the response, plus how hard the compressor works.' },
   { id: 'fx', label: 'Space', note: 'Reverb, width, where the listener is, and output level.' },
@@ -342,7 +347,7 @@ export function normalisePreset(input) {
     if (!isFinite(Number(v))) v = getPath(defaults, row.path);
     if (!isFinite(Number(v))) v = row.min;
     const n = clamp(Number(v), row.min, row.max);
-    setPath(out, row.path, row.unit === 'bool' ? Math.round(n) : n);
+    setPath(out, row.path, row.unit === 'bool' || row.unit === 'enum' ? Math.round(n) : n);
   }
 
   // The muffler is an array in the profile but addressed as `muffler.0..2`, so

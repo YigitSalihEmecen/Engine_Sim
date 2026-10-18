@@ -328,10 +328,24 @@ export class EngineSim {
     this.exhaustTrem = ctx.createGain();
     this.exhaustTrem.gain.value = 1;
     this.exhaust.output.connect(this.exhaustTrem);
-    this.exhaustTrem.connect(this.busses.exhaust);
+    // A turbine in the exhaust evens out the pulses and works as a muffler:
+    // a turbo car's note is quieter and flatter up top. `turbineShelf` is
+    // that, driven per frame and parked at 0 dB with the turbo off, so the
+    // toggle needs no rebuild. Same for the intake: the extra plumbing
+    // quietens and smooths the induction.
+    if (this.turbineShelf) this.turbineShelf.disconnect();
+    this.turbineShelf = ctx.createBiquadFilter();
+    this.turbineShelf.type = 'highshelf';
+    this.turbineShelf.frequency.value = 700;
+    this.turbineShelf.gain.value = 0;
+    this.exhaustTrem.connect(this.turbineShelf);
+    this.turbineShelf.connect(this.busses.exhaust);
 
     this.intake = new IntakeResonator(ctx, p);
-    this.intake.output.connect(this.busses.intake);
+    if (this.intakeTrim) this.intakeTrim.disconnect();
+    this.intakeTrim = ctx.createGain();
+    this.intake.output.connect(this.intakeTrim);
+    this.intakeTrim.connect(this.busses.intake);
 
     this.transmission = new TransmissionLayer(ctx, p, this.geared);
     this.transmission.output.connect(this.busses.transmission);
@@ -724,7 +738,7 @@ export class EngineSim {
     const row = schemaFor(path);
     if (!row) return null;
     let v = clamp(Number(value), row.min, row.max);
-    if (row.unit === 'bool') v = Math.round(v);
+    if (row.unit === 'bool' || row.unit === 'enum') v = Math.round(v);
     if (!isFinite(v)) return null;
 
     // Rebuild rows go the long way round: wavetables and waveguide delay lines
@@ -1141,6 +1155,11 @@ export class EngineSim {
       pair.soft.gain.gain.setTargetAtTime(gSoft, now, tc);
       pair.hard.gain.gain.setTargetAtTime(gHard, now, tc);
     }
+
+    // Turbine muffling: deeper as more gas goes through the turbine.
+    const turb = this.turbo ? 0.55 + 0.45 * clamp(this.turbo.spool, 0, 1) : 0;
+    this.turbineShelf.gain.setTargetAtTime(-7 * turb, now, 0.12);
+    this.intakeTrim.gain.setTargetAtTime(1 - 0.4 * turb, now, 0.12);
 
     for (const m of this._modules()) m.update(p);
   }

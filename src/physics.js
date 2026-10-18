@@ -1211,7 +1211,17 @@ export class Drivetrain {
     // Exhaust energy: needs both revs and load. Below ~1200 rpm there is not
     // enough mass flow to spin anything.
     const spoolRpm = clamp((rpm - 1200) / (0.55 * this.engine.redlineRpm - 1200), 0, 1);
-    const target = clamp(thr, 0, 1) * spoolRpm;
+    // Anti-lag: off throttle, a bypass keeps air flowing and fuel burns in
+    // the manifold, so the turbine stays lit — boost held, bangs out the back.
+    const als = t.antiLag >= 0.5 && thr < 0.12 && rpm > 0.3 * this.engine.redlineRpm;
+    const target = als ? 0.7 * spoolRpm : clamp(thr, 0, 1) * spoolRpm;
+    if (als) {
+      this._alsT = (this._alsT || 0) - h;
+      if (this._alsT <= 0) {
+        this._alsT = 0.06 + 0.16 * Math.random();
+        this.fireEvent('pop', 0.35 + 0.45 * Math.random());
+      }
+    }
     // Time constant from turbo inertia: a small i3 turbo lags ~0.55 s, a big
     // straight-six one ~0.72 s. Spool-up is slower than blow-down.
     const tau = this.boostDump > 0 ? 0.05
@@ -1240,8 +1250,10 @@ export class Drivetrain {
     // that is where the dump-valve chirp in a DCT upshift comes from.
     // Not on a limiter cut: that zeroes the effective throttle every 60 ms
     // with the plate still open, and fired the valve on every bounce.
+    // No valve fitted, or anti-lag holding the bypass open: nothing to dump.
     if (thr > 0.45) this.bovArm = 1;
-    else if (this.bovArm > 0 && thr < 0.12 && this.boost > 0.18 && !this.limiterActive) {
+    else if (this.bovArm > 0 && thr < 0.12 && this.boost > 0.18 && !this.limiterActive
+             && t.valve >= 0.5 && !als) {
       this.bovArm = 0;
       this.boostDump = 0.12;
       this.fireEvent('bov', clamp(this.boost * (0.4 + 0.6 * t.bov), 0.1, 1));
@@ -1306,6 +1318,7 @@ export class Drivetrain {
 
     p.boost = this.boost;
     p.shifting = this.shifting;
+    p.gearbox = this.vehicle.gearbox;
     p.shiftPhase = this.shiftPhase;
 
     // One-frame impulses: publish then clear.

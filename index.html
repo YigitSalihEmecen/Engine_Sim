@@ -910,6 +910,20 @@
         controls.set(row.path, { input: btn, out: btn, row, el, bool: true });
         return;
       }
+      if (row.unit === 'enum') {
+        el.innerHTML = '<span class="lbl"></span><div class="seg" role="group"></div>';
+        el.querySelector('.lbl').textContent = row.label;
+        const seg = el.querySelector('.seg');
+        row.options.forEach((name, i) => {
+          const b = document.createElement('button');
+          b.textContent = name;
+          b.onclick = () => { sim.setParam(row.path, i); syncControls(); $('pJSON').value = sim.exportPreset(); };
+          seg.appendChild(b);
+        });
+        parent.appendChild(el);
+        controls.set(row.path, { input: seg, out: seg, row, el, choice: true });
+        return;
+      }
       el.innerHTML = '<span class="lbl"></span><span class="val"></span>' +
         `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}" aria-label="${row.label}">`;
       const lbl = el.querySelector('.lbl');
@@ -1019,6 +1033,7 @@
         const v = sim.getParam(path);
         if (v == null) continue;
         if (c.bool) { c.input.classList.toggle('on', v >= 0.5); c.input.textContent = v >= 0.5 ? 'On' : 'Off'; continue; }
+        if (c.choice) { [...c.input.children].forEach((b, i) => b.classList.toggle('on', i === Math.round(v))); continue; }
         c.input.value = v;
         if (!c.eq) paintRange(c.input);
         c.out.textContent = c.eq ? v.toFixed(1).replace(/\.0$/, '') : fmtValue(c.row, v);
