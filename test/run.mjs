@@ -723,7 +723,8 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
       prev = T._surge;
     }
     ok(armed > 0.15, 'an upshift with the pedal held arms the flutter', `surge ${armed.toFixed(2)}`);
-    ok(worst > 0.8 && frames >= 8, 'the flutter fades out after the shift instead of cutting',
+    // > 0.7: a fade (the old cut was 0.23 per frame), now with a quicker decay.
+    ok(worst > 0.7 && frames >= 8, 'the flutter fades out after the shift instead of cutting',
        `worst frame-to-frame ${worst.toFixed(2)}, audible for ${frames} frames`);
   }
 
@@ -757,6 +758,11 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
        'each lift flutters differently, and slower from lower revs',
        rates.map(r => r.toFixed(1)).join(' / ') + ' Hz');
     ok(hiFull > 9000, 'a high whistle climbs with the shaft', `${hiFull.toFixed(0)} Hz spooled`);
+    p.rpmNorm = 0.9; p.rpm = 6000; p.load = 1; p.throttle = 1; step(240);
+    p.throttle = 0; p.load = 0;
+    let gone = 0;
+    for (let i = 0; i < 90 && !gone; i++) { step(1); if (i > 3 && T._surge < 0.1) gone = (i + 1) / 60; }
+    ok(gone > 0 && gone < 0.65, 'the flutter is over quickly after a lift', `below 0.1 after ${gone.toFixed(2)} s`);
     p.rpmNorm = 0.9; p.rpm = 6000; p.load = 1; p.throttle = 1; step(240);
     p.throttle = 0; p.load = 0; step(6);
     ok(T.hiSurgeLvl.gain.value > 3 * T.hiGain.gain.value, 'the high whistle rides the flutter, prominently',

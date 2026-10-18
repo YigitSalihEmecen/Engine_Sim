@@ -1335,7 +1335,8 @@ export class TurboLayer {
         const r = () => this._rnd();
         this._liftRate = this.flutterHz * (0.7 + 0.45 * rpmNorm + 0.35 * this.boost) * (0.85 + 0.3 * r());
         this._liftPitch = (0.85 + 0.25 * rpmNorm) * (0.92 + 0.16 * r());
-        this._liftTau = 0.18 + 0.16 * r() + 0.08 * this.boost;
+        // 0.18-0.42 → 0.10-0.24 s decay: gone in well under a second.
+        this._liftTau = 0.10 + 0.10 * r() + 0.04 * this.boost;
       }
       // A snap-shut from full boost stalls harder than an easing-off.
       this._surge = Math.max(this._surge, arm);
@@ -1344,7 +1345,8 @@ export class TurboLayer {
     // rather than decaying away — a long lift keeps chattering.
     // Sustain only for the first moments of a lift: the plenum empties in
     // well under a second, and holding it longer read as lingering.
-    if (closed && stall > 0.06 && this._closedT < 0.35) {
+    // 0.35 → 0.15 s: held longer, the flutter lingered after the lift.
+    if (closed && stall > 0.06 && this._closedT < 0.15) {
       this._surge = Math.max(this._surge, stall * 0.8);
     }
     // Reopening ends it — but only an actual reopening (the pedal coming back
