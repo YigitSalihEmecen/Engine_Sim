@@ -980,6 +980,23 @@ export class TurboLayer {
     this.surgeChirp = keep(ctx.createGain());
     this.surgeChirp.gain.value = 0;
     this.surgeShaper.connect(this.surgeChirp);
+
+    // The high whistle IN the flutter. Each stall chops the flow through a
+    // wheel still spinning at 100+ krpm, so every burst carries a bright
+    // "tsi" of the whistle with it, bending up as the flow reverses. Same
+    // burst envelope as the "tu", so they land together.
+    this.hiSurgeAM = keep(ctx.createGain());
+    this.hiSurgeAM.gain.value = 0;
+    this.hiSurgeLvl = keep(ctx.createGain());
+    this.hiSurgeLvl.gain.value = 0;
+    this.hiOsc.connect(this.hiSurgeAM);
+    this.hiSurgeAM.connect(this.hiSurgeLvl);
+    this.hiSurgeLvl.connect(this.out);
+    this.surgeShaper.connect(this.hiSurgeAM.gain);
+    this.hiChirp = keep(ctx.createGain());
+    this.hiChirp.gain.value = 0;
+    this.surgeShaper.connect(this.hiChirp);
+    this.hiChirp.connect(this.hiOsc.frequency);
     this.surgeChirp.connect(this.surgeBody.frequency);
 
     // Edge band — the "st". Deliberately quiet: this is the band that would
@@ -1370,6 +1387,9 @@ export class TurboLayer {
     // 0.7·s → 0.25·s²: the edge was the click. Only a hard stall gets a
     // little of it now, and it is wide, so it reads as a hiss, not a tick.
     setT(this.surgeEdgeLvl.gain, 0.25 * amp * s * s * engineMix, now, 0.03);
+    // Prominent: several times the steady whistle, riding every burst.
+    setT(this.hiSurgeLvl.gain, 0.09 * amp * s * engineMix, now, 0.03);
+    setT(this.hiChirp.gain, 1400 * s, now, 0.04);
   }
 
   /** Fade out and stop — for taking the turbo off a running engine. */

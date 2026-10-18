@@ -757,6 +757,10 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
        'each lift flutters differently, and slower from lower revs',
        rates.map(r => r.toFixed(1)).join(' / ') + ' Hz');
     ok(hiFull > 9000, 'a high whistle climbs with the shaft', `${hiFull.toFixed(0)} Hz spooled`);
+    p.rpmNorm = 0.9; p.rpm = 6000; p.load = 1; p.throttle = 1; step(240);
+    p.throttle = 0; p.load = 0; step(6);
+    ok(T.hiSurgeLvl.gain.value > 3 * T.hiGain.gain.value, 'the high whistle rides the flutter, prominently',
+       `in flutter ${T.hiSurgeLvl.gain.value.toFixed(3)} vs steady ${T.hiGain.gain.value.toFixed(3)}`);
   }
 
   // Boost comes in above 3500 rpm, not before.
