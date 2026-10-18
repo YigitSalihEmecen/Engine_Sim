@@ -711,9 +711,29 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
     const mk = createMockContext();
     installGlobals(mk.ctx);
     const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1 } });
-    ok(T.surgeBody.frequency.value >= 1000 && T.surgeEdge.frequency.value >= 2800,
+    ok(T.surgeBody.frequency.value >= 2400 && T.surgeEdge.frequency.value >= 4500,
        'the flutter sits high enough to read as air',
        `body ${T.surgeBody.frequency.value} Hz, edge ${T.surgeEdge.frequency.value} Hz`);
+  }
+
+  // THE LIMITER IS NOT A LIFT. Fuel cut with the plate open: no flutter, no
+  // blow-off valve, however long the car sits on it.
+  {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const sim = new EngineSim(mk.ctx, { engine: 'i6', vehicle: 'sports', turbo: true });
+    await sim.start();
+    sim.setGear(0);
+    let surge = 0, bov = 0, onLimiter = 0;
+    for (let i = 0; i < 60 * 5; i++) {
+      sim.setThrottle(1); mk.advance(1 / 60); sim.update(1 / 60);
+      if (i < 120) continue;
+      if (sim.physics.limiterActive) onLimiter++;
+      surge = Math.max(surge, sim.turbo._surge);
+      if (sim._lastParams.evBov > 0) bov++;
+    }
+    ok(onLimiter > 30 && surge < 0.02 && bov === 0, 'sitting on the rev limiter neither flutters nor dumps',
+       `limiter ${onLimiter} frames, surge ${surge.toFixed(3)}, ${bov} BOV events`);
   }
 
   // THE TOGGLE. Any engine, while running, without rebuilding the engine note,

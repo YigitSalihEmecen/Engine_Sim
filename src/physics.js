@@ -1238,8 +1238,10 @@ export class Drivetrain {
     // Blow-off valve: throttle slams shut with the compressor still spinning.
     // Driven by the EFFECTIVE throttle, so a shift torque-cut triggers it too —
     // that is where the dump-valve chirp in a DCT upshift comes from.
+    // Not on a limiter cut: that zeroes the effective throttle every 60 ms
+    // with the plate still open, and fired the valve on every bounce.
     if (thr > 0.45) this.bovArm = 1;
-    else if (this.bovArm > 0 && thr < 0.12 && this.boost > 0.18) {
+    else if (this.bovArm > 0 && thr < 0.12 && this.boost > 0.18 && !this.limiterActive) {
       this.bovArm = 0;
       this.boostDump = 0.12;
       this.fireEvent('bov', clamp(this.boost * (0.4 + 0.6 * t.bov), 0.1, 1));

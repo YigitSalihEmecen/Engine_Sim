@@ -863,13 +863,19 @@ export class TurboLayer {
     this.surgeShaper.oversample = '2x';
     this.surgeOsc.connect(this.surgeShaper);
 
-    // The flutter goes back through the layer's tone stage (the dry path),
-    // and `surgeSend` carries part of it into the exhaust waveguides, so it
-    // takes on the same pipe resonances, muffler and rasp as the engine. Dry
-    // and straight to `out` it sat on top of the engine like an overlay.
+    // Dry path: its own gentle lowpass, not the layer's tone stage, whose
+    // -5.5 dB shelf above 2.6 kHz would eat a flutter that lives at 2.5-4 kHz.
+    // `surgeSend` carries part of it into the exhaust waveguides, so it takes
+    // on the same pipe resonances, muffler and rasp as the engine — that is
+    // the blend; dry and alone it sat on top of the engine like an overlay.
     this.surgeBus = keep(ctx.createGain());
     this.surgeBus.gain.value = 0.7;
-    this.surgeBus.connect(this.bus);
+    this.surgeLP = keep(ctx.createBiquadFilter());
+    this.surgeLP.type = 'lowpass';
+    this.surgeLP.frequency.value = 6500;
+    this.surgeLP.Q.value = -3.01;
+    this.surgeBus.connect(this.surgeLP);
+    this.surgeLP.connect(this.out);
     this.surgeSend = keep(ctx.createGain());
     this.surgeSend.gain.value = 0.55;
 
@@ -883,7 +889,7 @@ export class TurboLayer {
     // Body band — the "tu".
     this.surgeBody = keep(ctx.createBiquadFilter());
     this.surgeBody.type = 'bandpass';
-    this.surgeBody.frequency.value = 1600;
+    this.surgeBody.frequency.value = 3000;
     // Wide: a narrow band reads as a pitched chuff, a wide one as air.
     this.surgeBody.Q.value = 1.1;
     this.surgeBodyAM = keep(ctx.createGain());
@@ -911,7 +917,7 @@ export class TurboLayer {
     // make the flutter harsh if it were level-matched to the body.
     this.surgeEdge = keep(ctx.createBiquadFilter());
     this.surgeEdge.type = 'bandpass';
-    this.surgeEdge.frequency.value = 3400;
+    this.surgeEdge.frequency.value = 5200;
     this.surgeEdge.Q.value = 0.8;
     this.surgeEdgeAM = keep(ctx.createGain());
     this.surgeEdgeAM.gain.value = 0;
@@ -1103,6 +1109,7 @@ export class TurboLayer {
    * boosted car flutters on upshifts as well as on lift-off.
    */
   _stepSurge(now, dt, throttle, rpmNorm, shifting, p) {
+    const BODY = 6.5;   // 5.6 → 6.5: makes up the dynamics' high band at 2.4-3.8 kHz
     // The plenum drains as the surge cycles vent it, so the stall weakens even
     // if the throttle stays shut. ~0.55 s to fall to a third.
     // 0.42 → 0.65 → 0.26: long enough for a few clear "stu"s, short enough
@@ -1123,7 +1130,6 @@ export class TurboLayer {
     const dropped = (this._prevThrottle - throttle) > 0.2 && throttle < 0.5;
     // The rev limiter's fuel cut closes the flow against a spooled wheel too,
     // so a boosted engine bouncing off the limiter flutters.
-    const limiter = !!p.limiter;
     const shiftCut = shifting && !this._prevShifting;
     const allow = this.flutterMode === false ? 0 : 1;
 
@@ -1175,9 +1181,6 @@ export class TurboLayer {
     if (closed && stall > 0.06 && this._closedT < 0.35) {
       this._surge = Math.max(this._surge, stall * 0.8);
     }
-    if (limiter && stall > 0.06) {
-      this._surge = Math.max(this._surge, stall * 0.7);
-    }
     // Reopening ends it — but only an actual reopening (the pedal coming back
     // UP, or past half). A partial lift held at 0.3 is still a lift, and lets
     // the flutter play out over its own short decay.
@@ -1187,7 +1190,11 @@ export class TurboLayer {
     // an automatic upshift finished with the pedal still down. ~110 ms lets
     // the last two or three bursts tail off.
     const reopening = throttle > 0.5 || throttle > this._prevThrottle + 0.05;
-    if (!closed && !shifting && !limiter && reopening) {
+    // The rev limiter is NOT a closure: it cuts fuel with the throttle plate
+    // wide open, so air keeps flowing through the compressor and nothing
+    // stalls. It used to arm the flutter on every bounce, so a car sitting on
+    // the limiter went "stu-stu-stu" for as long as it was held there.
+    if (!closed && !shifting && reopening) {
       this._surge *= Math.exp(-dt / 0.11);
     }
 
@@ -1213,10 +1220,12 @@ export class TurboLayer {
     // 760-1660 → 1300-2200 Hz: down there it read as a low chuff that
     // sounded like something other than a turbo. Not higher: above ~2 kHz the
     // dynamics' fast high band (fx.js) holds it down and it loses its level.
+    // → 2.4-3.8 kHz at the user's ask: a turbo flutter is a high, airy
+    // sound. The level is raised to make up for the dynamics' high band.
     // The burst's chirp rides on top (up to +600 Hz at the stall).
-    setF(this.surgeBody.frequency, 1050 + 500 * s + 600 * rpmNorm, now, 0.04, 1600);
-    setF(this.surgeEdge.frequency, 2800 + 600 * s + 800 * rpmNorm, now, 0.04, 3400);
-    setT(this.surgeChirp.gain, 300 * s, now, 0.04);
+    setF(this.surgeBody.frequency, 2400 + 700 * s + 700 * rpmNorm, now, 0.04, 3000);
+    setF(this.surgeEdge.frequency, 4600 + 600 * s + 800 * rpmNorm, now, 0.04, 5200);
+    setT(this.surgeChirp.gain, 600 * s, now, 0.04);
     setT(this.surgeJitter.gain, 18 * s, now, 0.04);
     // On the overrun the engine is pumping air, not burning, so the flutter
     // has room; under load the combustion covers it. Level follows revs too.
@@ -1229,7 +1238,7 @@ export class TurboLayer {
     // The flutter is the turbo's main event: test/turbo.mjs puts it 9-20 dB
     // under the WHOLE mix during a lift (it was 22-33 dB under, i.e. inaudible
     // behind the engine). With the whistle down it has the space.
-    setT(this.surgeBodyLvl.gain, 5.6 * amp * s * engineMix, now, 0.03);
+    setT(this.surgeBodyLvl.gain, BODY * amp * s * engineMix, now, 0.03);
     // The edge band is gated on s^2 so a gentle stall is all body and only a
     // hard one gets the click. Level-matched by ear-safety, not by energy.
     // 1.8 → 0.7: it no longer goes through the layer's tone stage.
