@@ -1,20 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="292" height="56" viewBox="0 0 292 56" role="img" aria-label="Try it in your browser">
-  <defs>
-    <linearGradient id="fill" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffb347"/>
-      <stop offset="0.45" stop-color="#ff7a1a"/>
-      <stop offset="1" stop-color="#ff4d00"/>
-    </linearGradient>
-    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#fff" stop-opacity=".35"/>
-      <stop offset="0.5" stop-color="#fff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>
-  <rect x="1" y="1" width="290" height="54" rx="27" fill="url(#fill)"/>
-  <rect x="1" y="1" width="290" height="54" rx="27" fill="url(#gloss)"/>
+  <rect x="1" y="1" width="290" height="54" rx="27" fill="#ff6a13"/>
   <!-- play button: a dark disc with a rounded triangle -->
   <circle cx="29" cy="28" r="18" fill="#140700"/>
-  <path d="M24.5 20.6v14.8a1.2 1.2 0 0 0 1.8 1l11.6-7.4a1.2 1.2 0 0 0 0-2L26.3 19.6a1.2 1.2 0 0 0-1.8 1z" fill="#ffb347"/>
+  <path d="M24.5 20.6v14.8a1.2 1.2 0 0 0 1.8 1l11.6-7.4a1.2 1.2 0 0 0 0-2L26.3 19.6a1.2 1.2 0 0 0-1.8 1z" fill="#ff6a13"/>
   <text x="58" y="34" fill="#140700" font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif"
         font-size="17" font-weight="700" textLength="208" lengthAdjust="spacingAndGlyphs">Try it in your browser</text>
 </svg>
