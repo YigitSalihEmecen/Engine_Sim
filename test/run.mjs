@@ -734,6 +734,27 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
        `body ${T.surgeBody.frequency.value} Hz, edge ${T.surgeEdge.frequency.value} Hz`);
   }
 
+  // No two lifts the same: the burst rate depends on revs and boost at the
+  // lift, plus a scatter. And a high whistle climbs with the shaft.
+  {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1, valve: 0 } });
+    const p = { now: 0, dt: 1 / 60, load: 1, throttle: 1, rpmNorm: 0.9, shifting: false, evBov: 0 };
+    const step = (n) => { for (let i = 0; i < n; i++) { mk.advance(1 / 60); p.now = mk.ctx.currentTime; T.update(p); } };
+    const lift = (rpmNorm) => {
+      p.rpmNorm = rpmNorm; p.load = 1; p.throttle = 1; step(240);
+      p.throttle = 0; p.load = 0; step(2);
+      const rate = T._liftRate; step(60); return rate;
+    };
+    const hiFull = (p.rpmNorm = 0.9, step(240), T.hiOsc.frequency.value);
+    const rates = [lift(0.9), lift(0.9), lift(0.45)];
+    ok(Math.abs(rates[0] - rates[1]) > 0.1 && rates[2] < Math.min(rates[0], rates[1]),
+       'each lift flutters differently, and slower from lower revs',
+       rates.map(r => r.toFixed(1)).join(' / ') + ' Hz');
+    ok(hiFull > 9000, 'a high whistle climbs with the shaft', `${hiFull.toFixed(0)} Hz spooled`);
+  }
+
   // THE LIMITER IS NOT A LIFT. Fuel cut with the plate open: no flutter, no
   // blow-off valve, however long the car sits on it.
   {

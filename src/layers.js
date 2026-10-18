@@ -633,6 +633,10 @@ export class TurboLayer {
     this._vent = 0;          // 0..1 plenum-dumped fraction, decays back
     this._surge = 0;         // 0..1 how hard the compressor is stalling
     this._climb = 0;         // 0..1 how hard the shaft is accelerating
+    // Per-lift character of the flutter, drawn when it arms (see _stepSurge).
+    this._liftRate = 13;
+    this._liftPitch = 1;
+    this._liftTau = 0.26;
     this._lastBov = -1e9;
     this._prevThrottle = 0;
     this._prevShifting = false;
@@ -844,6 +848,26 @@ export class TurboLayer {
     this.wgGrain.gain.value = 0;
     this.grainBP.connect(this.wgGrain);
     this.wgGrain.connect(this.wgLevel.gain);
+
+    // --- high whistle ------------------------------------------------------
+    // The shaft turns at 100-250 krpm, so the blade-passing tone itself is at
+    // 10-30 kHz — mostly above hearing, but its lower edge and the tip-
+    // clearance noise reach down into the 5-12 kHz range as a thin, piercing
+    // whistle that climbs with shaft speed. Kept faint and slightly unsteady
+    // (grain AM, bearing wander) so it reads as a turbo, not a test tone.
+    this.hiOsc = ctx.createOscillator();
+    this.hiOsc.type = 'sine';
+    this.hiOsc.frequency.value = 6000;
+    this._srcs.push(this.hiOsc);
+    this.hiGain = keep(ctx.createGain());
+    this.hiGain.gain.value = 0;
+    this.hiOsc.connect(this.hiGain);
+    this.hiGain.connect(this.out);
+    this.hiGrain = keep(ctx.createGain());
+    this.hiGrain.gain.value = 0;
+    this.grainBP.connect(this.hiGrain);
+    this.hiGrain.connect(this.hiGain.gain);
+    this.hiWander = keep(amDrive(ctx, this.wander2, 0, this.hiOsc.detune));
 
     // --- buzz-saw -----------------------------------------------------------
     // Near top speed the blade tips go supersonic and every blade's shock is a
@@ -1151,6 +1175,14 @@ export class TurboLayer {
     setF(this.buzzBP.frequency, clamp(whineHz * 1.5, 400, 6000), now, TC, 1500);
     setT(this.buzzGain.gain, buzz, now, TC);
 
+    // High whistle: 5 kHz windmilling to ~13 kHz flat out, rising with
+    // tip speed squared like the rest of the aero noise.
+    setF(this.hiOsc.frequency, clamp(5000 + 8000 * Math.pow(this.spool, 1.4), 3000, 15000), now, TC, 6000);
+    const hi = 0.022 * aero * (0.55 + 0.45 * flow);
+    setT(this.hiGain.gain, hi, now, TC);
+    setT(this.hiGrain.gain, hi * 0.4, now, 0.05);
+    setT(this.hiWander.gain, 12 * (1 - 0.6 * this.spool), now, 0.08);
+
     // --- blow-off valve -----------------------------------------------------
     const bov = clamp(fin(p.evBov, 0), 0, 1);
     if (bov > 0) this._fireBov(now, bov);
@@ -1177,7 +1209,7 @@ export class TurboLayer {
     // if the throttle stays shut. ~0.55 s to fall to a third.
     // 0.42 → 0.65 → 0.26: long enough for a few clear "stu"s, short enough
     // that the flutter is a response to the lift, not a tail that hangs on.
-    this._surge *= Math.exp(-dt / 0.26);
+    this._surge *= Math.exp(-dt / this._liftTau);
     this._closedT = closedNow(throttle) ? (this._closedT || 0) + dt : 0;
     if (this._surge < 1e-3) this._surge = 0;
 
@@ -1245,6 +1277,16 @@ export class TurboLayer {
     const shiftArm = p.gearbox === 'dct' ? 0.35 : p.gearbox === 'auto' ? 0.15 : 1;
     const arm = (justClosed || dropped) ? stall : shiftCut ? stall * shiftArm : 0;
     if (arm > 0) {
+      // A FRESH flutter draws its own character, so no two lifts sound the
+      // same: higher revs and more boost stiffen the plenum (faster bursts,
+      // higher "tu"), and a scatter on top stands in for everything else —
+      // valve timing, where the wheel was on its map, pipe temperature.
+      if (this._surge < 0.1) {
+        const r = () => this._rnd();
+        this._liftRate = this.flutterHz * (0.7 + 0.45 * rpmNorm + 0.35 * this.boost) * (0.85 + 0.3 * r());
+        this._liftPitch = (0.85 + 0.25 * rpmNorm) * (0.92 + 0.16 * r());
+        this._liftTau = 0.18 + 0.16 * r() + 0.08 * this.boost;
+      }
       // A snap-shut from full boost stalls harder than an easing-off.
       this._surge = Math.max(this._surge, arm);
     }
@@ -1285,7 +1327,7 @@ export class TurboLayer {
     // A fixed rate per car — the Helmholtz frequency of its intake pipework,
     // measured at 5-21 Hz for mild surge — that SLOWS as the trapped pressure
     // bleeds off: "stu-stu-stu…tu…tu". It used to speed up with s and rpm.
-    const rate = this.flutterHz * (0.7 + 0.45 * s);
+    const rate = this._liftRate * (0.7 + 0.45 * s);
     setF(this.surgeOsc.frequency, rate, now, 0.03, 16);
 
     // Each reversal drags gas back across the wheel; the harder the stall, the
@@ -1300,8 +1342,8 @@ export class TurboLayer {
     // → 2.4-3.8 kHz at the user's ask: a turbo flutter is a high, airy
     // sound. The level is raised to make up for the dynamics' high band.
     // The burst's chirp rides on top (up to +600 Hz at the stall).
-    setF(this.surgeBody.frequency, 2400 + 700 * s + 700 * rpmNorm, now, 0.04, 3000);
-    setF(this.surgeEdge.frequency, 4600 + 600 * s + 800 * rpmNorm, now, 0.04, 5200);
+    setF(this.surgeBody.frequency, (2400 + 700 * s + 500 * rpmNorm) * this._liftPitch, now, 0.04, 3000);
+    setF(this.surgeEdge.frequency, (4600 + 600 * s + 600 * rpmNorm) * this._liftPitch, now, 0.04, 5200);
     setT(this.surgeChirp.gain, 600 * s, now, 0.04);
     setT(this.surgeJitter.gain, 18 * s, now, 0.04);
     // On the overrun the engine is pumping air, not burning, so the flutter
