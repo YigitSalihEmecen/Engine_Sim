@@ -1200,9 +1200,11 @@ export class TurboLayer {
     setF(this.shaftOsc.frequency, clamp(whineHz / BLADES, 4, 400), now, TC, 180);
     setT(this.shaftDepth.gain, whineLvl * (0.52 - 0.28 * this.spool), now, TC);
 
-    // Wastegate: only near the boost ceiling, only on throttle.
-    const nearCeiling = clamp((this.boost - 0.62) / 0.30, 0, 1);
-    const gate = nearCeiling * throttle * (0.35 + 0.65 * rpmNorm) * (this.screamer ? 0.55 : 0.06);
+    // Wastegate: near the boost ceiling, on throttle. It opens from 45 % of
+    // max boost and is wide open by 75 % (was 62-92 %, i.e. ~96 % shaft
+    // speed, and at 0.06 it was all but inaudible without a screamer pipe).
+    const nearCeiling = clamp((this.boost - 0.45) / 0.30, 0, 1);
+    const gate = nearCeiling * throttle * (0.45 + 0.55 * rpmNorm) * (this.screamer ? 0.6 : 0.16);
     setF(this.wgBP.frequency, (this.screamer ? 900 : 1400) + 1300 * this.spool, now, TC, 1500);
     setT(this.wgLevel.gain, gate, now, 0.05);
     setT(this.wgGrain.gain, gate * 0.5, now, 0.05);
@@ -1219,7 +1221,8 @@ export class TurboLayer {
     setT(this.whooshGrain.gain, whoosh * 0.6, now, 0.05);
     setF(this.whooshBP.frequency, clamp(4000 + 3500 * this.spool, 3000, 8000), now, TC, 5000);
 
-    const buzz = 0.05 * clamp((this.spool - 0.78) / 0.2, 0, 1) * flow;
+    // From 62 % shaft speed, full by 87 % (was 78-98 %).
+    const buzz = 0.08 * clamp((this.spool - 0.62) / 0.25, 0, 1) * flow;
     setF(this.buzzOsc.frequency, clamp(whineHz / BLADES, 20, 400), now, TC, 60);
     setF(this.buzzBP.frequency, clamp(whineHz * 1.5, 400, 6000), now, TC, 1500);
     setT(this.buzzGain.gain, buzz, now, TC);

@@ -769,6 +769,18 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
        `in flutter ${T.hiSurgeLvl.gain.value.toFixed(3)} vs steady ${T.hiGain.gain.value.toFixed(3)}`);
   }
 
+  // The on-boost phase (wastegate rush, buzz-saw) is easy to reach: a pull
+  // at high revs gets there, not only a flat-out one at the very top.
+  {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1 } });
+    const p = { now: 0, dt: 1 / 60, load: 0.85, throttle: 0.85, rpm: 5200, rpmNorm: (5200 - 800) / 6200, shifting: false, evBov: 0 };
+    for (let i = 0; i < 180; i++) { mk.advance(1 / 60); p.now = mk.ctx.currentTime; T.update(p); }
+    ok(T.wgLevel.gain.value > 0.06 && T.buzzGain.gain.value > 0.02, 'the wastegate and buzz-saw come in on an ordinary hard pull',
+       `wastegate ${T.wgLevel.gain.value.toFixed(3)}, buzz ${T.buzzGain.gain.value.toFixed(3)} at 5200 rpm, 0.85 throttle`);
+  }
+
   // Boost comes in above 3500 rpm, not before.
   {
     const mk = createMockContext();
