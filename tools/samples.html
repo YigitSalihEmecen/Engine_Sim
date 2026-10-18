@@ -133,34 +133,5 @@ window.renderSample = async (engine, turbo) => {
   for (let i = 0; i < L.length; i++) { L[i] *= g; R[i] *= g; }
   return { wav: wav16(L, R), img: spectrogram(mono), trace, redline: sim.profile.redlineRpm, label: sim.presetLabel, peak };
 };
-/** 1280×720 still for the README video: title, Natural and Turbo spectrograms. */
-window.videoFrame = async (engine, label) => {
-  const load = (src) => new Promise((ok, bad) => { const i = new Image(); i.onload = () => ok(i); i.onerror = bad; i.src = src; });
-  const [na, tu] = await Promise.all([load(`../samples/${engine}.jpg`), load(`../samples/${engine}-turbo.jpg`)]);
-  const c = document.createElement('canvas');
-  c.width = 1280; c.height = 720;
-  const g = c.getContext('2d');
-  const bg = g.createRadialGradient(200, -100, 50, 200, -100, 900);
-  bg.addColorStop(0, '#3a1406'); bg.addColorStop(1, '#060504');
-  g.fillStyle = bg; g.fillRect(0, 0, 1280, 720);
-  const grad = g.createLinearGradient(48, 0, 600, 0);
-  grad.addColorStop(0, '#ffb347'); grad.addColorStop(0.45, '#ff7a1a'); grad.addColorStop(1, '#ff4d00');
-  g.fillStyle = grad;
-  g.font = '800 46px Helvetica, Arial, sans-serif';
-  g.fillText(label, 48, 78);
-  g.fillStyle = 'rgba(226,232,245,.55)';
-  g.font = '500 20px Helvetica, Arial, sans-serif';
-  g.fillText('Full throttle · autoshift · three lifts — synthesised by Engine Sim', 48, 112);
-  const panel = (img, y, tag) => {
-    g.fillStyle = 'rgba(255,179,71,.95)';
-    g.font = '700 15px Menlo, monospace';
-    g.fillText(tag, 48, y - 12);
-    g.drawImage(img, 48, y, 1184, 228);
-    g.strokeStyle = 'rgba(255,255,255,.12)'; g.lineWidth = 1; g.strokeRect(48.5, y + 0.5, 1183, 227);
-  };
-  panel(na, 176, 'NATURAL   0–10 s');
-  panel(tu, 478, 'TURBO   10–20 s');
-  return c.toDataURL('image/png');
-};
 window.ready = true;
 </script>
