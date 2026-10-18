@@ -337,7 +337,7 @@ export class EngineSim {
     this.transmission.output.connect(this.busses.transmission);
 
     this.turbo = p.turbo ? new TurboLayer(ctx, p) : null;
-    if (this.turbo) this.turbo.output.connect(this.busses.turbo);
+    if (this.turbo) this._wireTurbo();
 
     this.transients = new TransientBank(ctx, p);
     // Mechanical transients — driveline clunk, clutch thump, synchro click.
@@ -569,8 +569,14 @@ export class EngineSim {
       return;
     }
     this.turbo = new TurboLayer(this.ctx, machine);
-    this.turbo.output.connect(this.busses.turbo);
+    this._wireTurbo();
     if (this.running) this.turbo.start(this.ctx.currentTime + 0.02);
+  }
+
+  /** Dry path to the turbo bus; the flutter's send into the exhaust pipes. */
+  _wireTurbo() {
+    this.turbo.output.connect(this.busses.turbo);
+    for (const inp of this.exhaust.inputs) this.turbo.surgeSend.connect(inp);
   }
 
   /**

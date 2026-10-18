@@ -863,12 +863,15 @@ export class TurboLayer {
     this.surgeShaper.oversample = '2x';
     this.surgeOsc.connect(this.surgeShaper);
 
-    // The flutter skips the layer's tone stage and goes straight to `out`: once
-    // it moved up, the -5.5 dB shelf and the 4.6 kHz lowpass cost it 4-7 dB
-    // against the mix (measured in render.html). The master tone stage and
-    // the dynamics' high band still tame it.
+    // The flutter goes back through the layer's tone stage (the dry path),
+    // and `surgeSend` carries part of it into the exhaust waveguides, so it
+    // takes on the same pipe resonances, muffler and rasp as the engine. Dry
+    // and straight to `out` it sat on top of the engine like an overlay.
     this.surgeBus = keep(ctx.createGain());
-    this.surgeBus.connect(this.out);
+    this.surgeBus.gain.value = 0.7;
+    this.surgeBus.connect(this.bus);
+    this.surgeSend = keep(ctx.createGain());
+    this.surgeSend.gain.value = 0.55;
 
     // Real surge is not a metronome: each stall waits on the plenum refilling,
     // so the spacing wanders. The flow-grain noise nudges the burst rate.
@@ -880,8 +883,9 @@ export class TurboLayer {
     // Body band — the "tu".
     this.surgeBody = keep(ctx.createBiquadFilter());
     this.surgeBody.type = 'bandpass';
-    this.surgeBody.frequency.value = 1800;
-    this.surgeBody.Q.value = 2.4;
+    this.surgeBody.frequency.value = 1600;
+    // Wide: a narrow band reads as a pitched chuff, a wide one as air.
+    this.surgeBody.Q.value = 1.1;
     this.surgeBodyAM = keep(ctx.createGain());
     this.surgeBodyAM.gain.value = 0;
     this.surgeBodyLvl = keep(ctx.createGain());
@@ -890,6 +894,7 @@ export class TurboLayer {
     this.surgeBody.connect(this.surgeBodyAM);
     this.surgeBodyAM.connect(this.surgeBodyLvl);
     this.surgeBodyLvl.connect(this.surgeBus);
+    this.surgeBodyLvl.connect(this.surgeSend);
     this.surgeBodyDepth = keep(ctx.createGain());
     this.surgeBodyDepth.gain.value = 1;
     this.surgeShaper.connect(this.surgeBodyDepth);
@@ -906,8 +911,8 @@ export class TurboLayer {
     // make the flutter harsh if it were level-matched to the body.
     this.surgeEdge = keep(ctx.createBiquadFilter());
     this.surgeEdge.type = 'bandpass';
-    this.surgeEdge.frequency.value = 3800;
-    this.surgeEdge.Q.value = 1.6;
+    this.surgeEdge.frequency.value = 3400;
+    this.surgeEdge.Q.value = 0.8;
     this.surgeEdgeAM = keep(ctx.createGain());
     this.surgeEdgeAM.gain.value = 0;
     this.surgeEdgeLvl = keep(ctx.createGain());
@@ -1193,7 +1198,10 @@ export class TurboLayer {
     // 9 Hz just above the stall threshold to 30 Hz coming off full boost at
     // high rpm. This spread is most of why the flutter sounds different in 2nd
     // and in 5th.
-    const rate = 9 + 15 * s + 6 * rpmNorm;
+    // Tied harder to the engine: higher revs push more air through the
+    // compressor, so the flutter runs faster and higher as the revs fall
+    // from higher up.
+    const rate = 9 + 13 * s + 10 * rpmNorm;
     setF(this.surgeOsc.frequency, rate, now, 0.03, 16);
 
     // Each reversal drags gas back across the wheel; the harder the stall, the
@@ -1206,10 +1214,14 @@ export class TurboLayer {
     // sounded like something other than a turbo. Not higher: above ~2 kHz the
     // dynamics' fast high band (fx.js) holds it down and it loses its level.
     // The burst's chirp rides on top (up to +600 Hz at the stall).
-    setF(this.surgeBody.frequency, 1300 + 900 * s, now, 0.04, 1800);
-    setF(this.surgeEdge.frequency, 3200 + 1200 * s, now, 0.04, 3800);
-    setT(this.surgeChirp.gain, 600 * s, now, 0.04);
+    setF(this.surgeBody.frequency, 1050 + 500 * s + 600 * rpmNorm, now, 0.04, 1600);
+    setF(this.surgeEdge.frequency, 2800 + 600 * s + 800 * rpmNorm, now, 0.04, 3400);
+    setT(this.surgeChirp.gain, 300 * s, now, 0.04);
     setT(this.surgeJitter.gain, 18 * s, now, 0.04);
+    // On the overrun the engine is pumping air, not burning, so the flutter
+    // has room; under load the combustion covers it. Level follows revs too.
+    const overrun = clamp(fin(p.overrun, 0), 0, 1);
+    const engineMix = (0.6 + 0.4 * rpmNorm) * (0.8 + 0.3 * overrun);
 
     const amp = this.surgeLevel * this.surgeTrim;
     // The bandpasses cost most of the noise that goes through them, so these
@@ -1217,11 +1229,13 @@ export class TurboLayer {
     // The flutter is the turbo's main event: test/turbo.mjs puts it 9-20 dB
     // under the WHOLE mix during a lift (it was 22-33 dB under, i.e. inaudible
     // behind the engine). With the whistle down it has the space.
-    setT(this.surgeBodyLvl.gain, 5.6 * amp * s, now, 0.03);
+    setT(this.surgeBodyLvl.gain, 5.6 * amp * s * engineMix, now, 0.03);
     // The edge band is gated on s^2 so a gentle stall is all body and only a
     // hard one gets the click. Level-matched by ear-safety, not by energy.
     // 1.8 → 0.7: it no longer goes through the layer's tone stage.
-    setT(this.surgeEdgeLvl.gain, 0.7 * amp * s, now, 0.03);
+    // 0.7·s → 0.25·s²: the edge was the click. Only a hard stall gets a
+    // little of it now, and it is wide, so it reads as a hiss, not a tick.
+    setT(this.surgeEdgeLvl.gain, 0.25 * amp * s * s * engineMix, now, 0.03);
   }
 
   /** Fade out and stop — for taking the turbo off a running engine. */
@@ -1229,6 +1243,7 @@ export class TurboLayer {
     const now = fin(this.ctx.currentTime, 0);
     this.enabled = false;
     this.out.gain.setTargetAtTime(0, now, 0.07);
+    this.surgeSend.gain.setTargetAtTime(0, now, 0.07);
     for (const src of this._srcs) {
       try { src.stop(now + 0.5); } catch (e) { /* never started */ }
     }
@@ -1367,7 +1382,9 @@ function grainCurve(n = 1024, bias = 0.55) {
 
 function surgePulseCurve(n = 1024) {
   const c = new Float32Array(n);
-  const RISE = 0.07;
+  // 0.07 → 0.24, and a gentler tail: a fast onset is a click on every burst.
+  // A slower swell with an overlapping tail is the airy "whoosh-whoosh".
+  const RISE = 0.24;
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);                 // maps input -1..+1 onto 0..1
     // Raised-cosine rise: still a fast onset (the "st"), but with no corner
@@ -1375,7 +1392,7 @@ function surgePulseCurve(n = 1024) {
     const a = t < RISE ? 0.5 - 0.5 * Math.cos(Math.PI * t / RISE) : 1;
     // Steeper tail and a true gap before the next burst: separate "stu"s,
     // not a continuous rattle.
-    c[i] = a * Math.exp(-7.5 * Math.max(0, t - RISE));
+    c[i] = a * Math.exp(-4.5 * Math.max(0, t - RISE));
   }
   return c;
 }

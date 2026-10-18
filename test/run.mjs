@@ -711,7 +711,7 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
     const mk = createMockContext();
     installGlobals(mk.ctx);
     const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1 } });
-    ok(T.surgeBody.frequency.value >= 1300 && T.surgeEdge.frequency.value >= 3200,
+    ok(T.surgeBody.frequency.value >= 1000 && T.surgeEdge.frequency.value >= 2800,
        'the flutter sits high enough to read as air',
        `body ${T.surgeBody.frequency.value} Hz, edge ${T.surgeEdge.frequency.value} Hz`);
   }
