@@ -90,6 +90,10 @@ export class EngineSim {
     this.geared = this._gearedVehicle();
 
     this.mix = { ...DEFAULT_MIX, ...(opts.mix || {}) };
+    // The turbo is a bolt-on, not part of the engine, so it survives an engine
+    // swap. Mutated in place, never replaced: the physics and the turbo layer
+    // read it through the object `_machine()` hands them.
+    this.turboCfg = { ...DEFAULT_SOUND.turbo, enabled: opts.turbo ? 1 : 0 };
     this._volume = opts.volume ?? DEFAULT_SOUND.volume;
     this.running = false;
     this._destOpt = opts.destination || null;
@@ -114,6 +118,8 @@ export class EngineSim {
     this._ps = {};
     this._misfireRng = 0x2545f491;
     this._misfireHold = 0;
+    this._bark = 0;
+    this._prevLoad = 0;
 
     // Drivetrain owns its ShiftController — the shift state machine has to run
     // inside the sub-stepped integration, not alongside it.
@@ -124,7 +130,7 @@ export class EngineSim {
     // physics.js now controls the launch by SLIP rather than by holding an rpm
     // setpoint at all, so there is nothing here to override — see
     // Drivetrain._launchClutch().
-    this.physics = new Drivetrain(this.profile, this.geared, { ...opts });
+    this.physics = new Drivetrain(this._machine(), this.geared, { ...opts });
 
     this._buildGraph();
     this._buildVoices();
@@ -299,10 +305,18 @@ export class EngineSim {
     }
   }
 
+  /**
+   * The engine as the physics and the voices see it: the profile with the turbo
+   * bolted on, or `turbo: null` when it is switched off.
+   */
+  _machine() {
+    return { ...this.profile, turbo: this.turboCfg.enabled >= 0.5 ? this.turboCfg : null };
+  }
+
   /** Build everything that depends on the engine profile. */
   _buildVoices() {
     const ctx = this.ctx;
-    const p = this.profile;
+    const p = this._machine();
 
     this.waves = buildEngineWaves(ctx, p, bankAngles);
 
@@ -529,7 +543,38 @@ export class EngineSim {
   // =========================================================================
 
   /**
-   * Swap the engine, keeping the current mix/tone/EQ. Use `loadPreset()` to
+   * Bolt a turbo onto whatever engine is running, or take it off. Only the
+   * turbo layer is built or released — the engine note never stops — and the
+   * setting survives `setEngineType()`. The gearbox stays the one designed for
+   * the engine itself (gearbox.js), so toggling never moves the ratios mid-run.
+   * @returns {boolean} whether the turbo is now on
+   */
+  setTurbo(on) {
+    this.turboCfg.enabled = on ? 1 : 0;
+    this._syncTurbo();
+    return !!on;
+  }
+
+  _syncTurbo() {
+    const machine = this._machine();
+    if (!!machine.turbo === !!this.turbo) {
+      if (this.turbo) this.turbo.setProfile(machine);
+      return;
+    }
+    this.physics.setEngine(machine);
+    if (this.turbo) {
+      // Faded, not cut: a flutter in progress tails off instead of clicking.
+      this.turbo.release();
+      this.turbo = null;
+      return;
+    }
+    this.turbo = new TurboLayer(this.ctx, machine);
+    this.turbo.output.connect(this.busses.turbo);
+    if (this.running) this.turbo.start(this.ctx.currentTime + 0.02);
+  }
+
+  /**
+   * Swap the engine, keeping the current mix/tone/EQ/turbo. Use `loadPreset()` to
    * bring a whole sound across instead.
    * @param {string} id key of ENGINE_PROFILES
    */
@@ -556,7 +601,7 @@ export class EngineSim {
     if (wasRunning) this._hardStopVoices();
 
     this.profile = engine;
-    this.physics.setEngine(this.profile);
+    this.physics.setEngine(this._machine());
     // New engine, new box: the transmission layer is rebuilt below from it.
     this.geared = this._gearedVehicle();
     this.physics.setVehicle(this.geared);
@@ -591,6 +636,7 @@ export class EngineSim {
       id: this.presetId,
       label: this.presetLabel,
       engine: this.profile,
+      turbo: { ...this.turboCfg },
       mix: { ...this.mix },
       tone: { rumble: this._rumble ?? 1, brightness: this._brightness ?? 1, punch: this._punch ?? 1 },
       eq: this.eq.getGains(),
@@ -630,8 +676,11 @@ export class EngineSim {
     this.presetId = preset.id;
     this.presetLabel = preset.label;
     if (ENGINE_PROFILES[preset.id]) this.engineId = preset.id;
+    Object.assign(this.turboCfg, preset.turbo);
     if (JSON.stringify(preset.engine) !== JSON.stringify(this.profile)) {
       this._applyEngine(preset.engine);
+    } else {
+      this._syncTurbo();
     }
 
     this.setMix(preset.mix);
@@ -668,8 +717,8 @@ export class EngineSim {
   setParam(path, value) {
     const row = schemaFor(path);
     if (!row) return null;
-    if (row.needs === 'turbo' && !this.profile.turbo) return null;
-    const v = clamp(Number(value), row.min, row.max);
+    let v = clamp(Number(value), row.min, row.max);
+    if (row.unit === 'bool') v = Math.round(v);
     if (!isFinite(v)) return null;
 
     // Rebuild rows go the long way round: wavetables and waveguide delay lines
@@ -691,6 +740,11 @@ export class EngineSim {
     else if (seg[0] === 'eq') this.setEQBand(Number(seg[1]), v);
     else if (path === 'position') this.setPosition(v);
     else if (path === 'volume') this.setVolume(v);
+    else if (path === 'turbo.enabled') this.setTurbo(v);
+    else if (seg[0] === 'turbo') {
+      this.turboCfg[seg[1]] = v;
+      this._syncTurbo();
+    }
     else if (seg[0] === 'fx') {
       if (seg[1] === 'reverbMix') this.setReverb({ mix: v });
       else if (seg[1] === 'reverbSize') this.setReverb({ size: v });
@@ -699,12 +753,13 @@ export class EngineSim {
       else if (seg[1] === 'popDepth') this.setPopDepth(v);
       else if (seg[1] === 'dynamics') this.setDynamics(v);
     } else if (seg[0] === 'engine') {
-      // Live engine constants: torque, inertia, rev range, per-engine trim and
-      // the whole turbo section. Mutating the private profile and re-pushing it
-      // is enough — every consumer re-derives from it.
+      // Live engine constants: torque, inertia, rev range, per-engine trim.
+      // Mutating the private profile and re-pushing it is enough — every
+      // consumer re-derives from it.
       setPath(this.profile, seg.slice(1).join('.'), v);
-      this.physics.setEngine(this.profile);
-      for (const m of this._modules()) if (m.setProfile) m.setProfile(this.profile);
+      const machine = this._machine();
+      this.physics.setEngine(machine);
+      for (const m of this._modules()) if (m.setProfile) m.setProfile(machine);
     } else {
       return null;
     }
@@ -918,11 +973,9 @@ export class EngineSim {
       dRpm: p ? p.dRpm : 0,
       engine: this.engineId,
       engineLabel: this.presetLabel || this.profile.label,
-      // Whether the LOADED sound has a turbo, which is not the same question as
-      // whether the stock profile for `engine` does: a preset can be edited or
-      // hand-written. A dashboard drawing a boost gauge has to ask this, not
-      // ENGINE_PROFILES.
-      turbo: !!this.profile.turbo,
+      // Whether the turbo is bolted on right now. It belongs to no engine, so a
+      // dashboard drawing a boost gauge has to ask this.
+      turbo: this.turboCfg.enabled >= 0.5,
       preset: this.presetId,
       vehicle: this.vehicleId,
       vehicleLabel: this.vehicle.label,
@@ -1001,7 +1054,6 @@ export class EngineSim {
       id,
       label: p.label,
       cylinders: p.cylinders,
-      turbo: !!p.turbo,
       idleRpm: p.idleRpm,
       redlineRpm: p.redlineRpm,
       peakTorque: p.peakTorque,
@@ -1041,7 +1093,17 @@ export class EngineSim {
     // torque^0.7) and radiation efficiency rises with firing rate. On overrun
     // there is no combustion at all, so the pulse train nearly vanishes and the
     // airflow layers carry the sound.
-    const x = clamp(p.load, 0, 1);
+    // Tip-in BARK. Snap the throttle open and the manifold fills, the first
+    // few charges are rich and dense, and the engine barks before it settles
+    // into a pull. A level that only follows smoothed load has no such edge.
+    // Rate of load rise, decaying over ~160 ms, pushes level and pulse
+    // hardness briefly past steady state; easing in does not trigger it.
+    if (p.dt > 0) {
+      const rise = (p.load - this._prevLoad) / p.dt;
+      this._bark = Math.max(this._bark * Math.exp(-p.dt / 0.16), clamp(rise / 10, 0, 1));
+    }
+    this._prevLoad = p.load;
+    const x = clamp(p.load + 0.3 * this._bark, 0, 1);
     // The load floor and the overrun cut compound, and at 0.22/0.72 they took
     // the exhaust down 94% on a trailing throttle — the engine all but vanished
     // when coasting, which is precisely when you most want to hear it. Fuel cut
@@ -1052,7 +1114,8 @@ export class EngineSim {
     // particular engine speaks relative to the rest of the mix, before any
     // user-facing level control. It sat in all sixteen profiles being read by
     // NOTHING until the preset schema went looking for orphans.
-    const ampl = (0.32 + 0.68 * Math.pow(x, 0.7))
+    const ampl = (1 + 0.35 * this._bark)
+               * (0.32 + 0.68 * Math.pow(x, 0.7))
                * (0.45 + 0.55 * clamp(p.rpmNorm, 0, 1))
                * (1 - 0.45 * clamp(p.overrun, 0, 1))
                * clamp(Number(this.profile.voice) || 1, 0.2, 2);

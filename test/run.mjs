@@ -16,6 +16,9 @@ import { ENGINE_PROFILES, VEHICLE_PRESETS, bankAngles, firingAngles, pipeDelay, 
   from '../src/profiles.js';
 import { orderSpectrum, buildCycle, toPressureGradient, cycleToCoefficients, reconstruct }
   from '../src/pulse.js';
+import { DEFAULT_SOUND } from '../src/presets.js';
+
+const DEFAULT_TURBO = DEFAULT_SOUND.turbo;
 
 let failures = 0, checks = 0;
 const only = process.argv[2];
@@ -165,7 +168,8 @@ await suite('audio modules — construction and parameter sweep', () => {
     add(resonators.IntakeResonator);
     add(resonators.CabinFilter);
     add(layers.TransmissionLayer, VEHICLE_PRESETS.sports);
-    if (profile.turbo) add(layers.TurboLayer);
+    // The turbo bolts onto any engine, so every engine gets swept with one.
+    built.push(new layers.TurboLayer(mock.ctx, { ...profile, turbo: { ...DEFAULT_TURBO, enabled: 1 } }));
     add(layers.TransientBank);
 
     const afterBuild = mock.report().nodes;
@@ -194,7 +198,8 @@ await suite('audibility — every source started and connected to the output', a
     for (const v of ['sports', 'truck']) {
       const mk = createMockContext();
       installGlobals(mk.ctx);
-      const sim = new EngineSim(mk.ctx, { engine: e, vehicle: v });
+      // Turbo on for one of the two, so its layer is audited on every engine.
+      const sim = new EngineSim(mk.ctx, { engine: e, vehicle: v, turbo: v === 'truck' });
       await sim.start();
       for (let i = 0; i < 90; i++) {
         sim.setThrottle(i < 60 ? 1 : 0);
@@ -311,7 +316,7 @@ await suite('public API — what a host project actually needs', async () => {
   const vehicles = EngineSim.vehicles();
   ok(engines.length === Object.keys(ENGINE_PROFILES).length,
      'engines() lists every profile', `${engines.length}`);
-  ok(engines.every(e => e.id && e.label && e.redlineRpm > 0 && typeof e.turbo === 'boolean'),
+  ok(engines.every(e => e.id && e.label && e.redlineRpm > 0),
      'engines() entries are UI-ready');
   ok(vehicles.length === Object.keys(VEHICLE_PRESETS).length,
      'vehicles() lists every preset', `${vehicles.length}`);
@@ -558,14 +563,17 @@ await suite('dynamics — the three-band crossover sums flat', async () => {
 
 await suite('turbo — spool, whine sweep and compressor surge', async () => {
   const { EngineSim } = await import('../src/engine-sim.js');
-  const TURBOS = Object.entries(ENGINE_PROFILES).filter(([, p]) => p.turbo).map(([id]) => id);
-  ok(TURBOS.length >= 4, 'there are turbocharged profiles to test', TURBOS.join(','));
+  // No engine owns a turbo any more; it bolts onto any of them. These span the
+  // rev range and the cylinder count. Not the V-twin: in the sports chassis it
+  // may not pull away at 0.6 throttle, so it never builds boost to test.
+  const TURBOS = ['i3', 'boxer4', 'i6', 'i6diesel', 'v6', 'v8cross', 'v12'];
 
   /** Drive one engine through gear pulls with periodic lifts. */
-  const run = (engine, { lift = true, shift = true, throttle = 1 } = {}) => {
+  const run = (engine, { lift = true, shift = true, throttle = 1, bov } = {}) => {
     const mk = createMockContext();
     installGlobals(mk.ctx);
-    const sim = new EngineSim(mk.ctx, { engine, vehicle: 'sports' });
+    const sim = new EngineSim(mk.ctx, { engine, vehicle: 'sports', turbo: true });
+    if (bov != null) sim.setParam('turbo.bov', bov);
     sim.start();
     const T = sim.turbo;
     const r = { peakSurge: 0, peakBody: 0, surgeFrames: 0, bov: 0,
@@ -624,19 +632,19 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
   }
 
   // A big atmospheric valve relieves the plenum, so there is less left to
-  // reverse through the wheel. boxer4 (bov 0.80) against i6 (bov 0.25).
+  // reverse through the wheel. A 0.80 valve against a 0.25 one, same engine.
   //
   // The margin used to be > 5 dB, on a relief coefficient of 0.85 with no
   // floor. That silenced the big-valve cars rather than trading them down —
   // boxer4 kept 0.32 of its stall authority and barely chattered even flat out.
   // The valve still decides how much flutter there is, which is the whole point
   // of `turbo.bov`; it no longer decides whether there is any.
-  const big = run('boxer4'), small = run('i6');
+  const big = run('i6', { bov: 0.8 }), small = run('i6', { bov: 0.25 });
   const dB = 20 * Math.log10(small.peakBody / Math.max(1e-6, big.peakBody));
   ok(dB > 3, 'a large blow-off valve still trades flutter away',
-     `i6 ${small.peakBody.toFixed(3)} vs boxer4 ${big.peakBody.toFixed(3)} = ${dB.toFixed(1)} dB`);
+     `bov 0.25 ${small.peakBody.toFixed(3)} vs bov 0.80 ${big.peakBody.toFixed(3)} = ${dB.toFixed(1)} dB`);
   ok(big.peakSurge > 0.3, '...but never silences it — every turbo flutters',
-     `boxer4 peak ${big.peakSurge.toFixed(2)}`);
+     `bov 0.80 peak ${big.peakSurge.toFixed(2)}`);
 
   // The layer's own tone stage. The turbo is the only voice that lives in the
   // 2-6 kHz band the whole synth is otherwise measured for staying out of (see
@@ -659,7 +667,7 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
   // be silent, or every gentle coast would chatter.
   const mk = createMockContext();
   installGlobals(mk.ctx);
-  const sim = new EngineSim(mk.ctx, { engine: 'i6', vehicle: 'sports' });
+  const sim = new EngineSim(mk.ctx, { engine: 'i6', vehicle: 'sports', turbo: true });
   sim.start();
   let idleSurge = 0;
   for (let i = 0; i < 60 * 6; i++) {
@@ -670,6 +678,94 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
   }
   ok(idleSurge < 0.02, 'an off-boost lift does not flutter',
      `peak ${idleSurge.toFixed(4)}`);
+
+  // THE FLUTTER MUST END, NOT STOP. An automatic upshift with the pedal held
+  // arms the surge on the ignition cut, then reopens the throttle when the
+  // shift completes. Reopening used to multiply the surge by 0.25 per frame,
+  // which cut the "stu-stu" dead mid-burst on every autoshift in the game.
+  {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1 } });
+    const p = { now: 0, dt: 1 / 60, load: 1, throttle: 1, rpmNorm: 0.85, shifting: false, evBov: 0 };
+    const step = () => { mk.advance(1 / 60); p.now = mk.ctx.currentTime; T.update(p); };
+    for (let i = 0; i < 240; i++) step();                       // spool up
+    p.shifting = true; p.load = 0;
+    for (let i = 0; i < 9; i++) step();                         // 150 ms ignition cut
+    const armed = T._surge;
+    p.shifting = false; p.load = 1;
+    let worst = 1, prev = T._surge, frames = 0;
+    for (let i = 0; i < 60; i++) {
+      step();
+      if (prev > 0.01) { worst = Math.min(worst, T._surge / prev); frames++; }
+      prev = T._surge;
+    }
+    ok(armed > 0.15, 'an upshift with the pedal held arms the flutter', `surge ${armed.toFixed(2)}`);
+    ok(worst > 0.8 && frames >= 8, 'the flutter fades out after the shift instead of cutting',
+       `worst frame-to-frame ${worst.toFixed(2)}, audible for ${frames} frames`);
+  }
+
+  // Pitch: the "stu" lives up where air does. At 700-1900 Hz it read as a
+  // motorboat. The chirp rides on top, per burst.
+  {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1 } });
+    ok(T.surgeBody.frequency.value >= 1300 && T.surgeEdge.frequency.value >= 3200,
+       'the flutter sits high enough to read as air',
+       `body ${T.surgeBody.frequency.value} Hz, edge ${T.surgeEdge.frequency.value} Hz`);
+  }
+
+  // THE TOGGLE. Any engine, while running, without rebuilding the engine note,
+  // and it survives an engine swap.
+  {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const sim = new EngineSim(mk.ctx, { engine: 'v8cross', vehicle: 'sports' });
+    await sim.start();
+    const oscs = sim.oscs;
+    const drive = (n) => { for (let i = 0; i < n; i++) { sim.setThrottle(1); mk.advance(1 / 60); sim.update(1 / 60); } };
+    drive(60);
+    ok(!sim.turbo && sim.getState().turbo === false, 'the turbo is off by default');
+    sim.setTurbo(true);
+    drive(180);
+    ok(sim.turbo && sim.getState().turbo && sim.getState().boost > 0.05,
+       'setTurbo(true) bolts one onto a running engine', `boost ${sim.getState().boost.toFixed(2)}`);
+    ok(sim.oscs === oscs, '...without rebuilding the engine voices');
+    sim.setEngineType('i4');
+    ok(sim.turbo && sim.getState().turbo, 'the turbo survives an engine swap');
+    const layer = sim.turbo;
+    sim.setTurbo(false);
+    drive(10);
+    ok(!sim.turbo && layer.out.gain.value < 0.5 && sim.getState().boost === 0,
+       'setTurbo(false) fades the layer out and drops the boost',
+       `layer gain ${layer.out.gain.value.toFixed(2)}`);
+    ok(sim.setParam('turbo.enabled', 1) === 1 && sim.turbo, 'the toggle is a preset parameter too');
+    const a = mk.audit(mk.ctx.destination);
+    ok(a.unstarted.length === 0, 'a turbo added while running is started',
+       a.unstarted.join(',') || `${a.sources} sources`);
+  }
+});
+
+await suite('tip-in bark — throttle has an edge', async () => {
+  const { EngineSim } = await import('../src/engine-sim.js');
+  const mk = createMockContext();
+  installGlobals(mk.ctx);
+  // A throttle stab kicks the combustion voice, easing in does not, and it
+  // settles once the load is held.
+  const sim = new EngineSim(mk.ctx, { engine: 'v8cross', vehicle: 'sports' });
+  await sim.start();
+  const run = (thr, n) => { let peak = 0; for (let i = 0; i < n; i++) {
+    sim.setThrottle(thr(i)); mk.advance(1 / 60); sim.update(1 / 60); peak = Math.max(peak, sim._bark);
+  } return peak; };
+  run(() => 0, 120);
+  const stab = run(() => 1, 15);
+  run(() => 1, 60);
+  const held = sim._bark;
+  run(() => 0, 120);
+  const ease = run((i) => i / 120, 120);
+  ok(stab > 0.5 && ease < 0.15 && held < 0.05, 'a throttle stab barks; easing in and holding do not',
+     `stab ${stab.toFixed(2)}, ease ${ease.toFixed(2)}, held ${held.toFixed(3)}`);
 });
 
 await suite('harshness — no screaming resonance at any rpm', async () => {
@@ -744,7 +840,6 @@ await suite('presets — the schema is the source of truth, and has no orphans',
   let missing = [];
   for (const [id, pr] of Object.entries(presets)) {
     for (const row of PRESET_SCHEMA) {
-      if (row.needs === 'turbo' && !pr.engine.turbo) continue;
       const v = getPath(pr, row.path);
       if (typeof v !== 'number' || !isFinite(v) || v < row.min || v > row.max) {
         missing.push(`${id}:${row.path}=${v}`);
@@ -830,7 +925,6 @@ await suite('presets — the schema is the source of truth, and has no orphans',
   // is a control that moves and changes nothing.
   const dead = [];
   for (const row of PRESET_SCHEMA) {
-    if (row.needs === 'turbo') continue;                 // v8cross has none
     const cur = sim.getParam(row.path);
     // Somewhere else in range, quantised to the row's own step.
     let want = cur > (row.min + row.max) / 2 ? row.min + row.step : row.max - row.step;
@@ -841,10 +935,13 @@ await suite('presets — the schema is the source of truth, and has no orphans',
   ok(dead.length === 0, 'every schema parameter round-trips through the sim',
      dead.join(', ') || `${PRESET_SCHEMA.length} parameters`);
 
-  // A turbo row is refused on a naturally aspirated engine rather than
-  // silently creating a turbo section.
-  ok(sim.setParam('engine.turbo.bov', 0.5) === null && sim.getPreset().engine.turbo === null,
-     'turbo parameters do not apply to a naturally aspirated engine');
+  // A version-2 file kept the turbo inside the engine. It must still load,
+  // with its turbo switched on and its tuning kept.
+  const legacy = normalisePreset({ id: 'v8cross', engine: { ...ENGINE_PROFILES.v8cross,
+    turbo: { inertia: 0.3, maxBoost: 1.4, whineOrder: 60, bov: 0.2, surge: 1.2 } } });
+  ok(legacy.turbo.enabled === 1 && legacy.turbo.bov === 0.2 && !('turbo' in legacy.engine),
+     'a version-2 preset with a turbo loads with it switched on',
+     `enabled ${legacy.turbo.enabled}, bov ${legacy.turbo.bov}`);
   ok(sim.setParam('engine.nonsense', 1) === null, 'an unknown path is refused');
 
   // Loading a preset brings the whole sound, not just the engine.
@@ -852,7 +949,7 @@ await suite('presets — the schema is the source of truth, and has no orphans',
   sim.setEQBand(0, 12);
   ok(sim.loadPreset('i6diesel'), 'loadPreset accepts a built-in id');
   const after = sim.getPreset();
-  ok(after.id === 'i6diesel' && after.engine.turbo !== null
+  ok(after.id === 'i6diesel'
      && Math.abs(after.mix.intake - DEFAULT_MIX.intake) < 1e-6 && after.eq[0] === 0,
      'a preset carries mix and EQ, not only the engine',
      `intake ${after.mix.intake}, eq0 ${after.eq[0]}`);

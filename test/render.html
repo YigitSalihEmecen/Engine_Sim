@@ -159,7 +159,8 @@ async function render(engine, vehicle = 'sports', seconds = 11, extra = {}) {
   ctx.destination.channelCount = 4;
   ctx.destination.channelInterpretation = 'discrete';
 
-  const sim = new EngineSim(ctx, { engine, vehicle, destination: merger, volume: extra.volume ?? 0.8, wavetables: !!extra.wavetables });
+  const sim = new EngineSim(ctx, { engine, vehicle, destination: merger, volume: extra.volume ?? 0.8, wavetables: !!extra.wavetables,
+    turbo: extra.turbo ?? extra.prog === 'lifts' });
   if (extra.preset) sim.loadPreset(extra.preset);
   // Experiments: EXTRA='sim.airCut.gain.value = 0' etc. (render.mjs passes it)
   if (extra.tweak) new Function('sim', 'ctx', extra.tweak)(sim, ctx);
@@ -272,7 +273,13 @@ window.runTurbo = async (engine, opts = {}) => {
     // modulation depth: RMS of the 6-35 Hz part of the envelope over its mean
     const depth = Math.sqrt(2 * fl) / (Math.min(N, env.length) * 0.5) / (m + 1e-9);
     const rpm = (solo.rpmLog.find(r => r[0] >= b) || [0, 0])[1];
-    return { rest, rpm: Math.round(rpm), spool: +spool.toFixed(2), surge: +surge.toFixed(2), tail: +tail.toFixed(2),
+    // cen: spectral centroid of the turbo during the lift, Hz — the pitch the
+    // flutter is heard at (the whine is still in there, so it reads low).
+    const sp = spectrum(T, Math.floor(w0 * SR), 16384);
+    let cw = 0, ce = 0;
+    for (let k = Math.round(300 / (SR / 16384)); k < sp.length; k++) { cw += k * sp[k]; ce += sp[k]; }
+    const cen = ce > 0 ? cw / ce * SR / 16384 : 0;
+    return { rest, rpm: Math.round(rpm), cen: Math.round(cen), spool: +spool.toFixed(2), surge: +surge.toFixed(2), tail: +tail.toFixed(2),
              depth: +depth.toFixed(2), rel: +(dB(rms(T, w0, w1)) - dB(rms(F, w0 - 0.5, w0))).toFixed(1),
              relLift: +(dB(rms(T, w0, w1)) - dB(rms(F, w0, w1))).toFixed(1) };
   });

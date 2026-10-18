@@ -1,7 +1,7 @@
 /**
  * turbo.mjs — what the turbo sounds like, measured.
  *
- *   node test/turbo.mjs [engines...]      (turbo engines by default)
+ *   node test/turbo.mjs [engines...]      (turbo bolted onto each; a spread by default)
  *
  * For each turbo engine: the whine's pitch and level against the full mix at
  * the end of each pull, and for each of three lifts (full at mid revs,
@@ -38,7 +38,7 @@ const page = await browser.newPage();
 page.on('pageerror', e => console.error('page error:', e.message));
 await page.goto(`http://localhost:${server.address().port}/test/render.html`);
 await page.waitForFunction(() => window.ready === true, null, { timeout: 30000 });
-const TURBO = ['i3', 'boxer4', 'i5', 'i6', 'i6diesel', 'v6tt', 'v8tt'];
+const TURBO = ['i3', 'boxer4', 'i5', 'i6', 'i6diesel', 'v6tt', 'v8tt'];   // the old factory-turbo set
 const list = process.argv.slice(2).length ? process.argv.slice(2) : TURBO;
 console.log('engine    whine Hz / dB vs mix (3 pulls)         | lift: rpm spool surge tail depth dB-vs-mix(before/during)');
 for (const e of list) {

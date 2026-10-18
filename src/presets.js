@@ -47,7 +47,7 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const fin = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
 
 /** Bumped when the shape changes incompatibly. `normalisePreset` fills gaps. */
-export const PRESET_VERSION = 2;
+export const PRESET_VERSION = 3;
 
 /**
  * The sound half of a preset — everything that is not the machine.
@@ -82,6 +82,15 @@ export const DEFAULT_SOUND = Object.freeze({
     popDepth: 1.05,
     dynamics: 1,
   }),
+  /**
+   * A bolt-on, not part of any engine: off by default, and `enabled` is the
+   * toggle. `bov` is the blow-off valve's CAPACITY and decides "chiu" against
+   * "stu-stu-stu" — a big atmospheric valve empties the plenum so less can
+   * reverse through the compressor. `surge` is a taste trim on the flutter.
+   */
+  turbo: Object.freeze({
+    enabled: 0, inertia: 0.42, maxBoost: 1.1, whineOrder: 52, bov: 0.40, surge: 1.0,
+  }),
   /** 0 = standing outside the car, 1 = sitting in it. Continuous. */
   position: 0,
   volume: 0.7,
@@ -99,7 +108,8 @@ export const DEFAULT_SOUND = Object.freeze({
  *   min/max/step  range; `step` also decides how a value is displayed
  *   unit   how to read the number out. A real unit ('m', 'Hz', 'rpm', 'dB') is
  *          a suffix; '%' means the value is a 0..1-ish proportion and should be
- *          shown x100; '' means a plain number formatted by `step`.
+ *          shown x100; '' means a plain number formatted by `step`; 'bool' is a
+ *          0/1 switch.
  *   group  which panel it belongs to
  *   rebuild  true if changing it needs the voice graph rebuilt (wavetables,
  *            pipe lengths). Continuous params write to AudioParams instead.
@@ -139,12 +149,13 @@ export const PRESET_SCHEMA = Object.freeze([
   { path: 'engine.intake.q', label: 'Plenum Q', min: 0.5, max: 14, step: 0.1, unit: '', group: 'intake', rebuild: true },
   { path: 'engine.intake.level', label: 'Induction level', min: 0, max: 1.5, step: 0.01, unit: '%', group: 'intake', rebuild: true },
 
-  // --- turbo (only meaningful when engine.turbo is present) ---------------
-  { path: 'engine.turbo.inertia', label: 'Turbo inertia', min: 0.05, max: 2, step: 0.01, unit: 's', group: 'turbo', rebuild: false, needs: 'turbo' },
-  { path: 'engine.turbo.maxBoost', label: 'Max boost', min: 0.2, max: 3, step: 0.05, unit: 'bar', group: 'turbo', rebuild: false, needs: 'turbo' },
-  { path: 'engine.turbo.whineOrder', label: 'Blade order', min: 10, max: 120, step: 1, unit: '', group: 'turbo', rebuild: false, needs: 'turbo' },
-  { path: 'engine.turbo.bov', label: 'Blow-off capacity', min: 0, max: 1, step: 0.01, unit: '%', group: 'turbo', rebuild: false, needs: 'turbo' },
-  { path: 'engine.turbo.surge', label: 'Flutter trim', min: 0, max: 2, step: 0.01, unit: '%', group: 'turbo', rebuild: false, needs: 'turbo' },
+  // --- turbo: a bolt-on for any engine. `needs` rows only matter when on ---
+  { path: 'turbo.enabled', label: 'Turbo', min: 0, max: 1, step: 1, unit: 'bool', group: 'turbo', rebuild: false },
+  { path: 'turbo.inertia', label: 'Turbo inertia', min: 0.05, max: 2, step: 0.01, unit: 's', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.maxBoost', label: 'Max boost', min: 0.2, max: 3, step: 0.05, unit: 'bar', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.whineOrder', label: 'Blade order', min: 10, max: 120, step: 1, unit: '', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.bov', label: 'Blow-off capacity', min: 0, max: 1, step: 0.01, unit: '%', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.surge', label: 'Flutter trim', min: 0, max: 2, step: 0.01, unit: '%', group: 'turbo', rebuild: false, needs: 'turbo' },
 
   // --- mix ----------------------------------------------------------------
   { path: 'mix.exhaust', label: 'Exhaust', min: 0, max: 1.6, step: 0.01, unit: '%', group: 'mix', rebuild: false },
@@ -181,7 +192,7 @@ export const PRESET_GROUPS = Object.freeze([
   { id: 'pulse', label: 'Combustion pulse', note: 'The shape of one cylinder blowing down. Attack is the crack, decay is the tail, hardening is how much both sharpen under load.' },
   { id: 'exhaust', label: 'Exhaust', note: 'Waveguide geometry in metres. Header and collector lengths set the resonances; reflection and damping set how many survive.' },
   { id: 'intake', label: 'Intake', note: 'Airbox Helmholtz resonance. It does not track rpm — what tracks rpm is how hard it is excited.' },
-  { id: 'turbo', label: 'Turbo', note: 'Inertia is lag. Blow-off capacity trades the "chiu" against the "stu-stu-stu": a big valve empties the plenum so less can reverse through the wheel.' },
+  { id: 'turbo', label: 'Turbo', note: 'Bolts onto any engine. Inertia is lag. Blow-off capacity trades the "chiu" against the "stu-stu-stu": a big valve empties the plenum so less can reverse through the wheel.' },
   { id: 'mix', label: 'Voice mix', note: 'Balance between the voices.' },
   { id: 'tone', label: 'Tone', note: 'The fixed-frequency part of the response, plus how hard the compressor works.' },
   { id: 'fx', label: 'Space', note: 'Reverb, width, where the listener is, and output level.' },
@@ -279,6 +290,7 @@ export function normalisePreset(input) {
     tone: {},
     eq: [],
     fx: {},
+    turbo: {},
     position: 0,
     volume: 0.7,
   };
@@ -317,21 +329,20 @@ export function normalisePreset(input) {
     out.engine.exhaust.bankB = clamp(bankB, 0.2, 2.5);
   }
 
-  // Turbo is present-or-absent before it is adjustable: a schema row cannot
-  // create the section, because "naturally aspirated" is not a slider value.
-  const hasTurbo = e.turbo === null ? false
-    : (e.turbo && typeof e.turbo === 'object') ? true
-    : !!base.turbo;
-  out.engine.turbo = hasTurbo ? {} : null;
+  // Version 2 kept the turbo inside the engine, as `engine.turbo: null | {...}`.
+  // A file from then still loads: a turbo it carried comes back switched on.
+  const legacyTurbo = !(src.turbo && typeof src.turbo === 'object')
+    && e.turbo && typeof e.turbo === 'object' ? { ...e.turbo, enabled: 1 } : null;
+  const from = legacyTurbo ? { ...src, turbo: legacyTurbo } : src;
 
   // --- every scalar the schema knows about --------------------------------
   const defaults = { engine: base, ...DEFAULT_SOUND };
   for (const row of PRESET_SCHEMA) {
-    if (row.needs === 'turbo' && !hasTurbo) continue;
-    let v = getPath(src, row.path);
+    let v = getPath(from, row.path);
     if (!isFinite(Number(v))) v = getPath(defaults, row.path);
     if (!isFinite(Number(v))) v = row.min;
-    setPath(out, row.path, clamp(Number(v), row.min, row.max));
+    const n = clamp(Number(v), row.min, row.max);
+    setPath(out, row.path, row.unit === 'bool' ? Math.round(n) : n);
   }
 
   // The muffler is an array in the profile but addressed as `muffler.0..2`, so

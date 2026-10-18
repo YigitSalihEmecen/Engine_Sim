@@ -579,10 +579,13 @@ export class TransmissionLayer {
  * So the envelope is a sawtooth through a WaveShaper carrying an attack/decay
  * pulse curve — a per-cycle burst with a 6 % rise and an exponential tail — and
  * it drives two noise bands:
- *   - a body band (Q 3.5, 700-1900 Hz) — the "tu", the pitched chuff of gas
- *     reversing through the wheel;
- *   - an edge band (Q 2.2, 2.2-3.4 kHz) at much lower level and gated harder —
- *     the "st", the broadband click of the stall itself.
+ *   - a body band (Q 2.4, 1.3-2.2 kHz) — the "tu", the pitched chuff of gas
+ *     reversing through the wheel. The same envelope sweeps its centre up by
+ *     as much as 600 Hz per burst, so each "tu" chirps downward ("tiu");
+ *   - an edge band (Q 1.6, 3.2-4.4 kHz), quieter — the "st", the broadband
+ *     click of the stall itself.
+ * Both bypass the layer's own tone stage.
+ * Flow-grain noise jitters the burst rate so it is not a metronome.
  *
  * Surge is armed by ANY throttle closure while there is pressure to reverse,
  * which explicitly includes the ignition cut of a gear change. That is why a
@@ -629,6 +632,7 @@ export class TurboLayer {
     this.turboRpm = 0;
     this._vent = 0;          // 0..1 plenum-dumped fraction, decays back
     this._surge = 0;         // 0..1 how hard the compressor is stalling
+    this._climb = 0;         // 0..1 how hard the shaft is accelerating
     this._lastBov = -1e9;
     this._prevThrottle = 0;
     this._prevShifting = false;
@@ -752,16 +756,24 @@ export class TurboLayer {
     this.shaftOsc.connect(this.shaftDepth);
     this.shaftDepth.connect(this.whineGain.gain);
 
-    // Compressor flow hiss: broadband, centred just above the blade tone.
+    // Compressor flow rush: broadband white noise centred just above the blade
+    // tone and riding it up. Loudest while the wheel is ACCELERATING — a
+    // compressor spooling up runs far off its efficiency island, and that
+    // turbulence is the airy "whoosh" under the whistle. Roughened by the
+    // flow-grain noise so it rushes rather than hisses.
     this.hissBP = keep(ctx.createBiquadFilter());
     this.hissBP.type = 'bandpass';
     this.hissBP.frequency.value = 2000;
-    this.hissBP.Q.value = 1.6;
+    this.hissBP.Q.value = 0.8;
     this.hissGain = keep(ctx.createGain());
     this.hissGain.gain.value = 0;
     white.connect(this.hissBP);
     this.hissBP.connect(this.hissGain);
     this.hissGain.connect(this.bus);
+    this.hissGrain = keep(ctx.createGain());
+    this.hissGrain.gain.value = 0;
+    this.grainBP.connect(this.hissGrain);
+    this.hissGrain.connect(this.hissGain.gain);
 
     // Whine AIR: a narrow noise band riding on the blade tone. Half of what
     // the ear hears of a real turbo whistle is turbulent flow through the
@@ -851,10 +863,24 @@ export class TurboLayer {
     this.surgeShaper.oversample = '2x';
     this.surgeOsc.connect(this.surgeShaper);
 
+    // The flutter skips the layer's tone stage and goes straight to `out`: once
+    // it moved up, the -5.5 dB shelf and the 4.6 kHz lowpass cost it 4-7 dB
+    // against the mix (measured in render.html). The master tone stage and
+    // the dynamics' high band still tame it.
+    this.surgeBus = keep(ctx.createGain());
+    this.surgeBus.connect(this.out);
+
+    // Real surge is not a metronome: each stall waits on the plenum refilling,
+    // so the spacing wanders. The flow-grain noise nudges the burst rate.
+    this.surgeJitter = keep(ctx.createGain());
+    this.surgeJitter.gain.value = 0;
+    this.grainBP.connect(this.surgeJitter);
+    this.surgeJitter.connect(this.surgeOsc.frequency);
+
     // Body band — the "tu".
     this.surgeBody = keep(ctx.createBiquadFilter());
     this.surgeBody.type = 'bandpass';
-    this.surgeBody.frequency.value = 1200;
+    this.surgeBody.frequency.value = 1800;
     this.surgeBody.Q.value = 2.4;
     this.surgeBodyAM = keep(ctx.createGain());
     this.surgeBodyAM.gain.value = 0;
@@ -863,18 +889,25 @@ export class TurboLayer {
     white.connect(this.surgeBody);
     this.surgeBody.connect(this.surgeBodyAM);
     this.surgeBodyAM.connect(this.surgeBodyLvl);
-    this.surgeBodyLvl.connect(this.bus);
+    this.surgeBodyLvl.connect(this.surgeBus);
     this.surgeBodyDepth = keep(ctx.createGain());
     this.surgeBodyDepth.gain.value = 1;
     this.surgeShaper.connect(this.surgeBodyDepth);
     this.surgeBodyDepth.connect(this.surgeBodyAM.gain);
+    // Each burst also CHIRPS: the same envelope pushes the band up at the stall
+    // and lets it fall through the tail — the jet is fastest at the instant
+    // the flow reverses. That falling pitch is the "tiu" inside the "stu".
+    this.surgeChirp = keep(ctx.createGain());
+    this.surgeChirp.gain.value = 0;
+    this.surgeShaper.connect(this.surgeChirp);
+    this.surgeChirp.connect(this.surgeBody.frequency);
 
     // Edge band — the "st". Deliberately quiet: this is the band that would
     // make the flutter harsh if it were level-matched to the body.
     this.surgeEdge = keep(ctx.createBiquadFilter());
     this.surgeEdge.type = 'bandpass';
-    this.surgeEdge.frequency.value = 2600;
-    this.surgeEdge.Q.value = 2.2;
+    this.surgeEdge.frequency.value = 3800;
+    this.surgeEdge.Q.value = 1.6;
     this.surgeEdgeAM = keep(ctx.createGain());
     this.surgeEdgeAM.gain.value = 0;
     this.surgeEdgeLvl = keep(ctx.createGain());
@@ -882,7 +915,7 @@ export class TurboLayer {
     white.connect(this.surgeEdge);
     this.surgeEdge.connect(this.surgeEdgeAM);
     this.surgeEdgeAM.connect(this.surgeEdgeLvl);
-    this.surgeEdgeLvl.connect(this.bus);
+    this.surgeEdgeLvl.connect(this.surgeBus);
     this.surgeEdgeDepth = keep(ctx.createGain());
     this.surgeEdgeDepth.gain.value = 1;
     this.surgeShaper.connect(this.surgeEdgeDepth);
@@ -944,6 +977,10 @@ export class TurboLayer {
     // trailing throttle. That difference is what gives each upshift its own
     // whistle swoop instead of one flat tone across the whole gearbox.
     const coasting = throttle < 0.12;
+    // How far the wheel is below where the exhaust is pushing it: >0 while it
+    // spools up. Smoothed so it swells and settles rather than switching.
+    const climbNow = clamp((drive - this.spool) * 3, 0, 1);
+    this._climb += (climbNow - this._climb) * Math.min(1, dt / 0.08);
     const tau = drive > this.spool
       ? this.inertia * 1.1
       : this.inertia * (coasting ? 0.45 : 1.3);   // was 0.75 / 1.9: the whine and rush hung on after a lift
@@ -1034,7 +1071,11 @@ export class TurboLayer {
     setF(this.wgOsc.frequency, 26 + 30 * nearCeiling + 8 * Math.sin(now * 3.1), now, 0.05, 34);
     setF(this.wgBP.frequency, 1200 + 1100 * this.spool, now, TC, 1500);
     setT(this.wgLevel.gain, 0.34 * chatter, now, TC);
-    setT(this.hissGain.gain, 0.10 * aero * (0.45 + 0.55 * flow), now, TC);
+    const rush = 0.10 * aero * (0.45 + 0.55 * flow)
+               + 0.22 * this._climb * Math.sqrt(this.spool) * (0.4 + 0.6 * flow);
+    setT(this.hissGain.gain, rush, now, TC);
+    setT(this.hissGrain.gain, rush * 0.65, now, 0.05);
+    setF(this.hissBP.frequency, clamp(whineHz * 2.2, 900, 4200), now, TC, 2000);
 
     // --- blow-off valve -----------------------------------------------------
     const bov = clamp(fin(p.evBov, 0), 0, 1);
@@ -1132,12 +1173,17 @@ export class TurboLayer {
     if (limiter && stall > 0.06) {
       this._surge = Math.max(this._surge, stall * 0.7);
     }
-    // Reopening kills it at once — but only an actual reopening (the pedal
-    // coming back UP, or past half). A partial lift held at 0.3 is still a
-    // lift, and lets the flutter play out over its own short decay.
+    // Reopening ends it — but only an actual reopening (the pedal coming back
+    // UP, or past half). A partial lift held at 0.3 is still a lift, and lets
+    // the flutter play out over its own short decay.
+    //
+    // And it ENDS it, over a few cycles, rather than cutting it. This was
+    // `*= 0.25` PER FRAME, which killed the flutter dead mid-burst the instant
+    // an automatic upshift finished with the pedal still down. ~110 ms lets
+    // the last two or three bursts tail off.
     const reopening = throttle > 0.5 || throttle > this._prevThrottle + 0.05;
     if (!closed && !shifting && !limiter && reopening) {
-      this._surge *= 0.25;
+      this._surge *= Math.exp(-dt / 0.11);
     }
 
     const s = clamp(this._surge, 0, 1);
@@ -1156,8 +1202,14 @@ export class TurboLayer {
     // a hiss. The edge stays up where the "st" is.
     // 520-1170 → 760-1660 Hz: a brighter, higher "tu" — still a chuff, not
     // the hiss it was at 700-1900 with Q 3.5 — and a crisper "st".
-    setF(this.surgeBody.frequency, 760 + 900 * s, now, 0.04, 1100);
-    setF(this.surgeEdge.frequency, 2400 + 1000 * s, now, 0.04, 2900);
+    // 760-1660 → 1300-2200 Hz: down there it read as a low chuff that
+    // sounded like something other than a turbo. Not higher: above ~2 kHz the
+    // dynamics' fast high band (fx.js) holds it down and it loses its level.
+    // The burst's chirp rides on top (up to +600 Hz at the stall).
+    setF(this.surgeBody.frequency, 1300 + 900 * s, now, 0.04, 1800);
+    setF(this.surgeEdge.frequency, 3200 + 1200 * s, now, 0.04, 3800);
+    setT(this.surgeChirp.gain, 600 * s, now, 0.04);
+    setT(this.surgeJitter.gain, 18 * s, now, 0.04);
 
     const amp = this.surgeLevel * this.surgeTrim;
     // The bandpasses cost most of the noise that goes through them, so these
@@ -1168,7 +1220,19 @@ export class TurboLayer {
     setT(this.surgeBodyLvl.gain, 5.6 * amp * s, now, 0.03);
     // The edge band is gated on s^2 so a gentle stall is all body and only a
     // hard one gets the click. Level-matched by ear-safety, not by energy.
-    setT(this.surgeEdgeLvl.gain, 1.8 * amp * s, now, 0.03);
+    // 1.8 → 0.7: it no longer goes through the layer's tone stage.
+    setT(this.surgeEdgeLvl.gain, 0.7 * amp * s, now, 0.03);
+  }
+
+  /** Fade out and stop — for taking the turbo off a running engine. */
+  release() {
+    const now = fin(this.ctx.currentTime, 0);
+    this.enabled = false;
+    this.out.gain.setTargetAtTime(0, now, 0.07);
+    for (const src of this._srcs) {
+      try { src.stop(now + 0.5); } catch (e) { /* never started */ }
+    }
+    this._srcs.length = 0;
   }
 
   /**

@@ -20,13 +20,10 @@
  *   gears         forward gears this engine is built with. The ratios are not
  *                 stored: gearbox.js designs them for the engine AND the vehicle
  *                 it is fitted to, so swapping engines never strands a car
- *   turbo         null, or { inertia, maxBoost, whineOrder, bov, surge }.
- *                 `bov` is the blow-off valve's CAPACITY, 0..1, and it is the
- *                 one number that decides whether a car goes "chiu" or
- *                 "stu-stu-stu" on a lift: a big atmospheric valve empties the
- *                 plenum so nothing is left to reverse through the compressor,
- *                 a small or recirculating one leaves pressure standing and the
- *                 compressor stalls instead. `surge` is a taste trim on top.
+ *
+ * There is no turbo here. A turbo is a bolt-on that any engine can carry, so it
+ * lives in the preset's own `turbo` section (presets.js) and is toggled with
+ * `EngineSim.setTurbo()`.
  */
 
 const C = 343;   // speed of sound, m/s (hot exhaust gas is faster; see gasTempFactor)
@@ -50,12 +47,11 @@ export const ENGINE_PROFILES = {
     // have the same run to the collector.
     exhaust: { bank: 0.95, bankB: 1.10, collector: 0.55, reflection: 0.50, damping: 0.34, muffler: [0.16, 0.11, 0.075] },
     intake: { helmholtz: 165, q: 6.0, level: 0.40 },
-    turbo: null,
     voice: 0.92,
   },
 
   i3: {
-    label: 'Inline-3 1.0 turbo',
+    label: 'Inline-3 1.0',
     cylinders: 3, firingOrder: [1, 2, 3], banks: [[1, 2, 3]],
     idleRpm: 850, redlineRpm: 6500, peakTorque: 200, peakTorqueRpm: 2200,
     gears: 5,
@@ -63,7 +59,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 34, decay: 5.5, hardness: 0.62, jitter: 1.6 },
     exhaust: { bank: 1.45, collector: 1.10, reflection: 0.55, damping: 0.42, muffler: [0.32, 0.21, 0.14] },
     intake: { helmholtz: 105, q: 5.5, level: 0.34 },
-    turbo: { inertia: 0.34, maxBoost: 1.2, whineOrder: 62, bov: 0.30, surge: 1.0 },
     voice: 1.00,
   },
 
@@ -86,7 +81,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 18, decay: 3.0, hardness: 0.70, jitter: 1.2 },
     exhaust: { bank: 1.05, collector: 0.80, reflection: 0.52, damping: 0.30, muffler: [0.20, 0.13, 0.09] },
     intake: { helmholtz: 145, q: 6.6, level: 0.46 },
-    turbo: null,
     voice: 0.94,
   },
 
@@ -99,7 +93,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 38, decay: 6.2, hardness: 0.66, jitter: 1.1 },
     exhaust: { bank: 1.30, collector: 1.05, reflection: 0.52, damping: 0.44, muffler: [0.30, 0.19, 0.12] },
     intake: { helmholtz: 118, q: 6.0, level: 0.32 },
-    turbo: null,
     voice: 0.96,
   },
 
@@ -114,7 +107,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 32, decay: 5.4, hardness: 0.60, jitter: 2.2 },
     exhaust: { bank: 1.62, bankB: 0.98, collector: 1.15, reflection: 0.58, damping: 0.40, muffler: [0.34, 0.22, 0.15] },
     intake: { helmholtz: 100, q: 5.2, level: 0.36 },
-    turbo: { inertia: 0.40, maxBoost: 1.0, whineOrder: 58, bov: 0.80, surge: 1.0 },
     voice: 1.00,
   },
 
@@ -127,7 +119,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 33, decay: 5.6, hardness: 0.64, jitter: 1.5 },
     exhaust: { bank: 1.38, collector: 1.08, reflection: 0.56, damping: 0.41, muffler: [0.31, 0.20, 0.13] },
     intake: { helmholtz: 108, q: 5.6, level: 0.34 },
-    turbo: { inertia: 0.46, maxBoost: 1.1, whineOrder: 54, bov: 0.35, surge: 1.0 },
     voice: 1.00,
   },
 
@@ -140,12 +131,11 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 30, decay: 5.0, hardness: 0.58, jitter: 0.7 },   // inherently balanced
     exhaust: { bank: 1.55, collector: 1.20, reflection: 0.54, damping: 0.38, muffler: [0.33, 0.21, 0.14] },
     intake: { helmholtz: 95, q: 6.4, level: 0.33 },
-    turbo: { inertia: 0.52, maxBoost: 1.0, whineOrder: 48, bov: 0.25, surge: 1.1 },
     voice: 0.98,
   },
 
   i6diesel: {
-    label: 'Inline-6 turbo-diesel 6.7',
+    label: 'Inline-6 diesel 6.7',
     cylinders: 6, firingOrder: [1, 5, 3, 6, 2, 4], banks: [[1, 2, 3, 4, 5, 6]],
     idleRpm: 640, redlineRpm: 4600, peakTorque: 950, peakTorqueRpm: 1900,
     gears: 8,
@@ -159,9 +149,6 @@ export const ENGINE_PROFILES = {
     exhaust: { bank: 1.35, collector: 1.65, reflection: 0.52, damping: 0.60, muffler: [0.46, 0.30, 0.20] },
     // No throttle plate, so there is very little induction noise to hear.
     intake: { helmholtz: 88, q: 4.6, level: 0.24 },
-    // A big variable-geometry turbo: very laggy, high boost, and no atmospheric
-    // blow-off valve at all, so what you hear on a lift is the chatter.
-    turbo: { inertia: 0.95, maxBoost: 1.5, whineOrder: 38, bov: 0.15, surge: 0.55 },
     voice: 1.02,
   },
 
@@ -174,12 +161,11 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 31, decay: 5.2, hardness: 0.61, jitter: 1.3 },
     exhaust: { bank: 1.20, collector: 1.05, reflection: 0.56, damping: 0.40, muffler: [0.30, 0.20, 0.13] },
     intake: { helmholtz: 102, q: 5.8, level: 0.33 },
-    turbo: null,
     voice: 0.98,
   },
 
   v6tt: {
-    label: 'V6 twin-turbo 3.8',
+    label: 'V6 3.8 twin-turbo build',
     cylinders: 6, firingOrder: [1, 4, 2, 5, 3, 6], banks: [[1, 2, 3], [4, 5, 6]],
     idleRpm: 750, redlineRpm: 7100, peakTorque: 640, peakTorqueRpm: 3600,
     gears: 7,
@@ -193,9 +179,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 29, decay: 5.0, hardness: 0.60, jitter: 1.2 },
     exhaust: { bank: 0.95, collector: 1.30, reflection: 0.50, damping: 0.52, muffler: [0.34, 0.23, 0.15] },
     intake: { helmholtz: 112, q: 5.4, level: 0.30 },
-    // Two small turbos, one per bank: low inertia, so they spool fast and the
-    // whistle tracks the engine closely.
-    turbo: { inertia: 0.30, maxBoost: 1.15, whineOrder: 56, bov: 0.55, surge: 1.0 },
     voice: 0.98,
   },
 
@@ -208,7 +191,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 44, decay: 7.0, hardness: 0.74, jitter: 0.9 },
     exhaust: { bank: 0.85, collector: 0.72, reflection: 0.48, damping: 0.30, muffler: [0.22, 0.15, 0.10] },
     intake: { helmholtz: 138, q: 7.2, level: 0.42 },   // that induction howl
-    turbo: null,
     voice: 1.00,
   },
 
@@ -225,12 +207,11 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 26, decay: 4.4, hardness: 0.55, jitter: 2.6 },
     exhaust: { bank: 1.75, collector: 1.35, reflection: 0.63, damping: 0.34, muffler: [0.40, 0.26, 0.17] },
     intake: { helmholtz: 78, q: 5.0, level: 0.30 },
-    turbo: null,
     voice: 1.06,
   },
 
   v8tt: {
-    label: 'V8 twin-turbo 4.0',
+    label: 'V8 4.0 twin-turbo build',
     cylinders: 8, firingOrder: [1, 8, 7, 3, 6, 5, 4, 2],
     banks: [[1, 2, 3, 4], [5, 6, 7, 8]],
     // Same cross-plane geometry as v8cross, so it keeps the burble \u2014 but the
@@ -243,7 +224,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 24, decay: 4.2, hardness: 0.54, jitter: 2.4 },
     exhaust: { bank: 1.10, collector: 1.55, reflection: 0.58, damping: 0.55, muffler: [0.42, 0.28, 0.18] },
     intake: { helmholtz: 74, q: 4.8, level: 0.28 },
-    turbo: { inertia: 0.44, maxBoost: 1.10, whineOrder: 44, bov: 0.45, surge: 1.0 },
     voice: 1.05,
   },
 
@@ -259,7 +239,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 52, decay: 8.4, hardness: 0.82, jitter: 0.6 },
     exhaust: { bank: 0.78, collector: 0.62, reflection: 0.44, damping: 0.26, muffler: [0.18, 0.12, 0.08] },
     intake: { helmholtz: 155, q: 7.8, level: 0.44 },
-    turbo: null,
     voice: 1.00,
   },
 
@@ -273,7 +252,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 48, decay: 7.8, hardness: 0.80, jitter: 0.8 },
     exhaust: { bank: 0.82, collector: 0.66, reflection: 0.46, damping: 0.27, muffler: [0.19, 0.13, 0.09] },
     intake: { helmholtz: 148, q: 7.4, level: 0.45 },
-    turbo: null,
     voice: 1.02,
   },
 
@@ -287,7 +265,6 @@ export const ENGINE_PROFILES = {
     pulse: { attack: 46, decay: 7.4, hardness: 0.78, jitter: 0.5 },
     exhaust: { bank: 0.90, collector: 0.70, reflection: 0.47, damping: 0.28, muffler: [0.20, 0.14, 0.09] },
     intake: { helmholtz: 142, q: 7.0, level: 0.44 },
-    turbo: null,
     voice: 1.04,
   },
 };

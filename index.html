@@ -626,6 +626,7 @@
           </div>
           <button class="btn sm" id="dn" title="Shift down (Q)">− Gear</button>
           <button class="btn sm" id="up" title="Shift up (E)">Gear +</button>
+          <button class="btn sm" id="turboBtn" title="Bolt a turbo onto any engine (T)">Turbo</button>
           <div class="seg" role="group" aria-label="Listener">
             <button id="pExt" class="on">Outside</button><button id="pInt">Cabin</button>
           </div>
@@ -646,7 +647,7 @@
         <div class="keys">
           <div><kbd>W</kbd>throttle <kbd>S</kbd>brake</div>
           <div><kbd>E</kbd>up <kbd>Q</kbd>down <kbd>A</kbd>auto</div>
-          <div><kbd>C</kbd>cabin <kbd>Space</kbd>start</div>
+          <div><kbd>C</kbd>cabin <kbd>T</kbd>turbo <kbd>Space</kbd>start</div>
         </div>
       </nav>
 
@@ -702,7 +703,7 @@
             <div class="r"><div class="k">Chassis</div><div class="v" id="hChassis">—</div></div>
             <div class="r"><div class="k">Voices</div><div class="v" id="hVoices">—</div></div>
           </div>
-          <p class="note" style="margin-top:14px">Lift above 3000 rpm after a hard run for bangs · <span id="turboHint"></span></p>
+          <p class="note" style="margin-top:14px">Lift above 3000 rpm after a hard run for bangs · the turbo bolts onto any engine</p>
         </div>
 
         <div class="pane" data-p="preset">
@@ -734,6 +735,7 @@
       <button class="dv-btn" id="dvExit">&larr; Console</button>
       <button class="dv-btn pri" id="dvPower">Start</button>
       <button class="dv-btn" id="dvAuto">Auto</button>
+      <button class="dv-btn" id="dvTurbo">Turbo</button>
       <div class="dv-spacer"></div>
       <span class="dv-tag" id="dvTag">—</span>
       <button class="dv-btn" id="dvSwap" title="Swap which side the gate is on">Swap sides</button>
@@ -850,7 +852,13 @@
       if (key && key.startsWith('user:')) {
         const rec = readStore()[key.slice(5)];
         if (rec) sim.loadPreset(rec);
-      } else sim.loadPreset(key);
+      } else {
+        // A stock preset is an engine with the default sound. The turbo is a
+        // bolt-on, so switching engines keeps it rather than resetting it.
+        const turbo = sim.getState().turbo;
+        sim.loadPreset(key);
+        sim.setTurbo(turbo);
+      }
       afterPresetChange();
     }
     refreshPresetList('v8cross');
@@ -859,8 +867,8 @@
     function sync() {
       // The LIVE engine section, not the stock profile — the tuning pane edits it.
       const p = sim.getPreset().engine, st = sim.getState();
-      $('boostRow').style.display = p.turbo ? '' : 'none';
-      $('hEngine').textContent = p.cylinders + ' cyl · ' + (p.turbo ? 'turbo' : 'NA');
+      $('boostRow').style.display = st.turbo ? '' : 'none';
+      $('hEngine').textContent = p.cylinders + ' cyl · ' + (st.turbo ? 'turbo' : 'NA');
       $('hChassis').textContent = st.gearbox + ' · ' + st.gearCount + '-speed';
       $('hVoices').textContent = Object.keys(sim.mix).length + ' buses · ' + p.banks.length + ' bank' + (p.banks.length > 1 ? 's' : '');
       $('instrR').textContent = st.engineLabel + ' · limit ' + (p.redlineRpm / 1000).toFixed(1) + 'k';
@@ -876,7 +884,8 @@
 
     /* ---- every control is generated from PRESET_SCHEMA ----
        A parameter added in presets.js appears here without this file being
-       touched. `rebuild` rows are debounced; `needs: 'turbo'` rows hide on NA. */
+       touched. `rebuild` rows are debounced; `needs: 'turbo'` rows hide while the
+       turbo is off; `unit: 'bool'` rows are an on/off button. */
     const controls = new Map();
     const fmtValue = (row, v) => {
       if (row.unit === 'dB') return (v > 0 ? '+' : '') + v.toFixed(1).replace(/\.0$/, '');
@@ -892,6 +901,15 @@
     function makeControl(row, parent) {
       const el = document.createElement('div');
       el.className = 'ctl';
+      if (row.unit === 'bool') {
+        el.innerHTML = '<span class="lbl"></span><button class="btn sm"></button>';
+        el.querySelector('.lbl').textContent = row.label;
+        const btn = el.querySelector('button');
+        btn.onclick = () => setBool(row.path, !(sim.getParam(row.path) >= 0.5));
+        parent.appendChild(el);
+        controls.set(row.path, { input: btn, out: btn, row, el, bool: true });
+        return;
+      }
       el.innerHTML = '<span class="lbl"></span><span class="val"></span>' +
         `<input type="range" min="${row.min}" max="${row.max}" step="${row.step}" aria-label="${row.label}">`;
       const lbl = el.querySelector('.lbl');
@@ -995,19 +1013,29 @@
 
     function syncControls() {
       const preset = sim.getPreset();
-      const hasTurbo = !!preset.engine.turbo;
+      const hasTurbo = preset.turbo.enabled >= 0.5;
       for (const [path, c] of controls) {
         if (c.row.needs === 'turbo') { c.el.style.display = hasTurbo ? '' : 'none'; if (!hasTurbo) continue; }
         const v = sim.getParam(path);
         if (v == null) continue;
+        if (c.bool) { c.input.classList.toggle('on', v >= 0.5); c.input.textContent = v >= 0.5 ? 'On' : 'Off'; continue; }
         c.input.value = v;
         if (!c.eq) paintRange(c.input);
         c.out.textContent = c.eq ? v.toFixed(1).replace(/\.0$/, '') : fmtValue(c.row, v);
       }
-      for (const box of document.querySelectorAll('[data-group="turbo"]')) box.style.display = hasTurbo ? '' : 'none';
+      $('turboBtn').classList.toggle('on', hasTurbo);
+      $('dvTurbo').classList.toggle('on', hasTurbo);
       $('presetName').textContent = preset.label + ' · ' + preset.id;
       $('pName').value = preset.label;
     }
+    /** A switch changes which rows apply, so it resyncs the whole console. */
+    function setBool(path, on) {
+      sim.setParam(path, on ? 1 : 0);
+      syncControls();
+      sync();
+      $('pJSON').value = sim.exportPreset();
+    }
+    const toggleTurbo = () => setBool('turbo.enabled', !sim.getState().turbo);
     function afterPresetChange() { syncControls(); drawOrders(); sync(); $('pJSON').value = sim.exportPreset(); }
 
     /* ---- preset pane ---- */
@@ -1083,7 +1111,7 @@
 
     /* ---- keyboard ---- */
     const keys = new Set();
-    const HANDLED = ['w', 'a', 's', 'd', 'q', 'e', 'c', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
+    const HANDLED = ['w', 'a', 's', 'd', 'q', 'e', 'c', 't', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
     addEventListener('keydown', ev => {
       const k = ev.key.toLowerCase();
       // Guard BEFORE preventDefault: space on a button, arrows on a slider are that control's input.
@@ -1094,6 +1122,7 @@
       if (k === 'q' || k === 'arrowleft') sim.shiftDown();
       if (k === 'a') setAuto(!sim.getState().auto);
       if (k === 'c') setPos(sim.getState().perspective === 'exterior' ? 'interior' : 'exterior');
+      if (k === 't') toggleTurbo();
       if (k === ' ') togglePower();
     });
     addEventListener('keyup', ev => keys.delete(ev.key.toLowerCase()));
@@ -1144,10 +1173,10 @@
     $('manBtn').onclick = () => setAuto(false);
     $('up').onclick = () => sim.shiftUp();
     $('dn').onclick = () => sim.shiftDown();
+    $('turboBtn').onclick = toggleTurbo;
     $('pExt').onclick = () => setPos('exterior');
     $('pInt').onclick = () => setPos('interior');
     $('status').textContent = 'press start';
-    $('turboHint').textContent = 'turbocharged: ' + EngineSim.engines().filter(e => e.turbo).map(e => e.label).join(' · ');
     sync();
 
     /* ---- hold-to-rev buttons: the console's own pedals, for a mouse.
@@ -1305,6 +1334,7 @@
     $('dvExit').onclick = () => setDriving(false);
     $('dvPower').onclick = togglePower;
     $('dvAuto').onclick = () => setAuto(!sim.getState().auto);
+    $('dvTurbo').onclick = toggleTurbo;
     $('dvSwap').onclick = () => $('drive').classList.toggle('swap');
     $('dvLeds').innerHTML = Array.from({ length: 20 }, () => '<i></i>').join('');
     const ledEls = [...$('dvLeds').children];
