@@ -995,16 +995,22 @@ export class TurboLayer {
     this.fwBP = keep(ctx.createBiquadFilter());
     this.fwBP.type = 'bandpass';
     this.fwBP.frequency.value = 7000;
-    this.fwBP.Q.value = 9;
+    // Q 9 → 3 and the tone down to a faint core: a narrow band plus a pure
+    // sine at full level read as metallic. Wide air with a hint of pitch is
+    // the "tsss".
+    this.fwBP.Q.value = 3;
     this.fwNoise = keep(ctx.createGain());
-    this.fwNoise.gain.value = 2.2;           // the narrow band costs most of the noise
+    this.fwNoise.gain.value = 3.2;           // the band still costs most of the noise
+    this.fwTone = keep(ctx.createGain());
+    this.fwTone.gain.value = 0.2;
     white.connect(this.fwBP);
     this.fwBP.connect(this.fwNoise);
     this.hiSurgeAM = keep(ctx.createGain());
     this.hiSurgeAM.gain.value = 0;
     this.hiSurgeLvl = keep(ctx.createGain());
     this.hiSurgeLvl.gain.value = 0;
-    this.fwOsc.connect(this.hiSurgeAM);
+    this.fwOsc.connect(this.fwTone);
+    this.fwTone.connect(this.hiSurgeAM);
     this.fwNoise.connect(this.hiSurgeAM);
     this.hiSurgeAM.connect(this.hiSurgeLvl);
     this.hiSurgeLvl.connect(this.out);
@@ -1248,7 +1254,7 @@ export class TurboLayer {
    */
   _stepSurge(now, dt, throttle, rpmNorm, shifting, p) {
     const BODY = 6.5;   // 5.6 → 6.5: makes up the dynamics' high band at 2.4-3.8 kHz
-    const FW = 2.0;     // flutter whistle: ~+8 dB in 5.5-10 kHz over a lift without it (render.html `hi`)
+    const FW = 1.6;     // flutter whistle level (render.html `hi` measures it)
     // The plenum drains as the surge cycles vent it, so the stall weakens even
     // if the throttle stays shut. ~0.55 s to fall to a third.
     // 0.42 → 0.65 → 0.26: long enough for a few clear "stu"s, short enough
@@ -1413,8 +1419,8 @@ export class TurboLayer {
     setF(this.fwOsc.frequency, fw, now, 0.03, 7000);
     setF(this.fwBP.frequency, fw, now, 0.03, 7000);
     setT(this.hiSurgeLvl.gain, FW * amp * s * engineMix, now, 0.03);
-    setT(this.hiChirp.gain, 1500 * s, now, 0.04);
-    setT(this.hiChirpN.gain, 1500 * s, now, 0.04);
+    setT(this.hiChirp.gain, 900 * s, now, 0.04);
+    setT(this.hiChirpN.gain, 900 * s, now, 0.04);
   }
 
   /** Fade out and stop — for taking the turbo off a running engine. */
