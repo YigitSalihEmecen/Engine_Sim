@@ -62,7 +62,7 @@ engine_sim/
 │   └── CONTRACT.md                module interface contract
 └── test/
     ├── mock-audio.mjs             strict Web Audio mock + graph audit
-    ├── run.mjs                    unit + sweep suite (359 checks)
+    ├── run.mjs                    unit + sweep suite (395 checks)
     ├── drive.mjs                  driving-behaviour suite
     └── spectrum.mjs               ANALYTIC spectrum of the exhaust chain
 ```
@@ -82,7 +82,7 @@ Commands:
 ```
 npm start                   # dev server on :8000  (= node tools/serve.mjs)
 npm test                    # run.mjs + drive.mjs
-node test/run.mjs           # 359 checks, exits non-zero on failure
+node test/run.mjs           # 395 checks, exits non-zero on failure
 node test/drive.mjs         # driving behaviour, 80 engine×vehicle combos
 node test/run.mjs orders    # run one suite by substring
 node test/spectrum.mjs      # harshness table, all engines
@@ -185,8 +185,9 @@ TransientBank combustion bus ──(popSend 1.05)────────→ Exh
                                                               ↓ bus: exhaust
 intake wavetable osc ×2 → IntakeResonator (Helmholtz + turbulence)  ↓ bus: intake
 TransmissionLayer mesh whine = driveshaft rpm × engaged gear teeth     ↓ transmission
-TurboLayer  grain-saturated spool whine, sidebands, chatter, BOV, surge
+TurboLayer  (only while setTurbo(true)) spool whine, flow rush, chatter, BOV
             → airLP(4.6 k) → airShelf(−5.5 dB @2.6 k)                  ↓ turbo
+            surge ("stu-stu") bypasses that tone stage → out           ↓ turbo
 TransientBank     mechanical bus only (clunks, thumps, clicks)         ↓ transients
 SubLayer          octave-shifted chest-band sine + saturation          ↓ sub
 CharacterModulator → osc.detune (cents) and busses.exhaust.gain (tremolo)
@@ -200,9 +201,9 @@ CharacterModulator → osc.detune (cents) and busses.exhaust.gain (tremolo)
 
 Default mix: `exhaust 1.0, intake 0.75, transmission 0.45, turbo 0.49,
 transients 0.42, sub 0.9` — and it lives in `presets.js`, not here, so an engine
-can carry its own balance. Steady state ≈ **264 nodes** naturally aspirated,
-**303** turbocharged; ~29 AudioParam writes/frame, **zero per-frame
-allocation**.
+can carry its own balance. Steady state ≈ **298 nodes** with the turbo off,
+**347** with it on (mock graph, wavetable source); ~29 AudioParam writes/frame,
+**zero per-frame allocation**.
 
 ### Module notes
 
@@ -259,6 +260,17 @@ allocation**.
   a boosted car flutters on every upshift — and by any fast large closure that
   does not reach idle, because what stalls a compressor is the flow collapsing,
   not the pedal reaching a particular number.
+  Since ledger #64 the bands sit at **1.3-2.2 kHz (body) and 3.2-4.4 kHz
+  (edge)** and **bypass the layer's tone stage** (`surgeBus` → `out`). Not
+  higher: above ~2 kHz the dynamics' fast high band holds the flutter down —
+  measured in `render.html`, a 1.5-2.8 kHz body lost 4-7 dB against the mix.
+  The burst envelope also sweeps the body up by `600·s` Hz (`surgeChirp`), so
+  each "tu" chirps down, and grain noise jitters the burst rate
+  (`surgeJitter`). **A reopening throttle fades the surge over ~110 ms**
+  (`exp(−dt/0.11)`) instead of `*= 0.25` per frame (ledger #65).
+  The flow **rush** (`hissBP`, Q 0.8, tracking `2.2 × whine`) carries a
+  `_climb` term — how far the shaft is below its drive — so a spool-up has an
+  airy, grain-modulated whoosh under the whistle.
   It is gated on **shaft speed, not boost** (ledger #44). Boost goes with the
   square of tip speed, so a boost threshold is a squared threshold; on the old
   gate the flutter needed ~0.85 of throttle and, measured over eight lifts per
@@ -596,7 +608,8 @@ sim.setThrottle(1); sim.update(dt);   // per frame
 | `loadPreset(id \| object \| json)` | **the whole sound** — engine, mix, tone, EQ, space. See §6. |
 | `getPreset()` · `exportPreset()` | current sound as an object / as pretty JSON |
 | `setParam(path, v)` · `getParam(path)` | one parameter by dotted path; returns the clamped value or `null` |
-| `setEngineType(id)` | 16 profiles, hot-swappable while driving. Keeps the current mix/EQ — use `loadPreset` to bring those too. |
+| `setEngineType(id)` | 16 profiles, hot-swappable while driving. Keeps the current mix/EQ/turbo — use `loadPreset` to bring those too. |
+| `setTurbo(bool)` · `opts.turbo` | bolt a turbo onto any engine, live. Builds/releases only the turbo layer. See §5a. |
 | `setVehicle(id)` | 5 presets; **road speed is preserved** across the swap |
 | `setThrottle/setBrake/setClutch(0..1)` | |
 | `shiftUp() / shiftDown() / setGear(n)` | returns `false` if refused (would over-rev) |
@@ -619,8 +632,7 @@ sim.setThrottle(1); sim.update(dt);   // per frame
 **`_lastParams` is private and callers must not read it.** Everything a host
 needs is on `getState()` (which includes `gearRatio`, `wheelRpm`, `load`,
 `overrun`, `rpmNorm`, `dRpm`, `volume`, `preset`, and `turbo` — whether the
-LOADED sound has one, which is not the same question as whether the stock
-profile for `engine` does) and `getEvents()`. `index.html` was
+turbo is bolted on right now) and `getEvents()`. `index.html` was
 reaching into it for the gear ratio and no longer does — it is now a consumer of
 the public API only, which is deliberate: it is the proof the API is sufficient.
 
@@ -631,7 +643,9 @@ output rather than fanning it out.
 Profiles (16): `vtwin i3 rotary2 i4 boxer4 i5 i6 i6diesel v6 v6tt flat6 v8cross
 v8tt v8flat v10 v12`.
 Vehicles: `hatch sports supercar muscle truck`.
-Turbocharged: **i3, boxer4, i5, i6, i6diesel, v6tt, v8tt**.
+No profile has a turbo — see §5a. `v6tt` and `v8tt` keep their cool, heavily
+damped "twin-turbo build" exhausts (a property of the engine) and are the
+natural ones to bolt it onto.
 
 The five newest, and what each is for:
 
@@ -639,9 +653,30 @@ The five newest, and what each is for:
 | --- | --- |
 | `vtwin` | 90° V-twin, pin offset −90° → fires at 0/270°. Two cylinders in two pipes with a 270/450 split, so **50.8 % half-order energy** — the lumpiest thing here. Tiny inertia (0.055), snaps to the limiter. |
 | `rotary2` | Two-rotor Wankel. `cylinders: 4` is the *pulse count* per 720° of eccentric shaft, not pistons. Geometry matches an I4 (0 % half-orders); the sound comes from the pulse shape — slow rise, very long tail, so consecutive pulses **overlap**. That overlap is the "braap". |
-| `v6tt` | Twin-turbo V6. Low turbo inertia (0.30) so it spools fast. |
+| `v6tt` | V6 with a twin-turbo build's exhaust: cool gas, short headers, heavy damping. |
 | `v8tt` | Same cross-plane geometry as `v8cross`, so it keeps the burble — but the turbines cool the gas and damp the pipes hard, so it lands as a muffled thud instead of a bark. Same firing order, different voice, none of it hand-tuned. |
-| `i6diesel` | Compression ignition: `attack: 68`, by far the sharpest pulse here, and `hardness: 0.88`, the most load-hardening in the set. Cool exhaust (1.16), heavy damping, 4600 rpm redline. Big laggy VGT (inertia 0.95) with almost no blow-off valve. |
+| `i6diesel` | Compression ignition: `attack: 68`, by far the sharpest pulse here, and `hardness: 0.88`, the most load-hardening in the set. Cool exhaust (1.16), heavy damping, 4600 rpm redline. |
+
+### 5a. The turbo is a bolt-on
+
+At the user's request the turbo is **not part of any engine**. `ENGINE_PROFILES`
+carry no `turbo` field; the preset has a top-level `turbo` section with an
+`enabled` switch (schema `unit: 'bool'`), default off, one shared tuning
+(`DEFAULT_SOUND.turbo`).
+
+- `EngineSim.turboCfg` is that section, **mutated in place, never replaced**.
+- `_machine()` returns `{...profile, turbo: enabled ? turboCfg : null}` — the
+  physics and every voice are handed that, so nothing downstream changed shape.
+  Every place that passed `this.profile` to physics/voices passes this.
+- `setTurbo()` → `_syncTurbo()` builds or `release()`s **only the TurboLayer**
+  (fade 70 ms, sources stop at +0.5 s). The combustion source and oscillators
+  are untouched, so toggling while driving does not glitch the note.
+- The gearbox (`gearVehicle`) is still designed from `this.profile`, i.e.
+  without the turbo, so a toggle never moves the ratios mid-run.
+- It survives `setEngineType()`. `loadPreset()` applies the preset's turbo; the
+  console's stock-engine picker re-applies the current turbo after loading.
+- A **version-2** preset (`engine.turbo: {...}`) loads with the turbo on and its
+  tuning kept. `PRESET_VERSION` is 3.
 
 ---
 
@@ -657,8 +692,8 @@ it. `loadPreset()` applies all of it; `exportPreset()` writes it out.
             peakTorque, peakTorqueRpm, engineInertia, gasTempFactor, voice,
             pulse:{attack,decay,hardness,jitter},
             exhaust:{bank,bankB?,collector,reflection,damping,muffler[3]},
-            intake:{helmholtz,q,level},
-            turbo: null | {inertia,maxBoost,whineOrder,bov,surge} },
+            intake:{helmholtz,q,level} },
+  turbo:{enabled,inertia,maxBoost,whineOrder,bov,surge},
   mix:{...6}, tone:{rumble,brightness}, eq:[5 dB],
   fx:{reverbMix,reverbSize,reverbDamping,width,popDepth,dynamics},
   position, volume }
@@ -858,8 +893,9 @@ how two profile fields ended up with no control at all and no way to notice.
   know which setter its parameter lives behind.
 - `rebuild: true` rows are **debounced by 130 ms**; the readout still tracks the
   finger. Everything else writes on every input event.
-- `needs: 'turbo'` rows, and the group heading around them, are hidden on a
-  naturally aspirated engine rather than left doing nothing.
+- `needs: 'turbo'` rows are hidden while the turbo is off; the `turbo.enabled`
+  row (`unit: 'bool'`) renders as an On/Off button and stays visible. There is
+  also a Turbo button in the drive row, one in the drive bar, and `T`.
 - The spec sheet and the order spectrum read `sim.getPreset().engine`, the LIVE
   engine section — not `ENGINE_PROFILES`. The Tune tab edits those numbers, and
   a spec sheet still showing the factory figures would be lying about the sound
@@ -1042,6 +1078,10 @@ Every one of these was found by measurement, and several are counter-intuitive.
 | 61 | Too clean, organ-like; "the early builds had more engine" | the source repeated one wavetable cycle forever; variety was faked by LFO vibrato and two detuned oscillators crossfaded by load (a chorus) | `combustion-worklet.js`: events per cylinder with cycle-to-cycle variation, timing jitter, misfires; vibrato off. Tonal 87 %, distinctiveness 16.1 dB. Wavetables stay as the fallback |
 | 62 | Intake fired on even angles | it took `i/n` of the cycle, not the firing angles | real angles + 360° (the intake stroke) |
 | 63 | Some engines could never get past 4th | the ratio table belonged to the CAR, and the automatic needed 93.6 % of redline to change up: an engine that peaks low, or a weak one in a heavy car, sat on a drag plateau below that, gears to spare (HighRoads `probe/gears.mjs`: 20 of 153 pairs stuck) | `gearbox.js` designs the box per engine × vehicle (top speed just past peak power, launch-limited first, progressive steps); gear count per engine (`gears`, 5-8); at WOT the automatic also changes up when the next gear makes more power, and kickdown only when the lower gear does. 0 of 153 stuck |
+| 64 | **"The stu-stu is very low and sounds like something else"** | body band 760-1660 Hz under the turbo's −5.5 dB shelf: a chuff at a motorboat's rate. A first move to 1.5-2.8 kHz lost 4-7 dB to the shelf and then to the dynamics' >2 kHz band (`render.html` `cen`/`relLift`) | body 1.3-2.2 k, edge 3.2-4.4 k at 0.7 (was 1.8), both bypass the layer's tone stage; per-burst downward chirp; jittered burst rate. Rendered flutter centroid 1.06-1.26 k → 1.83-2.15 k |
+| 65 | **The flutter cut off mid-burst on every autoshift** | the shift arms the surge on the ignition cut; the pedal still down then counts as a reopening, and that did `_surge *= 0.25` PER FRAME — worst frame-to-frame 0.23, gone in 3 frames | `*= exp(−dt/0.11)`: worst 0.81, tails off over ~18 frames. `run.mjs` asserts it, verified to fail on the old line |
+| 66 | Turbo was a property of seven engines | user asked for a toggle on any engine | §5a. Profiles lose `turbo`; `setTurbo()`; preset v3 with v2 migration |
+| 67 | Throttle stabs had no edge | level followed smoothed load only | tip-in bark: load-rise rate / 10, 160 ms decay, +35 % level and +0.3 load into the source. Easing in does not trigger it |
 | 47 | The generated console read pipe lengths as percentages | first pass formatted any unitless row as `v×100`, so a 1.75 m header showed "175" and a 4.4 decay showed "440" | `unit` became a display CONTRACT — real unit = suffix formatted by `step`, `%` = ×100, `''` = bare number |
 
 ### #31 in detail — it will come back if the constant moves
@@ -1086,7 +1126,8 @@ Be honest about this with the user; it has been stated throughout.
   `file://` origin. **Nobody has clicked a control and listened**, and nobody
   has exercised save/import/download by hand.
 - **The user's own report is the only evidence about how any of this sounds.**
-  The turbo rework (#44, #45) and the mechanical-layer removal were done to a
+  The turbo rework (#44, #45, #64-66), the bark (#67) and the mechanical-layer
+  removal were done to a
   described complaint, and the numbers here confirm the mechanism changed in the
   intended direction — not that the result is right.
 
