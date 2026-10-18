@@ -833,17 +833,38 @@ export class TurboLayer {
     // At the boost ceiling the wastegate opens and exhaust gas bypasses the
     // turbine. Routed back into the exhaust it is a quiet whoosh; vented to
     // air through a SCREAMER PIPE it is a loud white-noise rush — the sound
-    // of a big-turbo car on boost. (It used to be a square-wave "fft-fft"
-    // chatter; that is forum folklore, not what a wastegate sounds like.)
+    // of a big-turbo car on boost. The stutter on top was taken out once as
+    // folklore and put back at the user's ask: it is the on-boost state they
+    // listen for.
     this.wgBP = keep(ctx.createBiquadFilter());
     this.wgBP.type = 'bandpass';
     this.wgBP.frequency.value = 1500;
     this.wgBP.Q.value = 0.6;
     this.wgLevel = keep(ctx.createGain());
     this.wgLevel.gain.value = 0;
+    // And it STUTTERS: at the ceiling the valve hunts open-shut many times a
+    // second, so the rush comes in bursts — the stuttering on-boost state.
+    // A sawtooth through the same soft burst curve as the surge (no clicks),
+    // at 18-38 Hz, on an AM stage that never closes fully.
+    this.wgOsc = ctx.createOscillator();
+    this.wgOsc.type = 'sawtooth';
+    this.wgOsc.frequency.value = 24;
+    this._srcs.push(this.wgOsc);
+    this.wgShaper = keep(ctx.createWaveShaper());
+    this.wgShaper.curve = surgePulseCurve(1024);
+    this.wgShaper.oversample = '2x';
+    this.wgAM = keep(ctx.createGain());
+    this.wgAM.gain.value = 0.05;
+    this.wgOsc.connect(this.wgShaper);
+    this.wgShaper.connect(this.wgAM.gain);
     white.connect(this.wgBP);
-    this.wgBP.connect(this.wgLevel);
+    this.wgBP.connect(this.wgAM);
+    this.wgAM.connect(this.wgLevel);
     this.wgLevel.connect(this.bus);
+    this.wgJitter = keep(ctx.createGain());
+    this.wgJitter.gain.value = 6;            // hunting is not a metronome either
+    this.grainBP.connect(this.wgJitter);
+    this.wgJitter.connect(this.wgOsc.frequency);
     this.wgGrain = keep(ctx.createGain());
     this.wgGrain.gain.value = 0;
     this.grainBP.connect(this.wgGrain);
@@ -1105,8 +1126,13 @@ export class TurboLayer {
     const rpm = fin(p.rpm, 0);
     const full = Math.max(0.6 * fin(this.profile && this.profile.redlineRpm, 7000), this.boostRpm + 1500);
     const onGate = clamp((rpm - this.boostRpm) / (full - this.boostRpm), 0, 1);
+    // On a fuel-cut limiter with the pedal down the throttle is wide open and
+    // air keeps pumping through: the cuts are 50 ms, the wheel barely slows.
+    // Reading the cut-riddled `load` here collapsed the spool — and the
+    // on-boost stutter with it — the moment the car reached the limiter.
+    const flowLoad = p.limiter ? Math.max(load, 0.95 * throttle) : load;
     const drive = this._als ? 0.7 * (0.3 + 0.7 * rpmNorm)
-      : clamp(load * (0.08 + 0.92 * onGate), 0, 1);
+      : clamp(flowLoad * (0.08 + 0.92 * onGate), 0, 1);
     // With the fuel cut there is no exhaust enthalpy at all, so the turbine
     // coasts on bearing drag and slows markedly faster than it does on a
     // trailing throttle. That difference is what gives each upshift its own
@@ -1203,8 +1229,13 @@ export class TurboLayer {
     // Wastegate: near the boost ceiling, on throttle. It opens from 45 % of
     // max boost and is wide open by 75 % (was 62-92 %, i.e. ~96 % shaft
     // speed, and at 0.06 it was all but inaudible without a screamer pipe).
-    const nearCeiling = clamp((this.boost - 0.45) / 0.30, 0, 1);
-    const gate = nearCeiling * throttle * (0.45 + 0.55 * rpmNorm) * (this.screamer ? 0.6 : 0.16);
+    // Keyed to being ON BOOST at higher revs, not to the very ceiling: from
+    // 40 % shaft speed (just after the boost onset) and the upper half of the
+    // rev range, so a normal pull gets into the stutter before every shift.
+    const nearCeiling = clamp((this.spool - 0.40) / 0.30, 0, 1) * clamp((rpmNorm - 0.40) / 0.30, 0, 1);
+    // 0.3 → 0.7: rendered, it was well under the rest of the turbo voice.
+    const gate = nearCeiling * throttle * (this.screamer ? 1.3 : 0.7);
+    setF(this.wgOsc.frequency, 18 + 12 * nearCeiling + 8 * rpmNorm, now, 0.05, 24);
     setF(this.wgBP.frequency, (this.screamer ? 900 : 1400) + 1300 * this.spool, now, TC, 1500);
     setT(this.wgLevel.gain, gate, now, 0.05);
     setT(this.wgGrain.gain, gate * 0.5, now, 0.05);
