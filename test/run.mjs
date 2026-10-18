@@ -758,12 +758,7 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
        rates.map(r => r.toFixed(1)).join(' / ') + ' Hz');
     ok(hiFull > 9000, 'a high whistle climbs with the shaft', `${hiFull.toFixed(0)} Hz spooled`);
     p.rpmNorm = 0.9; p.rpm = 6000; p.load = 1; p.throttle = 1; step(240);
-    p.throttle = 0; p.load = 0;
-    const tr = [];
-    for (let i = 0; i < 40; i++) { step(1); tr.push(T._burstMul * (0.5 + 0.5 * Math.min(1, T._liftT / 0.35))); }
-    const turns = tr.slice(2).filter((v, i) => (v - tr[i + 1]) * (tr[i + 1] - tr[i]) < 0).length;
-    ok(tr[1] < 0.8 * Math.max(...tr) && turns >= 3, 'one flutter chain starts spaced out and stays uneven',
-       `first ${tr[1].toFixed(2)} vs peak ${Math.max(...tr).toFixed(2)}, ${turns} direction changes`);
+    p.throttle = 0; p.load = 0; step(6);
     ok(T.hiSurgeLvl.gain.value > 3 * T.hiGain.gain.value, 'the high whistle rides the flutter, prominently',
        `in flutter ${T.hiSurgeLvl.gain.value.toFixed(3)} vs steady ${T.hiGain.gain.value.toFixed(3)}`);
   }

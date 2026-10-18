@@ -637,10 +637,6 @@ export class TurboLayer {
     this._liftRate = 13;
     this._liftPitch = 1;
     this._liftTau = 0.26;
-    this._liftT = 9;         // s since the flutter armed
-    this._burstT = 0;        // s until the next per-burst draw
-    this._burstMul = 1;      // this burst's spacing scatter
-    this._skip = 0;          // s left of a skipped burst
     this._lastBov = -1e9;
     this._prevThrottle = 0;
     this._prevShifting = false;
@@ -1313,8 +1309,6 @@ export class TurboLayer {
         this._liftRate = this.flutterHz * (0.7 + 0.45 * rpmNorm + 0.35 * this.boost) * (0.85 + 0.3 * r());
         this._liftPitch = (0.85 + 0.25 * rpmNorm) * (0.92 + 0.16 * r());
         this._liftTau = 0.18 + 0.16 * r() + 0.08 * this.boost;
-        this._liftT = 0;
-        this._burstT = 0;
       }
       // A snap-shut from full boost stalls harder than an easing-off.
       this._surge = Math.max(this._surge, arm);
@@ -1356,28 +1350,8 @@ export class TurboLayer {
     // A fixed rate per car — the Helmholtz frequency of its intake pipework,
     // measured at 5-21 Hz for mild surge — that SLOWS as the trapped pressure
     // bleeds off: "stu-stu-stu…tu…tu". It used to speed up with s and rpm.
-    // Variation INSIDE one chain. A stall train does not run down evenly: the
-    // first stalls wait on the plenum to bleed below the wheel's pressure
-    // before it can grip, so they come spaced out — "stu … stu … stu-stu-
-    // stu-tu-tu…tu" — and every stall's spacing scatters. So the rate starts
-    // at about half, catches up over ~0.35 s, then slows with `s` as before;
-    // each burst draws its own spacing, wider early; and early on the odd
-    // burst is skipped outright, which is what reads as a stop.
-    this._liftT += dt;
-    const early = clamp(1 - this._liftT / 0.4, 0, 1);
-    const shape = 0.5 + 0.5 * clamp(this._liftT / 0.35, 0, 1);
-    const base = this._liftRate * (0.7 + 0.45 * s) * shape;
-    this._burstT -= dt;
-    if (this._burstT <= 0) {
-      const spread = 0.12 + 0.28 * early;
-      this._burstMul = 1 + (this._rnd() * 2 - 1) * spread;
-      this._burstT = 1 / Math.max(1, base * this._burstMul);
-      if (s > 0.05 && this._rnd() < 0.08 + 0.3 * early) this._skip = this._burstT;
-    }
-    this._skip = Math.max(0, this._skip - dt);
-    const gate = this._skip > 0 ? 0.08 : 1;
-    const rate = base * this._burstMul;
-    setF(this.surgeOsc.frequency, rate, now, 0.012, 16);
+    const rate = this._liftRate * (0.7 + 0.45 * s);
+    setF(this.surgeOsc.frequency, rate, now, 0.03, 16);
 
     // Each reversal drags gas back across the wheel; the harder the stall, the
     // higher the jet velocity and the brighter the chuff.
@@ -1406,15 +1380,15 @@ export class TurboLayer {
     // The flutter is the turbo's main event: test/turbo.mjs puts it 9-20 dB
     // under the WHOLE mix during a lift (it was 22-33 dB under, i.e. inaudible
     // behind the engine). With the whistle down it has the space.
-    setT(this.surgeBodyLvl.gain, BODY * amp * s * engineMix * gate, now, 0.015);
+    setT(this.surgeBodyLvl.gain, BODY * amp * s * engineMix, now, 0.03);
     // The edge band is gated on s^2 so a gentle stall is all body and only a
     // hard one gets the click. Level-matched by ear-safety, not by energy.
     // 1.8 → 0.7: it no longer goes through the layer's tone stage.
     // 0.7·s → 0.25·s²: the edge was the click. Only a hard stall gets a
     // little of it now, and it is wide, so it reads as a hiss, not a tick.
-    setT(this.surgeEdgeLvl.gain, 0.25 * amp * s * s * engineMix * gate, now, 0.015);
+    setT(this.surgeEdgeLvl.gain, 0.25 * amp * s * s * engineMix, now, 0.03);
     // Prominent: several times the steady whistle, riding every burst.
-    setT(this.hiSurgeLvl.gain, 0.09 * amp * s * engineMix * gate, now, 0.015);
+    setT(this.hiSurgeLvl.gain, 0.09 * amp * s * engineMix, now, 0.03);
     setT(this.hiChirp.gain, 1400 * s, now, 0.04);
   }
 
