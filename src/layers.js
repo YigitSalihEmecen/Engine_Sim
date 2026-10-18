@@ -1033,6 +1033,8 @@ export class TurboLayer {
     this.screamer = fin(t && t.screamer, 0) >= 0.5;
     this.antiLag = fin(t && t.antiLag, 0) >= 0.5;
     const redline = fin(profile && profile.redlineRpm, 7000);
+    // Capped at 65 % of redline so a low-revving diesel still gets its boost.
+    this.boostRpm = Math.min(clamp(fin(t && t.boostRpm, 3500), 800, 9000), 0.65 * redline);
     // ×0.5: the profiles' blade orders put a spooled whistle at 1.6-2.2 kHz,
     // right in the ear's most sensitive band, where a near-pure tone reads as
     // a sine generator rather than a turbo. An octave down it sits under the
@@ -1056,8 +1058,12 @@ export class TurboLayer {
     // Exhaust mass flow is close to linear in rpm, and at low rpm there really
     // is almost nothing driving the turbine.
     this._als = this.antiLag && throttle < 0.12 && rpmNorm > 0.15;
+    // The turbine only lights above `boostRpm`; below it the wheel windmills.
+    const rpm = fin(p.rpm, 0);
+    const full = Math.max(0.6 * fin(this.profile && this.profile.redlineRpm, 7000), this.boostRpm + 1500);
+    const onGate = clamp((rpm - this.boostRpm) / (full - this.boostRpm), 0, 1);
     const drive = this._als ? 0.7 * (0.3 + 0.7 * rpmNorm)
-      : clamp(load * (0.10 + 0.90 * rpmNorm), 0, 1);
+      : clamp(load * (0.08 + 0.92 * onGate), 0, 1);
     // With the fuel cut there is no exhaust enthalpy at all, so the turbine
     // coasts on bearing drag and slows markedly faster than it does on a
     // trailing throttle. That difference is what gives each upshift its own

@@ -607,7 +607,9 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
     // The whistle has to MOVE. A flat tone across the whole rev range is what
     // "sounds fake" means; a real turbo sweeps as the shaft spools and sags.
     const semitones = 12 * Math.log2(r.whineMax / Math.max(1, r.whineMin));
-    ok(semitones > 18, `${id}: whine sweeps a musically useful range`,
+    // > 15: with boost only above 3500 rpm, the diesel's 4600 rpm range leaves
+    // a narrower sweep than a revvy petrol's.
+    ok(semitones > 15, `${id}: whine sweeps a musically useful range`,
        `${r.whineMin.toFixed(0)}-${r.whineMax.toFixed(0)} Hz = ${semitones.toFixed(1)} semitones`);
     // The fundamental must stay clear of the band where the ear peaks. It used
     // to be capped at 3 kHz, but five of the seven profiles then sat pinned AT
@@ -630,10 +632,12 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
   // speed instead puts it at 4-7 of 8. This is the assertion that would have
   // caught that, and the flat-out one above cannot: it passed the whole time.
   for (const id of TURBOS) {
-    const r = run(id, { throttle: 0.6 });
+    // 0.8, not 0.6: boost now only comes in above 3500 rpm, and at 0.6 the
+    // automatic changes up before that — no boost, no flutter, correctly.
+    const r = run(id, { throttle: 0.8 });
     ok(r.peakSurge > 0.15 && r.surgeFrames > 10,
        `${id}: surges in ordinary driving, not only flat out`,
-       `peak ${r.peakSurge.toFixed(2)} at 0.6 throttle, active ${r.surgeFrames} frames`);
+       `peak ${r.peakSurge.toFixed(2)} at 0.8 throttle, active ${r.surgeFrames} frames`);
   }
 
   // A big atmospheric valve relieves the plenum, so there is less left to
@@ -705,7 +709,7 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
     const mk = createMockContext();
     installGlobals(mk.ctx);
     const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1 } });
-    const p = { now: 0, dt: 1 / 60, load: 1, throttle: 1, rpmNorm: 0.85, shifting: false, evBov: 0 };
+    const p = { now: 0, dt: 1 / 60, load: 1, throttle: 1, rpm: 5800, rpmNorm: 0.85, shifting: false, evBov: 0 };
     const step = () => { mk.advance(1 / 60); p.now = mk.ctx.currentTime; T.update(p); };
     for (let i = 0; i < 240; i++) step();                       // spool up
     p.shifting = true; p.load = 0;
@@ -740,19 +744,30 @@ await suite('turbo — spool, whine sweep and compressor surge', async () => {
     const mk = createMockContext();
     installGlobals(mk.ctx);
     const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1, valve: 0 } });
-    const p = { now: 0, dt: 1 / 60, load: 1, throttle: 1, rpmNorm: 0.9, shifting: false, evBov: 0 };
+    const p = { now: 0, dt: 1 / 60, load: 1, throttle: 1, rpm: 6000, rpmNorm: 0.9, shifting: false, evBov: 0 };
     const step = (n) => { for (let i = 0; i < n; i++) { mk.advance(1 / 60); p.now = mk.ctx.currentTime; T.update(p); } };
     const lift = (rpmNorm) => {
-      p.rpmNorm = rpmNorm; p.load = 1; p.throttle = 1; step(240);
+      p.rpmNorm = rpmNorm; p.rpm = 800 + 6200 * rpmNorm; p.load = 1; p.throttle = 1; step(240);
       p.throttle = 0; p.load = 0; step(2);
       const rate = T._liftRate; step(60); return rate;
     };
     const hiFull = (p.rpmNorm = 0.9, step(240), T.hiOsc.frequency.value);
-    const rates = [lift(0.9), lift(0.9), lift(0.45)];
+    const rates = [lift(0.9), lift(0.9), lift(0.6)];
     ok(Math.abs(rates[0] - rates[1]) > 0.1 && rates[2] < Math.min(rates[0], rates[1]),
        'each lift flutters differently, and slower from lower revs',
        rates.map(r => r.toFixed(1)).join(' / ') + ' Hz');
     ok(hiFull > 9000, 'a high whistle climbs with the shaft', `${hiFull.toFixed(0)} Hz spooled`);
+  }
+
+  // Boost comes in above 3500 rpm, not before.
+  {
+    const mk = createMockContext();
+    installGlobals(mk.ctx);
+    const T = new layers.TurboLayer(mk.ctx, { ...ENGINE_PROFILES.i6, turbo: { ...DEFAULT_TURBO, enabled: 1 } });
+    const spoolAt = (rpm) => { const p = { now: 0, dt: 1 / 60, load: 1, throttle: 1, rpm, rpmNorm: (rpm - 800) / 6200, shifting: false, evBov: 0 };
+      for (let i = 0; i < 300; i++) { mk.advance(1 / 60); p.now = mk.ctx.currentTime; T.update(p); } return T.boost; };
+    const lo = spoolAt(3000), hi = spoolAt(5500);
+    ok(lo < 0.05 && hi > 0.4, 'the turbo kicks in above 3500 rpm', `boost ${lo.toFixed(2)} at 3000, ${hi.toFixed(2)} at 5500`);
   }
 
   // THE LIMITER IS NOT A LIFT. Fuel cut with the plate open: no flutter, no

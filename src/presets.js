@@ -89,7 +89,7 @@ export const DEFAULT_SOUND = Object.freeze({
    * reverse through the compressor. `surge` is a taste trim on the flutter.
    */
   turbo: Object.freeze({
-    enabled: 0, inertia: 0.42, maxBoost: 1.1, whineOrder: 52,
+    enabled: 0, inertia: 0.42, maxBoost: 1.1, whineOrder: 52, boostRpm: 3500,
     valve: 1, bov: 0.40, surge: 1.0, flutterHz: 13, screamer: 0, antiLag: 0,
   }),
   /** 0 = standing outside the car, 1 = sitting in it. Continuous. */
@@ -153,6 +153,7 @@ export const PRESET_SCHEMA = Object.freeze([
   // --- turbo: a bolt-on for any engine. `needs` rows only matter when on ---
   { path: 'turbo.enabled', label: 'Turbo', min: 0, max: 1, step: 1, unit: 'bool', group: 'turbo', rebuild: false },
   { path: 'turbo.inertia', label: 'Turbo inertia', min: 0.05, max: 2, step: 0.01, unit: 's', group: 'turbo', rebuild: false, needs: 'turbo' },
+  { path: 'turbo.boostRpm', label: 'Boost onset', min: 1200, max: 7000, step: 100, unit: 'rpm', group: 'turbo', rebuild: false, needs: 'turbo' },
   { path: 'turbo.maxBoost', label: 'Max boost', min: 0.2, max: 3, step: 0.05, unit: 'bar', group: 'turbo', rebuild: false, needs: 'turbo' },
   { path: 'turbo.whineOrder', label: 'Blade order', min: 10, max: 120, step: 1, unit: '', group: 'turbo', rebuild: false, needs: 'turbo' },
   { path: 'turbo.valve', label: 'Blow-off valve', min: 0, max: 2, step: 1, unit: 'enum', options: ['None', 'Atmos', 'Recirc'], group: 'turbo', rebuild: false, needs: 'turbo' },

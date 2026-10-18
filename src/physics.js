@@ -66,6 +66,8 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
  * not just stable. At 60 fps that is 34 sub-steps of pure arithmetic per frame.
  */
 const SUBSTEP = 1 / 2000;
+/** No exhaust pops below this: too little gas, too cool a pipe to light it. */
+const POP_MIN_RPM = 2000;
 const MAX_SUBSTEPS = 240;          // dt is clamped to 0.1 s, so this is slack
 
 /** Inertias not present in profiles.js, kg.m^2. Physically motivated: */
@@ -372,6 +374,7 @@ export class Drivetrain {
 
   fireEvent(name, mag) {
     if (!(mag > this.ev[name])) return;
+    if (name === 'pop' && this.we * RPM_PER_RADS < POP_MIN_RPM) return;
     this.ev[name] = mag > 1 ? 1 : mag;
   }
 
@@ -1210,7 +1213,12 @@ export class Drivetrain {
     const rpm = this.we * RPM_PER_RADS;
     // Exhaust energy: needs both revs and load. Below ~1200 rpm there is not
     // enough mass flow to spin anything.
-    const spoolRpm = clamp((rpm - 1200) / (0.55 * this.engine.redlineRpm - 1200), 0, 1);
+    // Below `boostRpm` (default 3500) there is not enough exhaust to light the
+    // turbine; it comes on over the next ~1500 rpm.
+    // Capped at 65 % of redline so a low-revving diesel still gets its boost.
+    const onset = Math.min(clamp(Number(t.boostRpm) || 3500, 800, 9000), 0.65 * this.engine.redlineRpm);
+    const full = Math.max(0.6 * this.engine.redlineRpm, onset + 1500);
+    const spoolRpm = clamp((rpm - onset) / (full - onset), 0, 1);
     // Anti-lag: off throttle, a bypass keeps air flowing and fuel burns in
     // the manifold, so the turbine stays lit — boost held, bangs out the back.
     const als = t.antiLag >= 0.5 && thr < 0.12 && rpm > 0.3 * this.engine.redlineRpm;
@@ -1343,7 +1351,7 @@ export class Drivetrain {
       // crackle carried on for as long as the pipe stayed hot, which reads as a
       // constant fizz rather than a reaction to something the driver did.
       (0.12 + 0.88 * this.dfcoEdge) *
-      (0.45 + 0.55 * this.cutRpmN), 0, 1);
+      (0.45 + 0.55 * this.cutRpmN), 0, 1) * (rpm >= POP_MIN_RPM ? 1 : 0);
 
     return p;
   }
