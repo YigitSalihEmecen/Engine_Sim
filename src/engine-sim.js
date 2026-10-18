@@ -23,7 +23,7 @@ import {
   builtinPreset, builtinPresets, normalisePreset, presetToJSON, presetFromJSON,
   getPath, setPath, schemaFor,
 } from './presets.js';
-import { buildEngineWaves, combustionSpec } from './pulse.js';
+import { buildEngineWaves, combustionSpec, crankRipple } from './pulse.js';
 import { ExhaustSystem, IntakeResonator, CabinFilter } from './resonators.js';
 import { TransmissionLayer, TurboLayer, TransientBank } from './layers.js';
 import { ExhaustNoise, SubLayer, CharacterModulator } from './character.js';
@@ -1148,6 +1148,9 @@ export class EngineSim {
       P.get('load').setTargetAtTime(x, now, tc);
       P.get('amp').setTargetAtTime(ampl, now, tc);
       P.get('rough').setTargetAtTime(clamp(this.inputs.roughness || 0, 0, 1), now, 0.05);
+      // The crank's own speed ripple, from torque and flywheel (pulse.js).
+      P.get('ripple').setTargetAtTime(crankRipple(this.profile, p.rpm, x), now, tc);
+      P.get('low').setTargetAtTime(1 - clamp(p.rpmNorm, 0, 1), now, tc);
     }
     for (const pair of this.oscs) {
       pair.soft.osc.frequency.setTargetAtTime(f0, now, tc);

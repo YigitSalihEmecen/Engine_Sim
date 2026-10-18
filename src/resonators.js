@@ -978,8 +978,11 @@ export class Nonlinearity {
     // Cylinder pressure — and therefore pulse amplitude in the pipe — scales
     // with load and with boost. rpm contributes because peak particle velocity
     // rises with flow rate. load^1.5 keeps idle firmly in the linear region.
+    // rpm weight 0.65 → 0.45: per-event blowdown pressure follows cylinder
+    // pressure (the torque curve), not engine speed, so a lugging engine at
+    // low revs and full load steepens its pulses too — that is the growl.
     const amp = clamp(
-      Math.pow(load, 1.5) * (0.35 + 0.65 * rpmNorm) + 0.55 * boost * load, 0, 1.4);
+      Math.pow(load, 1.5) * (0.55 + 0.45 * rpmNorm) + 0.55 * boost * load, 0, 1.4);
     // On the overrun there is no combustion but there IS unburnt fuel lighting
     // off in the pipe — sharp, low-amplitude, and it crackles. A little drive
     // even at zero load.

@@ -287,6 +287,36 @@ export { TABLE_SIZE, MAX_HARMONICS };
  * ~3x at light load in the worklet), ignition timing σ 0.65-1.7°. Per-profile
  * `pulse.ccv` / `pulse.jitterDeg` override.
  */
+/**
+ * Crank-speed ripple per firing, as a fraction of mean crank speed.
+ *
+ * Each firing delivers its work in a burst, and the next compression stroke
+ * takes some of it back, so the crank speeds up and slows down within every
+ * cycle. The kinetic-energy swing per firing is roughly the fluctuating share
+ * of one firing's work, E = c·T·(4π/n), and ½J·ω² gives
+ *
+ *     Δω/ω ≈ c·T·(4π/n) / (J·ω²)
+ *
+ * ω² in the denominator is the whole story: a V8 at idle swings a few percent
+ * per firing and at 6000 rpm a few hundredths of one, and a V-twin's light
+ * flywheel and big single firings swing far more than either. That ripple is
+ * frequency modulation of every pulse, at the firing rate — growl and lump at
+ * low rpm that smooths out as the engine revs, without anything being tuned
+ * per rpm.
+ *
+ * T is the mean combustion torque at this load; c ≈ 0.3 is the fluctuating
+ * share (gas torque is very peaky). Capped at 0.12 so a stall-speed engine
+ * cannot run the phase backwards.
+ */
+export function crankRipple(profile, rpm, load) {
+  const J = Math.max(0.02, Number(profile.engineInertia) || 0.25);
+  const n = Math.max(1, profile.cylinders || 4);
+  const w = Math.max(40, (Number(rpm) || 0) * Math.PI / 30);
+  const T = (Number(profile.peakTorque) || 300) * (0.12 + 0.88 * Math.max(0, Math.min(1, load)));
+  const r = 0.3 * T * (4 * Math.PI / n) / (J * w * w);
+  return Math.max(0, Math.min(0.12, r));
+}
+
 export function combustionSpec(profile, bankAnglesFn) {
   const P = profile.pulse;
   const jit = (P.jitter || 0) / 100;

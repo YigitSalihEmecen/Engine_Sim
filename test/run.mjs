@@ -851,6 +851,44 @@ await suite('tip-in bark — throttle has an edge', async () => {
      `stab ${stab.toFixed(2)}, ease ${ease.toFixed(2)}, held ${held.toFixed(3)}`);
 });
 
+await suite('growl — the crank speeds up and slows down with every firing', async () => {
+  // Run the real combustion processor outside a browser: stub the worklet
+  // globals, capture the class, and time its firings.
+  let Proc;
+  globalThis.AudioWorkletProcessor = class { constructor() { this.port = {}; } };
+  globalThis.registerProcessor = (_, C) => { Proc = C; };
+  globalThis.sampleRate = 48000;
+  await import('../src/combustion-worklet.js?growl');
+  const { combustionSpec, crankRipple } = await import('../src/pulse.js');
+
+  /** Run the processor for 2 s; return the crank-speed swing (max − min). */
+  const swing = (id, rpm, load) => {
+    const prof = ENGINE_PROFILES[id];
+    const proc = new Proc({ processorOptions: combustionSpec(prof, bankAngles) });
+    const outs = Array.from({ length: proc.nOut }, () => [new Float32Array(128)]);
+    const params = { f0: [rpm / 120], load: [load], amp: [1], rough: [0],
+      ripple: [crankRipple(prof, rpm, load)],
+      low: [1 - (rpm - prof.idleRpm) / (prof.redlineRpm - prof.idleRpm)] };
+    let lo = 0, hi = 0;
+    for (let b = 0; b < 48000 * 2 / 128; b++) {
+      proc.process([], outs, params);
+      if (b > 40) { lo = Math.min(lo, proc.v); hi = Math.max(hi, proc.v); }
+    }
+    return hi - lo;
+  };
+  const v8 = ENGINE_PROFILES.v8cross;
+  ok(crankRipple(v8, 800, 0.2) > 20 * crankRipple(v8, 6000, 0.2),
+     'crank ripple falls with rpm squared',
+     `${(crankRipple(v8, 800, 0.2) * 100).toFixed(2)} % at 800, ${(crankRipple(v8, 6000, 0.2) * 100).toFixed(3)} % at 6000`);
+  ok(crankRipple(ENGINE_PROFILES.vtwin, 1200, 0.2) > 2 * crankRipple(ENGINE_PROFILES.v12, 1200, 0.2),
+     'a light twin swings far more than a V12', '');
+  // The worklet itself: the crank's speed swings within every firing at idle
+  // (frequency modulation of every pulse — the growl) and runs smooth up high.
+  const idle = swing('v8cross', 800, 0.3), high = swing('v8cross', 6000, 0.3);
+  ok(idle > 0.03 && high < idle / 20, 'the crank speed swings at idle and smooths out as it revs',
+     `${(idle * 100).toFixed(1)} % at 800 rpm, ${(high * 100).toFixed(2)} % at 6000`);
+});
+
 await suite('harshness — no screaming resonance at any rpm', async () => {
   // The comb peaks of a feedback waveguide sit at multiples of 1/T and an
   // engine's harmonics at multiples of f0. Where those two series coincide, one

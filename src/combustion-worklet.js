@@ -32,7 +32,24 @@
  *
  * Outputs: one per exhaust bank, then the intake (all cylinders, 360° earlier).
  *
- * AudioParams (k-rate): f0, load, amp, rough (0..1 misfires + extra variation).
+ * AudioParams (k-rate): f0, load, amp, rough (0..1 misfires + extra variation),
+ * ripple (crank-speed swing per firing, see pulse.js crankRipple) and low
+ * (1 at idle, 0 at redline).
+ *
+ * CRANK-SPEED RIPPLE. The crank does not turn evenly: every firing kicks it
+ * faster and the compression strokes in between brake it. `v` is that speed
+ * deviation: each firing adds `ripple × its own strength`, and it is drawn
+ * back down continuously at the average rate, so it is a sawtooth around
+ * zero. The crank phase advances at `dph × (1 + v)`, so every pulse — and the
+ * timing of the next firing — is frequency-modulated by the engine's own
+ * firings. A strong firing pulls the next one early, a weak one lets it come
+ * late: asymmetry and irregularity that come from the mechanism, and fade
+ * with ω² as it revs.
+ *
+ * LOW-RPM SCATTER. Combustion is least repeatable at low speed: the flame is
+ * slow, turbulence is low, and cylinder-to-cylinder air distribution is at its
+ * worst. So `low` widens the cycle-to-cycle variation, the timing jitter, and
+ * each cylinder's fixed imbalance.
  */
 
 const KNEE_HALF_ORDERS = 48;          // = RADIATION_KNEE_ORDER (24) × 2
@@ -45,6 +62,8 @@ class CombustionProcessor extends AudioWorkletProcessor {
       { name: 'load', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
       { name: 'amp', defaultValue: 0, minValue: 0, maxValue: 8, automationRate: 'k-rate' },
       { name: 'rough', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      { name: 'ripple', defaultValue: 0, minValue: 0, maxValue: 0.2, automationRate: 'k-rate' },
+      { name: 'low', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
     ];
   }
 
@@ -71,6 +90,8 @@ class CombustionProcessor extends AudioWorkletProcessor {
     this.cycleOf = new Float64Array(this.events.length);
     this.nextAt = Float64Array.from(this.events, (e) => e.angle);
     this.seed = (o.seed >>> 0) || 1;
+    this.v = 0;                          // crank-speed deviation, fraction
+    this.nFire = this.events.filter((e) => e.out < this.nOut - 1).length;
     this.alive = true;
     this.port.onmessage = (m) => { if (m.data === 'stop') this.alive = false; };
   }
@@ -88,19 +109,20 @@ class CombustionProcessor extends AudioWorkletProcessor {
   }
 
   /** Schedule event k's next firing: one cycle on, with fresh jitter. */
-  _schedule(k, load, rough) {
+  _schedule(k, load, rough, low = 0) {
     const e = this.events[k];
-    const spread = this.jitterCycles * (0.6 + 1.4 * (1 - load)) * (1 + 2 * rough);
+    const spread = this.jitterCycles * (0.6 + 1.4 * (1 - load)) * (1 + 2 * rough) * (1 + 0.8 * low);
     this.cycleOf[k] += 1;
     this.nextAt[k] = this.cycleOf[k] + e.angle + Math.max(-0.02, Math.min(0.02, this.gauss() * spread));
   }
 
-  _fire(e, load, rough) {
+  _fire(e, load, rough, low = 0, ripple = 0) {
     // Cycle-to-cycle variation: larger at light load (poorer, slower burns)
     // and with `rough`; occasional misfire — the cylinder still pumps air, so
     // a faint pulse, not silence.
-    const cov = this.ccv * (0.7 + 2.3 * (1 - load) * (1 - load)) * (1 + 2.5 * rough);
-    let A = e.ampTrim * Math.max(0.15, 1 + this.gauss() * cov);
+    const cov = this.ccv * (0.7 + 2.3 * (1 - load) * (1 - load)) * (1 + 2.5 * rough) * (1 + low);
+    const trim = 1 + (e.ampTrim - 1) * (1 + 1.5 * low);
+    let A = trim * Math.max(0.15, 1 + this.gauss() * cov);
     if (rough > 0 && this.rand() < 0.06 * rough * rough) A *= 0.12;
     const h = this.hardness * load;
     const a = this.attack * (0.55 + 0.85 * h);
@@ -108,6 +130,8 @@ class CombustionProcessor extends AudioWorkletProcessor {
     const p = this.pool.pop() || {};
     p.out = e.out; p.A = A; p.a = a; p.b = b; p.t = 0; p.ts = 0;
     this.pulses.push(p);
+    // The intake events mirror the firings; only a firing kicks the crank.
+    if (e.out < this.nOut - 1) this.v += ripple * A;
   }
 
   process(inputs, outputs, params) {
@@ -117,6 +141,9 @@ class CombustionProcessor extends AudioWorkletProcessor {
     const load = Math.min(1, Math.max(0, params.load[0]));
     const amp = params.amp[0];
     const rough = params.rough[0];
+    const ripple = params.ripple ? params.ripple[0] : 0;
+    const low = params.low ? params.low[0] : 0;
+    const drag = ripple * this.nFire;          // mean kick per cycle, drawn back
     const sr = sampleRate;
     const dph = f0 / sr;                       // crank cycles per sample
     const dts = 1 / sr;
@@ -126,25 +153,30 @@ class CombustionProcessor extends AudioWorkletProcessor {
     // One-pole lowpass at KNEE half-orders of f0 (the radiation knee).
     const fc = Math.min(KNEE_HALF_ORDERS * f0, 0.45 * sr);
     const lpk = 1 - Math.exp(-2 * Math.PI * fc / sr);
-    const inv = dph > 1e-9 ? 1 / dph : 0;
 
     for (let o = 0; o < this.nOut; o++) out[o][0].fill(0);
     const acc = this._acc || (this._acc = new Float64Array(this.nOut));
 
     for (let i = 0; i < n; i++) {
       // Advance the crank; fire every event whose (jittered) time has come.
-      this.abs += dph;
+      const dphv = dph * (1 + this.v);
+      const invv = dphv > 1e-9 ? 1 / dphv : 0;
+      // Compression drag, plus a leak (~e^-6 per cycle) standing in for the
+      // load and idle-speed control that stop the speed wandering off.
+      this.v -= (drag + 6 * this.v) * dph;
+      if (this.v > 0.2) this.v = 0.2; else if (this.v < -0.2) this.v = -0.2;
+      this.abs += dphv;
       const abs = this.abs;
       for (let k = 0; k < nEv; k++) {
         if (abs >= this.nextAt[k]) {
-          this._fire(ev[k], load, rough);
+          this._fire(ev[k], load, rough, low, ripple);
           // Sub-sample start: how far past its firing this sample already is.
           const past = Math.min(1, abs - this.nextAt[k]);
           const last = this.pulses[this.pulses.length - 1];
           last.t = past; last.ts = f0 > 0 ? past / f0 : 0;
-          this._schedule(k, load, rough);
+          this._schedule(k, load, rough, low);
           // Far behind (e.g. f0 jumped from 0): catch the schedule up silently.
-          while (this.nextAt[k] < abs) this._schedule(k, load, rough);
+          while (this.nextAt[k] < abs) this._schedule(k, load, rough, low);
         }
       }
       // Sum the live pulses' pressure per output.
@@ -159,10 +191,10 @@ class CombustionProcessor extends AudioWorkletProcessor {
         }
         const on = 1 - Math.exp(-(p.ts * p.ts) / (ONSET_S * ONSET_S));
         acc[p.out] += p.A * on * (1 - Math.exp(-p.a * p.t)) * Math.exp(-p.b * p.t);
-        p.t += dph; p.ts += dts;
+        p.t += dphv; p.ts += dts;
       }
       for (let o = 0; o < this.nOut; o++) {
-        const grad = (acc[o] - this.prevP[o]) * inv;      // dp / d(phase)
+        const grad = (acc[o] - this.prevP[o]) * invv;     // dp / d(phase)
         this.prevP[o] = acc[o];
         this.lp[o] += lpk * (grad - this.lp[o]);
         const G = this.gains[o];
