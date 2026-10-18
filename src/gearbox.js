@@ -24,6 +24,9 @@ const RHO_AIR = 1.225;
 const G = 9.81;
 const RPM_PER_RADS = 60 / (2 * Math.PI);
 
+/** Scales every overall ratio: below 1 lowers rpm at any given road speed. */
+const RATIO_SCALE = 0.8;
+
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
 /**
@@ -99,7 +102,7 @@ export function designGearbox(engine, vehicle, opts = {}) {
   const gearRatios = [];
   for (let k = 1; k <= n; k++) {
     const x = Math.pow((n - k) / (n - 1), 1.15);
-    gearRatios.push(+(Rtop * Math.pow(S, x) / fd).toFixed(3));
+    gearRatios.push(+(RATIO_SCALE * Rtop * Math.pow(S, x) / fd).toFixed(3));
   }
   // Whine ordering: fewer teeth on the driven gear as the ratio shortens.
   const gearTeeth = gearRatios.map((ratio) => Math.round(clamp(16 + 6.5 * ratio, 17, 46)));
