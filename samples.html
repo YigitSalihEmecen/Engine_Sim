@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Engine Sim · Listen</title>
+  <meta name="description" content="Ten-second samples rendered by Engine Sim: five engines, with and without a turbo.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #060504;
+      --glass: rgba(255, 255, 255, .055);
+      --glass2: rgba(255, 255, 255, .085);
+      --edge: rgba(255, 255, 255, .12);
+      --edge2: rgba(255, 255, 255, .22);
+      --ink: #f4f6fb;
+      --ink2: rgba(236, 240, 250, .74);
+      --ink3: rgba(226, 232, 245, .50);
+      --hot: #ff4d00;
+      --hot2: #ffb347;
+      --accent: linear-gradient(120deg, #ffb347, #ff7a1a 45%, #ff4d00);
+      --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      --ease: cubic-bezier(.2, .8, .2, 1);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: radial-gradient(1200px 600px at 15% -10%, rgba(255, 77, 0, .16), transparent 60%),
+                  radial-gradient(900px 500px at 100% 0%, rgba(255, 179, 71, .08), transparent 60%), var(--bg);
+      color: var(--ink);
+      font: 15px/1.55 var(--sans);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: clamp(20px, 5vw, 56px) 16px 64px; }
+    header { margin-bottom: clamp(24px, 4vw, 40px); }
+    .kicker { font: 600 12px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--hot2); }
+    h1 {
+      margin: 8px 0 10px; font-size: clamp(32px, 6vw, 54px); line-height: 1.02; letter-spacing: -.03em; font-weight: 800;
+      background: var(--accent); -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    .lede { color: var(--ink2); max-width: 62ch; margin: 0 0 18px; }
+    .links { display: flex; gap: 10px; flex-wrap: wrap; }
+    .links a {
+      color: var(--ink); text-decoration: none; font-weight: 600; font-size: 13px;
+      padding: 9px 14px; border-radius: 999px; border: 1px solid var(--edge); background: var(--glass);
+      transition: border-color .2s var(--ease), background .2s var(--ease);
+    }
+    .links a:hover { border-color: var(--edge2); background: var(--glass2); }
+    .links a.pri { background: var(--accent); border-color: transparent; color: #140700; }
+
+    .list { display: grid; gap: 16px; }
+    .card {
+      border: 1px solid var(--edge); border-radius: 20px; background: var(--glass);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      padding: 16px; display: grid; gap: 12px;
+      transition: border-color .25s var(--ease), box-shadow .25s var(--ease);
+      scroll-margin-top: 24px;
+    }
+    .card.playing { border-color: rgba(255, 122, 26, .55); box-shadow: 0 0 0 1px rgba(255, 122, 26, .25), 0 20px 60px -30px rgba(255, 77, 0, .6); }
+    .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .play {
+      width: 48px; height: 48px; border-radius: 50%; border: 0; cursor: pointer; flex: none;
+      background: var(--accent); color: #140700; display: grid; place-items: center;
+      transition: transform .15s var(--ease);
+    }
+    .play:hover { transform: scale(1.06); }
+    .play:focus-visible, .seg button:focus-visible { outline: 2px solid var(--hot2); outline-offset: 3px; }
+    .play svg { width: 18px; height: 18px; }
+    .name { min-width: 0; flex: 1; }
+    .name b { display: block; font-size: 18px; letter-spacing: -.01em; }
+    .name span { color: var(--ink3); font-size: 13px; }
+    .seg { display: inline-flex; padding: 3px; border-radius: 999px; background: rgba(0, 0, 0, .35); border: 1px solid var(--edge); }
+    .seg button {
+      border: 0; background: transparent; color: var(--ink3); font: 600 12px var(--sans); letter-spacing: .02em;
+      padding: 7px 14px; border-radius: 999px; cursor: pointer; transition: color .2s, background .2s;
+    }
+    .seg button.on { background: var(--glass2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--edge2); }
+    .stats { display: flex; gap: 18px; font: 600 12px var(--mono); color: var(--ink3); margin-left: auto; }
+    .stats b { color: var(--ink); font-size: 15px; display: block; font-variant-numeric: tabular-nums; min-width: 4ch; }
+
+    .track {
+      position: relative; border-radius: 12px; overflow: hidden; cursor: pointer;
+      aspect-ratio: 1200 / 260; background: #000; border: 1px solid rgba(255, 255, 255, .06);
+    }
+    .track img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; display: block; opacity: .9; }
+    .track canvas { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 45%; pointer-events: none; }
+    .head { position: absolute; top: 0; bottom: 0; width: 2px; left: 0; background: #fff; box-shadow: 0 0 12px #ff7a1a; opacity: 0; transition: opacity .2s; }
+    .card.started .head { opacity: 1; }
+    .shade { position: absolute; top: 0; bottom: 0; left: 0; background: rgba(0, 0, 0, .35); pointer-events: none; }
+    .lift { position: absolute; top: 6px; font: 600 10px var(--mono); color: var(--ink3); letter-spacing: .1em; transform: translateX(-50%); }
+    .rev { height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+    .rev i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .08s linear; }
+    footer { margin-top: 36px; color: var(--ink3); font-size: 13px; }
+    footer code { font-family: var(--mono); color: var(--ink2); }
+
+    @media (max-width: 640px) {
+      .stats { width: 100%; margin-left: 0; justify-content: space-between; }
+      .card { padding: 12px; border-radius: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="kicker">Engine Sim · samples</div>
+      <h1>Listen to it</h1>
+      <p class="lede">Ten seconds each: full throttle from a standstill in the sports chassis, letting the
+        gearbox shift itself, with three lifts. Every sound is synthesised by the simulator — no recordings.
+        Flip any engine to <b>Turbo</b> to hear the same run with one bolted on.</p>
+      <div class="links">
+        <a class="pri" href="./">Drive it yourself →</a>
+        <a href="https://github.com/YigitSalihEmecen/Engine_Sim">GitHub</a>
+      </div>
+    </header>
+
+    <main class="list" id="list"></main>
+
+    <footer>Rendered offline in Chrome by the real audio graph with <code>node tools/samples.mjs</code>.
+      Peak-normalised, so the engines compare by character rather than level. The picture is a log-frequency
+      spectrogram, 30 Hz – 12 kHz; the bars are the live spectrum of what you are hearing.</footer>
+  </div>
+
+<script type="module">
+const ENGINES = [
+  ['i4', 'Inline-4', 'Even firing, buzzy and eager'],
+  ['i6', 'Inline-6', 'Inherently balanced, smooth and silky'],
+  ['v8cross', 'V8 cross-plane', 'Uneven bank firing — the burble'],
+  ['v10', 'V10', 'Odd 2.5-order warble, high-revving'],
+  ['v12', 'V12', 'Twelve overlapping pulses, a dense howl'],
+];
+const PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>';
+const PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+const LIFTS = [[3.3, 4.0], [6.6, 7.2], [9.3, 10]];
+
+const hash = decodeURIComponent(location.hash.slice(1));
+let meta = {};
+try { for (const s of await (await fetch('samples/samples.json')).json()) meta[s.id] = s; } catch (e) { /* page still works without telemetry */ }
+
+let actx = null, analyser = null, current = null;
+const cards = [];
+
+function ensureAudio() {
+  if (actx) return;
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = actx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.72;
+  analyser.connect(actx.destination);
+}
+
+for (const [id, name, note] of ENGINES) {
+  const el = document.createElement('section');
+  el.className = 'card';
+  el.id = id;
+  el.innerHTML = `
+    <div class="top">
+      <button class="play" aria-label="Play ${name}">${PLAY}</button>
+      <div class="name"><b>${name}</b><span>${note}</span></div>
+      <div class="seg" role="group" aria-label="Aspiration">
+        <button class="on" data-t="0">Natural</button><button data-t="1">Turbo</button>
+      </div>
+      <div class="stats"><div>RPM<b class="rpm">—</b></div><div>GEAR<b class="gear">—</b></div><div>BOOST<b class="boost">—</b></div></div>
+    </div>
+    <div class="track" role="slider" aria-label="Seek" tabindex="0">
+      <img alt="Spectrogram of the ${name} sample" loading="lazy">
+      <div class="shade"></div>
+      ${LIFTS.map(([a]) => `<span class="lift" style="left:${a * 10}%">LIFT</span>`).join('')}
+      <canvas></canvas>
+      <div class="head"></div>
+    </div>
+    <div class="rev"><i></i></div>`;
+  document.getElementById('list').appendChild(el);
+
+  const audio = new Audio();
+  audio.preload = 'none';
+  audio.crossOrigin = 'anonymous';
+  const c = { id, el, audio, turbo: false, src: null,
+    btn: el.querySelector('.play'), img: el.querySelector('img'), canvas: el.querySelector('canvas'),
+    head: el.querySelector('.head'), shade: el.querySelector('.shade'), rev: el.querySelector('.rev i'),
+    rpm: el.querySelector('.rpm'), gear: el.querySelector('.gear'), boost: el.querySelector('.boost') };
+  cards.push(c);
+
+  const load = (turbo) => {
+    const t = audio.currentTime, playing = !audio.paused;
+    c.turbo = turbo;
+    const key = id + (turbo ? '-turbo' : '');
+    c.img.src = `samples/${key}.jpg`;
+    audio.src = `samples/${key}.mp3`;
+    if (t) audio.currentTime = t;
+    if (playing) audio.play();
+    for (const b of el.querySelectorAll('.seg button')) b.classList.toggle('on', (b.dataset.t === '1') === turbo);
+    history.replaceState(null, '', '#' + key);
+    paint(c);
+  };
+  c.load = load;
+  load(false);
+  history.replaceState(null, '', location.pathname);
+
+  for (const b of el.querySelectorAll('.seg button')) b.onclick = () => load(b.dataset.t === '1');
+  c.btn.onclick = () => (audio.paused ? play(c) : audio.pause());
+  const seek = (x) => { audio.currentTime = Math.max(0, Math.min(0.999, x)) * (audio.duration || 10); paint(c); };
+  el.querySelector('.track').onclick = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    seek((e.clientX - r.left) / r.width);
+    if (audio.paused) play(c);
+  };
+  el.querySelector('.track').onkeydown = (e) => {
+    if (e.key === 'ArrowRight') seek(audio.currentTime / 10 + 0.05);
+    if (e.key === 'ArrowLeft') seek(audio.currentTime / 10 - 0.05);
+  };
+  audio.onplay = () => { el.classList.add('playing', 'started'); c.btn.innerHTML = PAUSE; c.btn.setAttribute('aria-label', 'Pause ' + name); };
+  audio.onpause = audio.onended = () => { el.classList.remove('playing'); c.btn.innerHTML = PLAY; c.btn.setAttribute('aria-label', 'Play ' + name); };
+}
+
+function play(c) {
+  ensureAudio();
+  if (actx.state === 'suspended') actx.resume();
+  if (current && current !== c) current.audio.pause();
+  if (!c.src) { c.src = actx.createMediaElementSource(c.audio); }
+  for (const o of cards) if (o.src) { try { o.src.disconnect(); } catch (e) { /* not connected */ } }
+  c.src.connect(analyser);
+  current = c;
+  c.audio.play();
+}
+
+/** Telemetry for this moment of the run, from the render's own trace. */
+function paint(c) {
+  const t = c.audio.currentTime || 0, frac = t / (c.audio.duration || 10);
+  c.head.style.left = (frac * 100) + '%';
+  c.shade.style.left = (frac * 100) + '%';
+  c.shade.style.right = '0';
+  const m = meta[c.id + (c.turbo ? '-turbo' : '')];
+  if (!m) return;
+  let row = m.trace[0];
+  for (const r of m.trace) { if (r[0] > t) break; row = r; }
+  c.rpm.textContent = row[1].toLocaleString('en');
+  c.gear.textContent = row[2] || 'N';
+  c.boost.textContent = c.turbo ? Math.round(row[3] * 100) + '%' : '—';
+  c.rev.style.width = Math.min(100, row[1] / m.redline * 100) + '%';
+}
+
+const bins = new Uint8Array(1024);
+function frame() {
+  for (const c of cards) if (!c.audio.paused) paint(c);
+  if (current && analyser) {
+    const cv = current.canvas, dpr = Math.min(2, devicePixelRatio || 1);
+    const w = cv.clientWidth * dpr, h = cv.clientHeight * dpr;
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, w, h);
+    if (!current.audio.paused) {
+      analyser.getByteFrequencyData(bins);
+      const N = Math.max(24, Math.floor(w / (7 * dpr))), nyq = actx.sampleRate / 2;
+      const grad = g.createLinearGradient(0, h, 0, 0);
+      grad.addColorStop(0, 'rgba(255,77,0,.95)'); grad.addColorStop(1, 'rgba(255,214,150,.9)');
+      g.fillStyle = grad;
+      for (let i = 0; i < N; i++) {
+        // log-spaced bars, 40 Hz – 12 kHz, like the spectrogram behind them
+        const f0 = 40 * Math.pow(300, i / N), f1 = 40 * Math.pow(300, (i + 1) / N);
+        let v = 0;
+        for (let k = Math.floor(f0 / nyq * 1024); k <= Math.ceil(f1 / nyq * 1024) && k < 1024; k++) v = Math.max(v, bins[k]);
+        const bh = Math.pow(v / 255, 1.6) * h;
+        g.fillRect(i * w / N + dpr, h - bh, w / N - 2 * dpr, bh);
+      }
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// Deep links: #v8cross or #v8cross-turbo picks the card (a browser will not
+// autoplay without a click, so it is selected and scrolled to, not started).
+const target = cards.find((c) => hash === c.id || hash === c.id + '-turbo');
+if (target) {
+  target.load(hash.endsWith('-turbo'));
+  target.el.scrollIntoView({ block: 'start' });
+  target.el.classList.add('started');
+}
+</script>
+</body>
+</html>

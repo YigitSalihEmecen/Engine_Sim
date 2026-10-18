@@ -6,9 +6,49 @@
 No samples, no dependencies. Every sound is synthesised live from firing geometry
 and a simulated drivetrain, using nothing but the Web Audio API.
 
-### [▶ Try it in your browser](https://yigitsalihemecen.github.io/Engine_Sim/)
+### [▶ Try it in your browser](https://yigitsalihemecen.github.io/Engine_Sim/) · [🔊 Listen to samples](https://yigitsalihemecen.github.io/Engine_Sim/samples.html)
 
 </div>
+
+---
+
+## Listen
+
+Ten seconds each: full throttle from a standstill, autoshifting, with three
+lifts — rendered by the simulator itself, no recordings.
+**[Open the listening page →](https://yigitsalihemecen.github.io/Engine_Sim/samples.html)** for players, live spectrum and
+telemetry, or click any spectrogram below.
+
+<table>
+  <tr><th></th><th>Natural</th><th>Turbo</th></tr>
+  <tr>
+    <td><b>Inline-4</b></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i4"><img src="samples/i4.jpg" alt="Inline-4 spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i4">▶ listen</a> · <a href="samples/i4.mp3">mp3</a></sub></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i4-turbo"><img src="samples/i4-turbo.jpg" alt="Inline-4 turbo spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i4-turbo">▶ listen</a> · <a href="samples/i4-turbo.mp3">mp3</a></sub></td>
+  </tr>
+  <tr>
+    <td><b>Inline-6</b></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i6"><img src="samples/i6.jpg" alt="Inline-6 spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i6">▶ listen</a> · <a href="samples/i6.mp3">mp3</a></sub></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i6-turbo"><img src="samples/i6-turbo.jpg" alt="Inline-6 turbo spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#i6-turbo">▶ listen</a> · <a href="samples/i6-turbo.mp3">mp3</a></sub></td>
+  </tr>
+  <tr>
+    <td><b>V8 cross-plane</b></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v8cross"><img src="samples/v8cross.jpg" alt="V8 cross-plane spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v8cross">▶ listen</a> · <a href="samples/v8cross.mp3">mp3</a></sub></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v8cross-turbo"><img src="samples/v8cross-turbo.jpg" alt="V8 cross-plane turbo spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v8cross-turbo">▶ listen</a> · <a href="samples/v8cross-turbo.mp3">mp3</a></sub></td>
+  </tr>
+  <tr>
+    <td><b>V10</b></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v10"><img src="samples/v10.jpg" alt="V10 spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v10">▶ listen</a> · <a href="samples/v10.mp3">mp3</a></sub></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v10-turbo"><img src="samples/v10-turbo.jpg" alt="V10 turbo spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v10-turbo">▶ listen</a> · <a href="samples/v10-turbo.mp3">mp3</a></sub></td>
+  </tr>
+  <tr>
+    <td><b>V12</b></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v12"><img src="samples/v12.jpg" alt="V12 spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v12">▶ listen</a> · <a href="samples/v12.mp3">mp3</a></sub></td>
+    <td><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v12-turbo"><img src="samples/v12-turbo.jpg" alt="V12 turbo spectrogram" width="100%"></a><br><sub><a href="https://yigitsalihemecen.github.io/Engine_Sim/samples.html#v12-turbo">▶ listen</a> · <a href="samples/v12-turbo.mp3">mp3</a></sub></td>
+  </tr>
+</table>
+
+<sub>Spectrograms are log-frequency, 30 Hz – 12 kHz. Regenerate with <code>node tools/samples.mjs</code>.</sub>
 
 ---
 

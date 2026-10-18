@@ -40,11 +40,15 @@ from an older context dump. It is still in git history at commit `461ad03`.
 ```
 engine_sim/
 ├── index.html                     the console — the entire UI
+├── samples.html                   listening page (GitHub Pages): players, live spectrum, telemetry
+├── samples/                       rendered 10 s MP3s + spectrogram JPGs + samples.json (trace)
 ├── package.json                   scripts only; there are no dependencies
 ├── README.md                      human-facing documentation
 ├── AGENT_CONTEXT.md               this file
 ├── tools/
-│   └── serve.mjs                  zero-dependency static dev server
+│   ├── serve.mjs                  zero-dependency static dev server
+│   ├── samples.mjs                renders samples/ via headless Chrome (CDP) + ffmpeg
+│   └── samples.html               the offline renderer samples.mjs drives
 ├── src/
 │   ├── profiles.js                engine + vehicle DATA, firing-geometry helpers
 │   ├── presets.js                 THE SOUND FILE FORMAT — schema, defaults, validation

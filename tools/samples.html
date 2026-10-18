@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sample renderer</title>
+<!--
+  Offline render of one sound sample: the real engine graph (worklet and
+  all) in an OfflineAudioContext, driven by the same 60 Hz update loop a game
+  uses. Driven by tools/samples.mjs; nothing here is user-facing.
+-->
+<script type="module">
+import { EngineSim } from '../src/engine-sim.js';
+
+const SR = 48000, SECONDS = 10, DT = 1 / 60;
+
+/** Full throttle from a standstill, autoshifting, with three lifts. */
+const throttleAt = (t) => (t < 0.3 ? 0 : (t > 3.3 && t < 4.0) || (t > 6.6 && t < 7.2) || t > 9.3 ? 0 : 1);
+
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const a = i + k, b = a + len / 2;
+        const vr = re[b] * cr - im[b] * ci, vi = re[b] * ci + im[b] * cr;
+        re[b] = re[a] - vr; im[b] = im[a] - vi; re[a] += vr; im[a] += vi;
+        const n2 = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = n2;
+      }
+    }
+  }
+}
+
+/** Black → ember → orange → pale gold, matching the console. */
+function heat(x) {
+  const stops = [[0, 6, 5, 4], [0.35, 90, 16, 4], [0.6, 255, 77, 0], [0.82, 255, 179, 71], [1, 255, 240, 214]];
+  for (let i = 1; i < stops.length; i++) {
+    if (x <= stops[i][0]) {
+      const [p0, r0, g0, b0] = stops[i - 1], [p1, r1, g1, b1] = stops[i];
+      const f = (x - p0) / (p1 - p0);
+      return [r0 + (r1 - r0) * f, g0 + (g1 - g0) * f, b0 + (b1 - b0) * f];
+    }
+  }
+  return stops[stops.length - 1].slice(1);
+}
+
+/** Log-frequency spectrogram, 30 Hz – 12 kHz, as a JPEG data URL. */
+function spectrogram(x, W = 1200, H = 260) {
+  const N = 4096, hop = Math.floor((x.length - N) / W);
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const g = canvas.getContext('2d'), img = g.createImageData(W, H);
+  const fLo = 30, fHi = 12000, win = new Float64Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+  const rowBin = Array.from({ length: H }, (_, r) => fLo * Math.pow(fHi / fLo, 1 - r / (H - 1)) / (SR / N));
+  const cols = [];
+  let top = -Infinity;
+  for (let c = 0; c < W; c++) {
+    const re = new Float64Array(N), im = new Float64Array(N);
+    for (let i = 0; i < N; i++) re[i] = (x[c * hop + i] || 0) * win[i];
+    fft(re, im);
+    const col = new Float32Array(H);
+    for (let r = 0; r < H; r++) {
+      const b = rowBin[r], k = Math.floor(b), f = b - k;
+      const p0 = re[k] * re[k] + im[k] * im[k], p1 = re[k + 1] * re[k + 1] + im[k + 1] * im[k + 1];
+      col[r] = 10 * Math.log10(p0 + (p1 - p0) * f + 1e-12);
+      if (col[r] > top) top = col[r];
+    }
+    cols.push(col);
+  }
+  const range = 70;
+  for (let c = 0; c < W; c++) {
+    for (let r = 0; r < H; r++) {
+      const v = Math.max(0, Math.min(1, (cols[c][r] - (top - range)) / range));
+      const [R, G, B] = heat(Math.pow(v, 1.6));
+      const o = (r * W + c) * 4;
+      img.data[o] = R; img.data[o + 1] = G; img.data[o + 2] = B; img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return canvas.toDataURL('image/jpeg', 0.86);
+}
+
+function wav16(L, R) {
+  const n = L.length, buf = new ArrayBuffer(44 + n * 4), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 4, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, SR, true); v.setUint32(28, SR * 4, true); v.setUint16(32, 4, true);
+  v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 4, true);
+  for (let i = 0; i < n; i++) {
+    v.setInt16(44 + i * 4, Math.max(-1, Math.min(1, L[i])) * 32767, true);
+    v.setInt16(46 + i * 4, Math.max(-1, Math.min(1, R[i])) * 32767, true);
+  }
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+window.renderSample = async (engine, turbo) => {
+  const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: SR * SECONDS, sampleRate: SR });
+  const realResume = ctx.resume.bind(ctx);
+  ctx.resume = async () => {};          // an offline context cannot be resumed pre-render
+  const sim = new EngineSim(ctx, { engine, vehicle: 'sports', turbo, volume: 0.85 });
+  await sim.start();
+  const trace = [];
+  for (let i = 1; i < SECONDS * 60 - 1; i++) {
+    const t = i * DT;
+    ctx.suspend(Math.round(t * SR / 128) * 128 / SR).then(() => {
+      sim.setThrottle(throttleAt(t));
+      sim.update(DT);
+      if (i % 3 === 0) {
+        const s = sim.getState();
+        trace.push([+t.toFixed(2), Math.round(s.rpm), s.gear, +(s.boost || 0).toFixed(2), throttleAt(t)]);
+      }
+      realResume();
+    });
+  }
+  const buf = await ctx.startRendering();
+  const L = buf.getChannelData(0), R = buf.getChannelData(1);
+  let peak = 0;
+  const mono = new Float32Array(L.length);
+  for (let i = 0; i < L.length; i++) { mono[i] = 0.5 * (L[i] + R[i]); peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i])); }
+  // Normalise every sample to the same peak so they compare by character,
+  // not by level; never boost by more than 6 dB.
+  const g = Math.min(2, 0.89 / Math.max(1e-6, peak));
+  for (let i = 0; i < L.length; i++) { L[i] *= g; R[i] *= g; }
+  return { wav: wav16(L, R), img: spectrogram(mono), trace, redline: sim.profile.redlineRpm, label: sim.presetLabel, peak };
+};
+window.ready = true;
+</script>
