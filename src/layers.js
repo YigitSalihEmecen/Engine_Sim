@@ -1247,8 +1247,8 @@ export class TurboLayer {
    * boosted car flutters on upshifts as well as on lift-off.
    */
   _stepSurge(now, dt, throttle, rpmNorm, shifting, p) {
-    const BODY = 6.5;
-    const FW = 2.0;   // flutter whistle: ~+8 dB in 5.5-10 kHz over a lift without it (render.html `hi`)   // 5.6 → 6.5: makes up the dynamics' high band at 2.4-3.8 kHz
+    const BODY = 6.5;   // 5.6 → 6.5: makes up the dynamics' high band at 2.4-3.8 kHz
+    const FW = 2.0;     // flutter whistle: ~+8 dB in 5.5-10 kHz over a lift without it (render.html `hi`)
     // The plenum drains as the surge cycles vent it, so the stall weakens even
     // if the throttle stays shut. ~0.55 s to fall to a third.
     // 0.42 → 0.65 → 0.26: long enough for a few clear "stu"s, short enough
