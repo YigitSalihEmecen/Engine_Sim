@@ -983,20 +983,40 @@ export class TurboLayer {
 
     // The high whistle IN the flutter. Each stall chops the flow through a
     // wheel still spinning at 100+ krpm, so every burst carries a bright
-    // "tsi" of the whistle with it, bending up as the flow reverses. Same
-    // burst envelope as the "tu", so they land together.
+    // "tsi" with it, bending up as the flow reverses and sagging across the
+    // chain as the wheel slows. Its own voice — a tone plus a narrow band of
+    // air around it — at 6-9 kHz, where it is clearly heard; the steady
+    // 9-13 kHz whistle was ~18 dB under the mix and the dynamics' high band
+    // held it down further. Same burst envelope as the "tu".
+    this.fwOsc = ctx.createOscillator();
+    this.fwOsc.type = 'sine';
+    this.fwOsc.frequency.value = 7000;
+    this._srcs.push(this.fwOsc);
+    this.fwBP = keep(ctx.createBiquadFilter());
+    this.fwBP.type = 'bandpass';
+    this.fwBP.frequency.value = 7000;
+    this.fwBP.Q.value = 9;
+    this.fwNoise = keep(ctx.createGain());
+    this.fwNoise.gain.value = 2.2;           // the narrow band costs most of the noise
+    white.connect(this.fwBP);
+    this.fwBP.connect(this.fwNoise);
     this.hiSurgeAM = keep(ctx.createGain());
     this.hiSurgeAM.gain.value = 0;
     this.hiSurgeLvl = keep(ctx.createGain());
     this.hiSurgeLvl.gain.value = 0;
-    this.hiOsc.connect(this.hiSurgeAM);
+    this.fwOsc.connect(this.hiSurgeAM);
+    this.fwNoise.connect(this.hiSurgeAM);
     this.hiSurgeAM.connect(this.hiSurgeLvl);
     this.hiSurgeLvl.connect(this.out);
     this.surgeShaper.connect(this.hiSurgeAM.gain);
     this.hiChirp = keep(ctx.createGain());
     this.hiChirp.gain.value = 0;
     this.surgeShaper.connect(this.hiChirp);
-    this.hiChirp.connect(this.hiOsc.frequency);
+    this.hiChirp.connect(this.fwOsc.frequency);
+    this.hiChirpN = keep(ctx.createGain());
+    this.hiChirpN.gain.value = 0;
+    this.surgeShaper.connect(this.hiChirpN);
+    this.hiChirpN.connect(this.fwBP.frequency);
     this.surgeChirp.connect(this.surgeBody.frequency);
 
     // Edge band — the "st". Deliberately quiet: this is the band that would
@@ -1227,7 +1247,8 @@ export class TurboLayer {
    * boosted car flutters on upshifts as well as on lift-off.
    */
   _stepSurge(now, dt, throttle, rpmNorm, shifting, p) {
-    const BODY = 6.5;   // 5.6 → 6.5: makes up the dynamics' high band at 2.4-3.8 kHz
+    const BODY = 6.5;
+    const FW = 2.0;   // flutter whistle: ~+8 dB in 5.5-10 kHz over a lift without it (render.html `hi`)   // 5.6 → 6.5: makes up the dynamics' high band at 2.4-3.8 kHz
     // The plenum drains as the surge cycles vent it, so the stall weakens even
     // if the throttle stays shut. ~0.55 s to fall to a third.
     // 0.42 → 0.65 → 0.26: long enough for a few clear "stu"s, short enough
@@ -1388,8 +1409,12 @@ export class TurboLayer {
     // little of it now, and it is wide, so it reads as a hiss, not a tick.
     setT(this.surgeEdgeLvl.gain, 0.25 * amp * s * s * engineMix, now, 0.03);
     // Prominent: several times the steady whistle, riding every burst.
-    setT(this.hiSurgeLvl.gain, 0.09 * amp * s * engineMix, now, 0.03);
-    setT(this.hiChirp.gain, 1400 * s, now, 0.04);
+    const fw = clamp(5500 + 3500 * this.spool, 4500, 9500);
+    setF(this.fwOsc.frequency, fw, now, 0.03, 7000);
+    setF(this.fwBP.frequency, fw, now, 0.03, 7000);
+    setT(this.hiSurgeLvl.gain, FW * amp * s * engineMix, now, 0.03);
+    setT(this.hiChirp.gain, 1500 * s, now, 0.04);
+    setT(this.hiChirpN.gain, 1500 * s, now, 0.04);
   }
 
   /** Fade out and stop — for taking the turbo off a running engine. */

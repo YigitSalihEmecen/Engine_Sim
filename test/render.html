@@ -279,7 +279,12 @@ window.runTurbo = async (engine, opts = {}) => {
     let cw = 0, ce = 0;
     for (let k = Math.round(300 / (SR / 16384)); k < sp.length; k++) { cw += k * sp[k]; ce += sp[k]; }
     const cen = ce > 0 ? cw / ce * SR / 16384 : 0;
-    return { rest, rpm: Math.round(rpm), cen: Math.round(cen), spool: +spool.toFixed(2), surge: +surge.toFixed(2), tail: +tail.toFixed(2),
+    // hi: 5.5-10 kHz energy of the FULL mix during the lift vs the 0.5 s
+    // before it, dB — whether the flutter's whistle is actually heard.
+    const band = (x, at) => { const q = spectrum(x, Math.floor(at * SR), 8192); let e = 0;
+      for (let k = Math.round(5500 / (SR / 8192)); k < Math.round(10000 / (SR / 8192)); k++) e += q[k]; return e; };
+    const hiRise = 10 * Math.log10((band(F, w0 + 0.03) + 1e-12) / (band(F, w0 - 0.5) + 1e-12));
+    return { rest, rpm: Math.round(rpm), cen: Math.round(cen), hi: +hiRise.toFixed(1), spool: +spool.toFixed(2), surge: +surge.toFixed(2), tail: +tail.toFixed(2),
              depth: +depth.toFixed(2), rel: +(dB(rms(T, w0, w1)) - dB(rms(F, w0 - 0.5, w0))).toFixed(1),
              relLift: +(dB(rms(T, w0, w1)) - dB(rms(F, w0, w1))).toFixed(1) };
   });
